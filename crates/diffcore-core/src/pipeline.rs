@@ -158,14 +158,14 @@ const DEFAULT_MAX_CACHE_BYTES: u64 = 100 * 1024 * 1024;
 
 /// A disk-persistent wrapper around `IrCache`.
 ///
-/// On creation (`load`), existing `.bincode` files from the cache directory are
+/// On creation (`load`), existing `.json` files from the cache directory are
 /// read into the in-memory `IrCache`. On `flush`, any *new* entries (those not
 /// already on disk) are written out. LRU eviction keeps total disk usage under
 /// a configurable byte limit.
 ///
 /// Cache directory layout:
 /// ```text
-/// <repo>/.diffcore/cache/ir/<hex(sha256)>.bincode
+/// <repo>/.diffcore/cache/ir/<hex(sha256)>.json
 /// ```
 ///
 /// Invalidation is content-addressed: the SHA-256 key includes the file path
@@ -174,7 +174,7 @@ const DEFAULT_MAX_CACHE_BYTES: u64 = 100 * 1024 * 1024;
 pub struct DiskIrCache {
     /// The in-memory cache (shared with the pipeline).
     memory: IrCache,
-    /// Directory where `.bincode` files are stored.
+    /// Directory where `.json` files are stored.
     dir: PathBuf,
     /// Maximum total disk cache size in bytes.
     max_bytes: u64,
@@ -206,7 +206,11 @@ impl DiskIrCache {
 
             for entry in &entries {
                 let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("bincode") {
+                // Support both legacy .bincode and current .json cache files
+                let ext = path.extension().and_then(|e| e.to_str());
+                let is_json = ext == Some("json");
+                let is_bincode = ext == Some("bincode");
+                if !is_json && !is_bincode {
                     continue;
                 }
 
@@ -230,15 +234,30 @@ impl DiskIrCache {
                     Err(_) => continue,
                 };
 
-                let ir: IrFile = match bincode::deserialize(&bytes) {
-                    Ok(ir) => ir,
-                    Err(e) => {
-                        warn!(
-                            "Skipping malformed IR cache entry {}: {}",
-                            path.display(),
-                            e
-                        );
-                        continue;
+                let ir: IrFile = if is_json {
+                    match serde_json::from_slice(&bytes) {
+                        Ok(ir) => ir,
+                        Err(e) => {
+                            warn!(
+                                "Skipping malformed IR cache entry {}: {}",
+                                path.display(),
+                                e
+                            );
+                            continue;
+                        }
+                    }
+                } else {
+                    // Legacy bincode format — read but will be rewritten as JSON on flush
+                    match bincode::deserialize(&bytes) {
+                        Ok(ir) => ir,
+                        Err(e) => {
+                            warn!(
+                                "Skipping malformed IR cache entry {}: {}",
+                                path.display(),
+                                e
+                            );
+                            continue;
+                        }
                     }
                 };
 
@@ -287,9 +306,9 @@ impl DiskIrCache {
             }
 
             let hex_key = hex::encode(key);
-            let path = self.dir.join(format!("{}.bincode", hex_key));
+            let path = self.dir.join(format!("{}.json", hex_key));
 
-            match bincode::serialize(entry.value()) {
+            match serde_json::to_vec(entry.value()) {
                 Ok(bytes) => {
                     if let Err(e) = std::fs::write(&path, &bytes) {
                         warn!("Failed to write IR cache entry {}: {}", path.display(), e);
@@ -326,7 +345,8 @@ impl DiskIrCache {
 
         for entry in entries {
             let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("bincode") {
+            let ext = path.extension().and_then(|e| e.to_str());
+            if ext != Some("json") && ext != Some("bincode") {
                 continue;
             }
             if let Ok(meta) = entry.metadata() {
@@ -1414,7 +1434,7 @@ export function handler(req: Request) {
         let entries: Vec<_> = std::fs::read_dir(&cache_dir)
             .unwrap()
             .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("bincode"))
+            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json"))
             .collect();
         assert_eq!(entries.len(), 2);
     }
@@ -1512,11 +1532,11 @@ export function handler(req: Request) {
         let remaining: Vec<_> = std::fs::read_dir(&cache_dir)
             .unwrap()
             .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("bincode"))
+            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json"))
             .collect();
         // With 1 byte limit, most (if not all) entries should be evicted.
         // At most 1 can remain (the last one written may be ≤ 1 byte? No, it'll be larger).
-        // Actually all should be evicted since even one bincode entry is > 1 byte.
+        // Actually all should be evicted since even one JSON entry is > 1 byte.
         assert!(
             remaining.is_empty(),
             "all entries should be evicted with 1-byte limit"
@@ -1529,10 +1549,10 @@ export function handler(req: Request) {
         let cache_dir = tmp.path().join(".diffcore").join("cache").join("ir");
         std::fs::create_dir_all(&cache_dir).unwrap();
 
-        // Write a malformed .bincode file with a valid hex filename.
+        // Write a malformed .json file with a valid hex filename.
         let fake_key = "a".repeat(64); // valid hex for 32 bytes
-        let path = cache_dir.join(format!("{}.bincode", fake_key));
-        std::fs::write(&path, b"not valid bincode").unwrap();
+        let path = cache_dir.join(format!("{}.json", fake_key));
+        std::fs::write(&path, b"not valid json").unwrap();
 
         // Should load without panic, skipping the malformed entry.
         let dc = DiskIrCache::load(tmp.path());
@@ -1540,12 +1560,12 @@ export function handler(req: Request) {
     }
 
     #[test]
-    fn disk_cache_skips_non_bincode_files() {
+    fn disk_cache_skips_non_cache_files() {
         let tmp = tempfile::tempdir().unwrap();
         let cache_dir = tmp.path().join(".diffcore").join("cache").join("ir");
         std::fs::create_dir_all(&cache_dir).unwrap();
 
-        // Write a non-.bincode file.
+        // Write a non-.json file.
         std::fs::write(cache_dir.join("readme.txt"), "hello").unwrap();
 
         let dc = DiskIrCache::load(tmp.path());
@@ -1567,7 +1587,7 @@ export function handler(req: Request) {
         let entries: Vec<_> = std::fs::read_dir(&cache_dir)
             .unwrap()
             .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("bincode"))
+            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json"))
             .collect();
         assert_eq!(entries.len(), 1);
     }

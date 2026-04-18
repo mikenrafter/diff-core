@@ -22,6 +22,10 @@ out/
 # Property test regressions
 proptest-regressions/
 
+# Nix
+result
+result-*
+
 # Temporary files
 *.tmp
 loop.sh

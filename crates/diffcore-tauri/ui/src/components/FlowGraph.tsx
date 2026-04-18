@@ -99,6 +99,12 @@ function deduplicateEdges(
   });
 }
 
+/** Prototype-pollution-safe node IDs for dagre (CVE-2025-57347). */
+const POISONED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+function safeDagreId(id: string): string {
+  return POISONED_KEYS.has(id) ? `_safe_${id}` : id;
+}
+
 /** Build dagre layout and return positioned nodes. */
 function layoutGraph(
   nodes: Node[],
@@ -116,16 +122,16 @@ function layoutGraph(
   const nodeHeight = 60;
 
   for (const node of nodes) {
-    g.setNode(node.id, { width: nodeWidth, height: nodeHeight });
+    g.setNode(safeDagreId(node.id), { width: nodeWidth, height: nodeHeight });
   }
   for (const edge of edges) {
-    g.setEdge(edge.source, edge.target);
+    g.setEdge(safeDagreId(edge.source), safeDagreId(edge.target));
   }
 
   dagre.layout(g);
 
   const positionedNodes = nodes.map((node) => {
-    const pos = g.node(node.id);
+    const pos = g.node(safeDagreId(node.id));
     return {
       ...node,
       position: { x: pos.x - nodeWidth / 2, y: pos.y - nodeHeight / 2 },

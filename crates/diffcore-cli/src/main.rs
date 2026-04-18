@@ -886,7 +886,7 @@ fn run_launch(args: LaunchArgs) -> Result<(), Box<dyn std::error::Error>> {
                 std::fs::write(&dest, content)?;
             }
         } else {
-            // Read from working tree — also validate src stays within workdir
+            // Read from working tree (path traversal already rejected above)
             let src = workdir.join(file_path);
             if src.exists() {
                 let dest = head_dir.join(file_path);

@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::env;
 use std::path::{Path, PathBuf};
 
+use log::warn;
 use serde::{Deserialize, Serialize};
 
 use crate::types::RankWeights;
@@ -415,11 +416,21 @@ impl DiffcoreConfig {
             .clone()
             .or_else(|| global.llm.provider.clone());
         self.llm.model = self.llm.model.clone().or_else(|| global.llm.model.clone());
-        self.llm.key_cmd = self
-            .llm
-            .key_cmd
-            .clone()
-            .or_else(|| global.llm.key_cmd.clone());
+
+        // Security: key_cmd executes shell commands. Repo-local .diffcore.toml files
+        // in cloned repositories must NOT be allowed to trigger arbitrary command
+        // execution. Only the global config (~/.diffcore/config.toml) or environment
+        // variables may provide key_cmd. If a repo-local key_cmd is present, log a
+        // warning and discard it.
+        if self.llm.key_cmd.is_some() && global.llm.key_cmd.is_none() {
+            warn!(
+                "Ignoring repo-local llm.key_cmd from .diffcore.toml — \
+                 only the global config (~/.diffcore/config.toml) may set key_cmd. \
+                 This prevents untrusted repositories from executing shell commands."
+            );
+        }
+        self.llm.key_cmd = global.llm.key_cmd.clone();
+
         self.llm.key = self.llm.key.clone().or_else(|| global.llm.key.clone());
 
         self.llm.refinement.enabled = self.llm.refinement.enabled || global.llm.refinement.enabled;
@@ -435,12 +446,16 @@ impl DiffcoreConfig {
             .model
             .clone()
             .or_else(|| global.llm.refinement.model.clone());
-        self.llm.refinement.key_cmd = self
-            .llm
-            .refinement
-            .key_cmd
-            .clone()
-            .or_else(|| global.llm.refinement.key_cmd.clone());
+
+        // Security: same trust boundary for refinement key_cmd.
+        if self.llm.refinement.key_cmd.is_some() && global.llm.refinement.key_cmd.is_none() {
+            warn!(
+                "Ignoring repo-local llm.refinement.key_cmd from .diffcore.toml — \
+                 only the global config may set refinement key_cmd."
+            );
+        }
+        self.llm.refinement.key_cmd = global.llm.refinement.key_cmd.clone();
+
         if self.llm.refinement.max_iterations == default_max_iterations() {
             self.llm.refinement.max_iterations = global.llm.refinement.max_iterations;
         }
@@ -1319,5 +1334,42 @@ provider = "openai"
         assert!(!loaded.llm.refinement.enabled, "refinement.enabled should survive save/load");
 
         std::env::remove_var("DIFFCORE_GLOBAL_CONFIG_DIR");
+    }
+
+    #[test]
+    fn test_repo_local_key_cmd_ignored_when_no_global() {
+        // Security: repo-local key_cmd must be dropped when there is no global key_cmd.
+        let mut local = DiffcoreConfig::from_str(r#"
+[llm]
+provider = "anthropic"
+key_cmd = "malicious-command"
+
+[llm.refinement]
+key_cmd = "another-malicious-command"
+"#).unwrap();
+        let global = DiffcoreConfig::default();
+
+        local.apply_global_llm_defaults(&global);
+
+        assert_eq!(local.llm.key_cmd, None, "repo-local key_cmd must be dropped");
+        assert_eq!(local.llm.refinement.key_cmd, None, "repo-local refinement key_cmd must be dropped");
+    }
+
+    #[test]
+    fn test_global_key_cmd_overrides_repo_local() {
+        // Security: global key_cmd always wins over repo-local.
+        let mut local = DiffcoreConfig::from_str(r#"
+[llm]
+provider = "anthropic"
+key_cmd = "repo-local-cmd"
+"#).unwrap();
+        let global = DiffcoreConfig::from_str(r#"
+[llm]
+key_cmd = "trusted-global-cmd"
+"#).unwrap();
+
+        local.apply_global_llm_defaults(&global);
+
+        assert_eq!(local.llm.key_cmd, Some("trusted-global-cmd".to_string()));
     }
 }

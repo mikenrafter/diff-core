@@ -13,7 +13,7 @@ use axum::routing::get;
 use axum::Router;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, RwLock};
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -216,7 +216,17 @@ pub fn spawn_sse_server(manager: Arc<ActivityManager>) -> Result<String, std::io
     let router = Router::new()
         .route("/llm/jobs/:job_id/events", get(stream_job_events))
         .with_state(manager)
-        .layer(CorsLayer::new().allow_origin(Any));
+        .layer(
+            CorsLayer::new().allow_origin(AllowOrigin::list([
+                // Tauri webview origins
+                "tauri://localhost".parse().unwrap(),
+                "https://tauri.localhost".parse().unwrap(),
+                // Vite dev server
+                "http://localhost:5173".parse().unwrap(),
+                // IPC origin
+                "http://ipc.localhost".parse().unwrap(),
+            ])),
+        );
 
     thread::Builder::new()
         .name("diffcore-activity-sse".to_string())
