@@ -10,7 +10,7 @@
   },
   "app": {
     "security": {
-      "csp": "default-src 'self' tauri: asset: ipc: http://ipc.localhost; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: asset:; connect-src ipc: http://ipc.localhost tauri: http://127.0.0.1:* http://localhost:* https://api.anthropic.com https://api.openai.com https://generativelanguage.googleapis.com; font-src 'self' data:; worker-src 'self' blob:;"
+      "csp": "default-src 'self' tauri: asset: ipc: http://ipc.localhost; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: asset:; connect-src ipc: http://ipc.localhost tauri: http://127.0.0.1:* http://localhost:* https://api.anthropic.com https://api.openai.com https://generativelanguage.googleapis.com https://openrouter.ai; font-src 'self' data:; worker-src 'self' blob:;"
     },
     "windows": [
       {

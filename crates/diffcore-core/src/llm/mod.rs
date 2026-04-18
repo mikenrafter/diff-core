@@ -2,7 +2,8 @@
 //!
 //! Provides a provider-agnostic interface for annotating flow groups
 //! with LLM-generated insights. Supports Anthropic (Messages API),
-//! OpenAI (Chat Completions), and Google Gemini APIs.
+//! OpenAI (Chat Completions), Google Gemini, and OpenRouter (unified
+//! gateway to all models) APIs.
 //!
 //! See spec §5 for the two-pass architecture:
 //! - Pass 1: Overview annotation (automatic on `--annotate`)
@@ -14,6 +15,7 @@ pub mod codex_cli;
 pub mod gemini;
 pub mod judge;
 pub mod openai;
+pub mod openrouter;
 pub mod refinement;
 pub mod schema;
 pub mod vcr;
@@ -386,6 +388,7 @@ pub fn resolve_api_key(config: &LlmConfig, provider: &str) -> Result<String, Llm
         "anthropic" => "ANTHROPIC_API_KEY",
         "openai" => "OPENAI_API_KEY",
         "gemini" => "GEMINI_API_KEY",
+        "openrouter" => "OPENROUTER_API_KEY",
         other => return Err(LlmError::UnsupportedProvider(other.to_string())),
     };
 
@@ -474,6 +477,7 @@ pub fn create_provider_for_workdir(
             || std::env::var("ANTHROPIC_API_KEY").is_ok()
             || std::env::var("OPENAI_API_KEY").is_ok()
             || std::env::var("GEMINI_API_KEY").is_ok()
+            || std::env::var("OPENROUTER_API_KEY").is_ok()
         {
             "anthropic"
         } else {
@@ -515,6 +519,16 @@ pub fn create_provider_for_workdir(
         "gemini" => {
             let model = config.model.as_deref().unwrap_or("gemini-2.5-flash");
             Ok(Box::new(gemini::GeminiProvider::new(
+                api_key,
+                model.to_string(),
+            )))
+        }
+        "openrouter" => {
+            let model = config
+                .model
+                .as_deref()
+                .unwrap_or("anthropic/claude-sonnet-4-6");
+            Ok(Box::new(openrouter::OpenRouterProvider::new(
                 api_key,
                 model.to_string(),
             )))

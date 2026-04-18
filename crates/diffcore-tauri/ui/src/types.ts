@@ -331,7 +331,7 @@ export interface CommentInput {
 }
 
 /** Available LLM providers. */
-export const LLM_PROVIDERS = ["codex", "claude", "anthropic", "openai", "gemini"] as const;
+export const LLM_PROVIDERS = ["codex", "claude", "anthropic", "openai", "gemini", "openrouter"] as const;
 export type LlmProvider = (typeof LLM_PROVIDERS)[number];
 
 /** Models available per provider. */
@@ -344,5 +344,15 @@ export const MODELS_BY_PROVIDER: Record<LlmProvider, string[]> = {
     "gemini-3.1-pro-preview",
     "gemini-3-flash-preview",
     "gemini-2.5-flash",
+  ],
+  openrouter: [
+    "anthropic/claude-sonnet-4-6",
+    "anthropic/claude-opus-4-6",
+    "openai/gpt-4.1",
+    "google/gemini-2.5-flash",
+    "meta-llama/llama-4-maverick",
+    "deepseek/deepseek-r1",
+    "qwen/qwen3-235b-a22b",
+    "mistralai/mistral-large-latest",
   ],
 };

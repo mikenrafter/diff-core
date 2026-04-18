@@ -307,7 +307,7 @@ impl DiffcoreConfig {
 
         // Validate LLM provider if specified
         if let Some(ref provider) = self.llm.provider {
-            let valid = ["anthropic", "openai", "gemini", "codex", "claude"];
+            let valid = ["anthropic", "openai", "gemini", "openrouter", "codex", "claude"];
             if !valid.contains(&provider.as_str()) {
                 return Err(ConfigError::Validation(format!(
                     "Unknown LLM provider '{}'. Valid providers: {}",
@@ -319,7 +319,7 @@ impl DiffcoreConfig {
 
         // Validate refinement provider if specified
         if let Some(ref provider) = self.llm.refinement.provider {
-            let valid = ["anthropic", "openai", "gemini", "codex", "claude"];
+            let valid = ["anthropic", "openai", "gemini", "openrouter", "codex", "claude"];
             if !valid.contains(&provider.as_str()) {
                 return Err(ConfigError::Validation(format!(
                     "Unknown refinement provider '{}'. Valid providers: {}",

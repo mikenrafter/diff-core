@@ -44,6 +44,7 @@ const PROVIDER_LABELS: Record<LlmProvider, string> = {
   anthropic: "Anthropic API",
   openai: "OpenAI API",
   gemini: "Gemini API",
+  openrouter: "OpenRouter",
 };
 
 type OnboardingStep = "recommended" | "api";
