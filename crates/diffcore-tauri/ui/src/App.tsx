@@ -78,6 +78,34 @@ const COMPARE_TARGET_STAGED = "__DIFFCORE_STAGED__";
 
 type CompareMode = "branch" | "unstaged_to_staged" | "invalid";
 
+type PersistedAppState = {
+  version: number;
+  repoPath: string;
+  baseRef: string;
+  headRef: string | null;
+  includeUncommitted: boolean;
+  analysis: AnalysisOutput | null;
+  selectedGroupId: string | null;
+  selectedFile: string | null;
+  fileDiff: FileDiffContent | null;
+  openTabs: Array<{ path: string; groupId: string }>;
+  comments: ReviewComment[];
+  reviewedGroupIds: string[];
+  rightPanelTab: RightPanelTab;
+  annotationSubTab: "info" | "graph" | "edges";
+  replayActive: boolean;
+  replayStep: number;
+  replayVisited: string[];
+  replayHunkIndex: number;
+  replayViewedHunkIds: string[];
+  overview: Pass1Response | null;
+  deepAnalyses: Record<string, Pass2Response>;
+  activityEntries: LlmActivityEntry[];
+  activityError: string | null;
+  activityViewMode: ActivityViewMode;
+  diffViewMode: DiffViewMode;
+};
+
 const SUBSCRIPTION_BACKENDS: Array<{
   provider: SubscriptionProvider;
   title: string;
@@ -365,13 +393,111 @@ export default function App() {
     hunks: EditedHunk[];
   } | null>(null);
   const fileEditBaselineRef = useRef<Map<string, string>>(new Map());
+  const pendingAppStatePersist = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     return () => {
       if (pendingEditSync.current) {
         clearTimeout(pendingEditSync.current);
       }
+      if (pendingAppStatePersist.current) {
+        clearTimeout(pendingAppStatePersist.current);
+      }
     };
+  }, []);
+
+  const buildPersistedState = useCallback((): PersistedAppState => ({
+    version: 1,
+    repoPath,
+    baseRef,
+    headRef,
+    includeUncommitted,
+    analysis,
+    selectedGroupId: selectedGroup?.id ?? null,
+    selectedFile,
+    fileDiff,
+    openTabs,
+    comments,
+    reviewedGroupIds: Array.from(reviewedGroupIds),
+    rightPanelTab,
+    annotationSubTab,
+    replayActive,
+    replayStep,
+    replayVisited: Array.from(replayVisited),
+    replayHunkIndex,
+    replayViewedHunkIds: Array.from(replayViewedHunkIds),
+    overview,
+    deepAnalyses,
+    activityEntries,
+    activityError,
+    activityViewMode,
+    diffViewMode,
+  }), [
+    repoPath,
+    baseRef,
+    headRef,
+    includeUncommitted,
+    analysis,
+    selectedGroup,
+    selectedFile,
+    fileDiff,
+    openTabs,
+    comments,
+    reviewedGroupIds,
+    rightPanelTab,
+    annotationSubTab,
+    replayActive,
+    replayStep,
+    replayVisited,
+    replayHunkIndex,
+    replayViewedHunkIds,
+    overview,
+    deepAnalyses,
+    activityEntries,
+    activityError,
+    activityViewMode,
+    diffViewMode,
+  ]);
+
+  const restoreLastSessionState = useCallback(async () => {
+    if (!IS_TAURI) return;
+    try {
+      const snapshot = await tauriInvoke<PersistedAppState | null>("load_last_app_state");
+      if (!snapshot) {
+        setToast("No saved session found");
+        return;
+      }
+
+      setRepoPath(snapshot.repoPath || "");
+      setBaseRef(snapshot.baseRef || "main");
+      setHeadRef(snapshot.headRef ?? null);
+      setIncludeUncommitted(snapshot.includeUncommitted ?? false);
+      setAnalysis(snapshot.analysis ?? null);
+      setOverview(snapshot.overview ?? null);
+      setDeepAnalyses(snapshot.deepAnalyses ?? {});
+      setSelectedGroup(
+        snapshot.analysis?.groups.find((g) => g.id === snapshot.selectedGroupId) ?? null,
+      );
+      setSelectedFile(snapshot.selectedFile ?? null);
+      setFileDiff(snapshot.fileDiff ?? null);
+      setOpenTabs(snapshot.openTabs ?? []);
+      setComments(snapshot.comments ?? []);
+      setReviewedGroupIds(new Set(snapshot.reviewedGroupIds ?? []));
+      setRightPanelTab(snapshot.rightPanelTab ?? "annotations");
+      setAnnotationSubTab(snapshot.annotationSubTab ?? "info");
+      setReplayActive(snapshot.replayActive ?? false);
+      setReplayStep(snapshot.replayStep ?? 0);
+      setReplayVisited(new Set(snapshot.replayVisited ?? []));
+      setReplayHunkIndex(snapshot.replayHunkIndex ?? 0);
+      setReplayViewedHunkIds(new Set(snapshot.replayViewedHunkIds ?? []));
+      setActivityEntries(snapshot.activityEntries ?? []);
+      setActivityError(snapshot.activityError ?? null);
+      setActivityViewMode(snapshot.activityViewMode ?? "stream");
+      setDiffViewMode(snapshot.diffViewMode ?? "dynamic");
+      setToast("Session restored");
+    } catch {
+      setToast("Failed to restore session");
+    }
   }, []);
 
   /** Load LLM settings from backend. */
@@ -1253,6 +1379,29 @@ export default function App() {
     setToast(message);
     toastTimer.current = setTimeout(() => setToast(null), 3500);
   }, []);
+
+  // Persist a full UI snapshot (including activity logs) to the app-state log folder.
+  useEffect(() => {
+    if (!IS_TAURI) return;
+    if (pendingAppStatePersist.current) {
+      clearTimeout(pendingAppStatePersist.current);
+    }
+    pendingAppStatePersist.current = setTimeout(() => {
+      const snapshot = buildPersistedState();
+      tauriInvoke<string>("save_app_state", { snapshot }).catch(() => {});
+    }, 2000);
+    return () => {
+      if (pendingAppStatePersist.current) {
+        clearTimeout(pendingAppStatePersist.current);
+      }
+    };
+  }, [buildPersistedState]);
+
+  // Auto-restore the latest snapshot once when running in Tauri.
+  useEffect(() => {
+    if (!IS_TAURI) return;
+    restoreLastSessionState();
+  }, [restoreLastSessionState]);
 
   const applyRefinementResult = useCallback((result: RefinementResult, opts?: { fromCache?: boolean }) => {
     if (!analysis) return;
@@ -3459,6 +3608,15 @@ export default function App() {
           </button>
         </div>
         <div className="top-bar-right">
+          {IS_TAURI && (
+            <button
+              className="btn"
+              onClick={() => { void restoreLastSessionState(); }}
+              title="Restore the latest saved application state"
+            >
+              Restore Session
+            </button>
+          )}
           {!aiAccessReady && llmSettings && (
             <button
               className="btn btn-ai-setup"
