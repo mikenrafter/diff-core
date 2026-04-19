@@ -9,6 +9,8 @@ export interface DiffViewerHandle {
 
 interface DiffViewerProps {
   fileDiff: FileDiffContent | null;
+  /** Whether to render side-by-side (true) or inline/unified (false). Default: true. */
+  renderSideBySide?: boolean;
   /** Called when user selects lines and clicks "Comment" in the modified editor. */
   onCommentRequest?: (startLine: number, endLine: number, selectedCode: string) => void;
   /** Comments for the current file (code-level only). */
@@ -20,7 +22,7 @@ interface DiffViewerProps {
 }
 
 /** Monaco-based side-by-side diff viewer for the center panel. */
-const DiffViewer = forwardRef<DiffViewerHandle, DiffViewerProps>(function DiffViewer({ fileDiff, onCommentRequest, codeComments, onGlyphClick, onGoToDefinition }, ref) {
+const DiffViewer = forwardRef<DiffViewerHandle, DiffViewerProps>(function DiffViewer({ fileDiff, onCommentRequest, codeComments, onGlyphClick, onGoToDefinition, renderSideBySide: renderSideBySideProp = true }, ref) {
   const [selectionRange, setSelectionRange] = useState<{ startLine: number; endLine: number } | null>(null);
   const [commentBtnPos, setCommentBtnPos] = useState<{ top: number; left: number } | null>(null);
   const editorRef = useRef<any>(null);
@@ -192,7 +194,7 @@ const DiffViewer = forwardRef<DiffViewerHandle, DiffViewerProps>(function DiffVi
         options={{
           readOnly: true,
           readOnlyMessage: { value: "" },
-          renderSideBySide: true,
+          renderSideBySide: renderSideBySideProp,
           enableSplitViewResizing: true,
           automaticLayout: true,
           scrollBeyondLastLine: false,

@@ -3,11 +3,13 @@ import type {
   AnalysisOutput,
   FlowGroup,
   FileDiffContent,
+  DiffViewMode,
   Pass1Response,
   Pass1GroupAnnotation,
   Pass2Response,
   RepoInfo,
   BranchInfo,
+  CommitInfo,
   LlmSettings,
   LlmProvider,
   AsyncLlmJobStart,
@@ -19,7 +21,8 @@ import type {
   CommentInput,
   InfraSubGroup,
 } from "./types";
-import { LLM_PROVIDERS, MODELS_BY_PROVIDER } from "./types";
+import { LLM_PROVIDERS, DEFAULT_MODELS_BY_PROVIDER } from "./types";
+import type { ModelInfo } from "./types";
 import DiffViewer, { type DiffViewerHandle } from "./components/DiffViewer";
 import FlowGraph from "./components/FlowGraph";
 import SourceExplorer, { type SourceFocusRequest } from "./components/SourceExplorer";
@@ -61,7 +64,7 @@ type ActivityKind =
   | "warning"
   | "error";
 
-const API_PROVIDER_OPTIONS: LlmProvider[] = ["openai", "anthropic", "gemini"];
+const API_PROVIDER_OPTIONS: LlmProvider[] = ["openai", "anthropic", "gemini", "openrouter"];
 const ACTIVITY_STREAM_LIMIT = 10;
 
 const SUBSCRIPTION_BACKENDS: Array<{
@@ -126,6 +129,16 @@ export default function App() {
   const [repoInfo, setRepoInfo] = useState<RepoInfo | null>(null);
   const [branchDropdownOpen, setBranchDropdownOpen] = useState(false);
   const [headBranchDropdownOpen, setHeadBranchDropdownOpen] = useState(false);
+  const [recentCommits, setRecentCommits] = useState<CommitInfo[]>([]);
+  const [showHeadCommits, setShowHeadCommits] = useState(false);
+  const [showBaseCommits, setShowBaseCommits] = useState(false);
+
+  // Diff view mode: side-by-side, inline, or dynamic (per-file density)
+  const [diffViewMode, setDiffViewMode] = useState<DiffViewMode>("side-by-side");
+
+  // Dynamic model lists (fetched from provider APIs, cached 24h)
+  const [providerModels, setProviderModels] = useState<Record<string, string[]>>({});
+  const [modelsLoading, setModelsLoading] = useState<string | null>(null);
 
   // LLM API key availability
   const [hasApiKey, setHasApiKey] = useState(!IS_TAURI); // Demo mode always has "key"
@@ -335,6 +348,37 @@ export default function App() {
     }
   }, []);
 
+  /** Fetch available models from provider API and update providerModels state. */
+  const fetchModelsForProvider = useCallback(async (provider: string, force = false) => {
+    if (!IS_TAURI) {
+      // In demo mode, use static fallback
+      setProviderModels((prev) => ({
+        ...prev,
+        [provider]: DEFAULT_MODELS_BY_PROVIDER[provider as LlmProvider] ?? [],
+      }));
+      return;
+    }
+    setModelsLoading(provider);
+    try {
+      const models = await tauriInvoke<ModelInfo[]>("fetch_provider_models", {
+        provider,
+        forceRefresh: force,
+      });
+      setProviderModels((prev) => ({
+        ...prev,
+        [provider]: models.map((m) => m.id),
+      }));
+    } catch {
+      // Fallback to static list on error
+      setProviderModels((prev) => ({
+        ...prev,
+        [provider]: DEFAULT_MODELS_BY_PROVIDER[provider as LlmProvider] ?? [],
+      }));
+    } finally {
+      setModelsLoading(null);
+    }
+  }, []);
+
   /** Fetch repository info (branches, worktrees, status). */
   const loadRepoInfo = useCallback(async (path: string) => {
     if (!path) return;
@@ -347,6 +391,15 @@ export default function App() {
         info = MOCK_REPO_INFO;
       }
       setRepoInfo(info);
+      if (IS_TAURI) {
+        const commits = await tauriInvoke<CommitInfo[]>("list_commits", {
+          repoPath: path,
+          limit: 80,
+        });
+        setRecentCommits(commits);
+      } else {
+        setRecentCommits([]);
+      }
       // Auto-set base ref to the detected default branch
       setBaseRef(info.default_branch);
       // Auto-set head ref to the current branch (what we're comparing FROM)
@@ -354,6 +407,7 @@ export default function App() {
     } catch {
       // Non-fatal: we can still analyze without repo info
       setRepoInfo(null);
+      setRecentCommits([]);
     }
     // Load LLM settings (includes API key check)
     loadLlmSettings(path);
@@ -367,8 +421,20 @@ export default function App() {
       loadRepoInfo(repoPath);
     } else {
       setRepoInfo(null);
+      setRecentCommits([]);
     }
   }, [repoPath, loadRepoInfo]);
+
+  useEffect(() => {
+    const savedMode = window.localStorage.getItem("diffcore.diffViewMode");
+    if (savedMode === "side-by-side" || savedMode === "inline" || savedMode === "dynamic") {
+      setDiffViewMode(savedMode);
+    }
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem("diffcore.diffViewMode", diffViewMode);
+  }, [diffViewMode]);
 
   useEffect(() => {
     if (!repoPath) {
@@ -1169,6 +1235,11 @@ export default function App() {
     };
   }, [tabContextMenu]);
 
+  /** Get models for a provider — dynamic if available, static fallback otherwise. */
+  const modelsForProvider = useCallback((provider: string): string[] => {
+    return providerModels[provider] ?? DEFAULT_MODELS_BY_PROVIDER[provider as LlmProvider] ?? [];
+  }, [providerModels]);
+
   /** Update a single LLM setting field and persist. */
   const updateSetting = useCallback(
     (field: keyof LlmSettings, value: string | boolean | number) => {
@@ -1177,27 +1248,30 @@ export default function App() {
       // When provider changes, reset model to default for that provider and sync refinement
       if (field === "provider") {
         const provider = value as LlmProvider;
-        const models = MODELS_BY_PROVIDER[provider] ?? [];
+        const models = modelsForProvider(provider);
         updated.model = models[0] ?? "";
         updated.refinement_provider = provider;
         updated.refinement_model = models[0] ?? "";
+        // Trigger dynamic model fetch for this provider
+        fetchModelsForProvider(provider);
         if (isApiProvider(provider)) {
           setApiProviderDraft(provider);
         }
       }
       if (field === "refinement_provider") {
         const provider = value as LlmProvider;
-        const models = MODELS_BY_PROVIDER[provider] ?? [];
+        const models = modelsForProvider(provider);
         updated.refinement_model = models[0] ?? "";
+        fetchModelsForProvider(provider);
       }
       saveLlmSettings(updated);
     },
-    [llmSettings, saveLlmSettings],
+    [llmSettings, saveLlmSettings, modelsForProvider, fetchModelsForProvider],
   );
 
   const selectedApiModel = useMemo(
-    () => MODELS_BY_PROVIDER[apiProviderDraft]?.[0] ?? "default",
-    [apiProviderDraft],
+    () => modelsForProvider(apiProviderDraft)[0] ?? "default",
+    [apiProviderDraft, modelsForProvider],
   );
 
   /** Save an API key to the shared diffcore config and refresh settings. */
@@ -1406,7 +1480,7 @@ export default function App() {
 
   const activateSubscriptionProvider = useCallback(async (provider: SubscriptionProvider) => {
     if (!llmSettings) return;
-    const model = MODELS_BY_PROVIDER[provider]?.[0] ?? "default";
+    const model = modelsForProvider(provider)[0] ?? "default";
     const updated: LlmSettings = {
       ...llmSettings,
       annotations_enabled: true,
@@ -1423,7 +1497,7 @@ export default function App() {
 
   const activatePreferredActivityProvider = useCallback(async () => {
     if (!recommendedSubscriptionProvider || !llmSettings) return;
-    const model = MODELS_BY_PROVIDER[recommendedSubscriptionProvider]?.[0] ?? "default";
+    const model = modelsForProvider(recommendedSubscriptionProvider)[0] ?? "default";
     const updated: LlmSettings = {
       ...llmSettings,
       annotations_enabled: true,
@@ -1849,6 +1923,31 @@ export default function App() {
     [commentsByFileMap],
   );
 
+  /**
+   * Compute whether to render side-by-side for the current file.
+   *
+   * In "dynamic" mode, uses change density to decide: sparse edits or full-file
+   * rewrites get side-by-side; dense targeted changes get inline.
+   */
+  const shouldRenderSideBySide = useMemo((): boolean => {
+    if (diffViewMode === "side-by-side") return true;
+    if (diffViewMode === "inline") return false;
+    // Dynamic: compute per-file density
+    if (!fileDiff) return true;
+    const oldLines = (fileDiff.old_content || "").split("\n").length;
+    const newLines = (fileDiff.new_content || "").split("\n").length;
+    const maxLines = Math.max(oldLines, newLines, 1);
+    // Find the selected file's change stats from the active group
+    const fileChange = selectedGroup?.files.find((f) => f.path === selectedFile);
+    if (!fileChange) return true;
+    const totalChanged = fileChange.changes.additions + fileChange.changes.deletions;
+    const density = totalChanged / maxLines;
+    // Full rewrite (>80% changed) or sparse (<30% changed) → side-by-side
+    // Dense targeted edits (30-80% changed) → inline
+    if (density > 0.8 || density < 0.3) return true;
+    return false;
+  }, [diffViewMode, fileDiff, selectedGroup, selectedFile]);
+
   /** Code-level comments for the selected file, passed to DiffViewer. */
   const codeCommentsForSelectedFile = useMemo(
     () => selectedFile
@@ -2170,18 +2269,22 @@ export default function App() {
     return () => window.removeEventListener("keydown", handleKeyDown, true);
   }, [handleSelectFile, handleSelectFileDebounced, handleSelectGroup, enterReplay, exitReplay, goToReplayStep, toggleGroupReviewed, copyFilePath, copyFlowPaths, openCommentInput, exportComments, closeTab]);
 
-  const handleSelectBase = useCallback((branch: string) => {
-    setBaseRef(branch);
+  const handleSelectBase = useCallback((refName: string) => {
+    setBaseRef(refName);
     setBranchDropdownOpen(false);
+    setShowBaseCommits(false);
   }, []);
 
-  const handleSelectHead = useCallback((branch: string) => {
-    setHeadRef(branch);
+  const handleSelectHead = useCallback((refName: string) => {
+    setHeadRef(refName);
     setHeadBranchDropdownOpen(false);
+    setShowHeadCommits(false);
   }, []);
 
   // Derived: all branches for the dropdowns
   const baseBranches: BranchInfo[] = repoInfo?.branches ?? [];
+  const headLabel = formatRefLabel(headRef, recentCommits) ?? "HEAD";
+  const baseLabel = formatRefLabel(baseRef, recentCommits) ?? baseRef;
 
   // Status display
   const statusText = formatBranchStatus(repoInfo);
@@ -2806,7 +2909,7 @@ export default function App() {
               >
                 <span className="branch-label">source</span>
                 <span className="branch-icon">&#9741;</span>
-                <span className="branch-name">{headRef ?? "HEAD"}</span>
+                <span className="branch-name">{headLabel}</span>
                 <span className="dropdown-arrow">&#9662;</span>
               </button>
               {headBranchDropdownOpen && (
@@ -2824,6 +2927,29 @@ export default function App() {
                   ))}
                   {baseBranches.length === 0 && (
                     <li className="branch-option disabled">No branches found</li>
+                  )}
+                  {recentCommits.length > 0 && (
+                    <>
+                      <li
+                        className="branch-option"
+                        onClick={() => setShowHeadCommits((open) => !open)}
+                        title="Show or hide recent commits"
+                      >
+                        <span className="branch-option-name">
+                          {showHeadCommits ? "Hide recent commits" : "Show recent commits"}
+                        </span>
+                      </li>
+                      {showHeadCommits && recentCommits.map((commit) => (
+                        <li
+                          key={`head-${commit.sha}`}
+                          className={`branch-option ${commit.sha === headRef ? "selected" : ""}`}
+                          onClick={() => handleSelectHead(commit.sha)}
+                          title={`${commit.sha} · ${commit.author}`}
+                        >
+                          <span className="branch-option-name">{commit.short_sha} {commit.summary}</span>
+                        </li>
+                      ))}
+                    </>
                   )}
                 </ul>
               )}
@@ -2843,7 +2969,7 @@ export default function App() {
               >
                 <span className="branch-label">target</span>
                 <span className="branch-icon">&#9741;</span>
-                <span className="branch-name">{baseRef}</span>
+                <span className="branch-name">{baseLabel}</span>
                 <span className="dropdown-arrow">&#9662;</span>
               </button>
               {branchDropdownOpen && (
@@ -2861,6 +2987,29 @@ export default function App() {
                   ))}
                   {baseBranches.length === 0 && (
                     <li className="branch-option disabled">No branches found</li>
+                  )}
+                  {recentCommits.length > 0 && (
+                    <>
+                      <li
+                        className="branch-option"
+                        onClick={() => setShowBaseCommits((open) => !open)}
+                        title="Show or hide recent commits"
+                      >
+                        <span className="branch-option-name">
+                          {showBaseCommits ? "Hide recent commits" : "Show recent commits"}
+                        </span>
+                      </li>
+                      {showBaseCommits && recentCommits.map((commit) => (
+                        <li
+                          key={`base-${commit.sha}`}
+                          className={`branch-option ${commit.sha === baseRef ? "selected" : ""}`}
+                          onClick={() => handleSelectBase(commit.sha)}
+                          title={`${commit.sha} · ${commit.author}`}
+                        >
+                          <span className="branch-option-name">{commit.short_sha} {commit.summary}</span>
+                        </li>
+                      ))}
+                    </>
                   )}
                 </ul>
               )}
@@ -3133,6 +3282,22 @@ export default function App() {
                   When enabled, branch comparisons include both committed and uncommitted
                   working tree changes (equivalent to <code>git diff {baseRef || "main"}</code>).
                 </p>
+                <label className="settings-toggle" style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12 }}>
+                  <span>Diff view mode</span>
+                  <select
+                    value={diffViewMode}
+                    onChange={(e) => setDiffViewMode(e.target.value as DiffViewMode)}
+                    style={{ marginLeft: "auto" }}
+                  >
+                    <option value="side-by-side">Side-by-side</option>
+                    <option value="inline">Inline</option>
+                    <option value="dynamic">Dynamic</option>
+                  </select>
+                </label>
+                <p className="settings-hint">
+                  Side-by-side shows old/new in two columns. Inline shows a unified view.
+                  Dynamic picks per-file based on change density.
+                </p>
               </div>
               {/* LLM Access / Onboarding */}
               <div className="settings-section">
@@ -3201,7 +3366,7 @@ export default function App() {
                   value={llmSettings.model}
                   onChange={(e) => updateSetting("model", e.target.value)}
                 >
-                  {(MODELS_BY_PROVIDER[llmSettings.provider as LlmProvider] ?? []).map(
+                  {modelsForProvider(llmSettings.provider).map(
                     (m) => (
                       <option key={m} value={m}>
                         {m}
@@ -3209,6 +3374,15 @@ export default function App() {
                     ),
                   )}
                 </select>
+                <button
+                  className="btn btn-small"
+                  style={{ marginTop: 4 }}
+                  disabled={modelsLoading === llmSettings.provider}
+                  onClick={() => fetchModelsForProvider(llmSettings.provider, true)}
+                  title="Refresh model list from provider API"
+                >
+                  {modelsLoading === llmSettings.provider ? "Refreshing…" : "⟳ Refresh models"}
+                </button>
                 {!isApiProvider(resolvedPrimaryProvider ?? llmSettings.provider) && (
                   <p className="settings-hint">
                     No API key needed here. diffcore will call {PROVIDER_LABELS[(resolvedPrimaryProvider ?? llmSettings.provider) as LlmProvider]}
@@ -3318,7 +3492,7 @@ export default function App() {
                         value={llmSettings.refinement_model}
                         onChange={(e) => updateSetting("refinement_model", e.target.value)}
                       >
-                        {(MODELS_BY_PROVIDER[llmSettings.refinement_provider as LlmProvider] ?? []).map(
+                        {modelsForProvider(llmSettings.refinement_provider).map(
                           (m) => (
                             <option key={m} value={m}>
                               {m}
@@ -3907,6 +4081,7 @@ export default function App() {
               <DiffViewer
                 ref={diffViewerRef}
                 fileDiff={fileDiff}
+                renderSideBySide={shouldRenderSideBySide}
                 onCommentRequest={(startLine: number, endLine: number, selectedCode: string) => {
                   const group = selectedGroupRef.current;
                   const file = selectedFileRef.current;
@@ -4462,7 +4637,18 @@ function resolveInteractiveModel(
   if (configuredProvider === resolvedProvider && configuredModel) {
     return configuredModel;
   }
-  return MODELS_BY_PROVIDER[resolvedProvider]?.[0] ?? configuredModel ?? "default";
+  return DEFAULT_MODELS_BY_PROVIDER[resolvedProvider]?.[0] ?? configuredModel ?? "default";
+}
+
+function formatRefLabel(refName: string | null, recentCommits: CommitInfo[]): string | null {
+  if (!refName) {
+    return null;
+  }
+  const commit = recentCommits.find((item) => item.sha === refName);
+  if (!commit) {
+    return refName;
+  }
+  return `${commit.short_sha} (${commit.summary})`;
 }
 
 function buildMockActivityEntries(

@@ -14,6 +14,7 @@ pub mod claude_cli;
 pub mod codex_cli;
 pub mod gemini;
 pub mod judge;
+pub mod models;
 pub mod openai;
 pub mod openrouter;
 pub mod refinement;

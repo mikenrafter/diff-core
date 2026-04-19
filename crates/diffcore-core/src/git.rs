@@ -1,4 +1,4 @@
-use git2::{Delta, DiffOptions, Oid, Repository};
+use git2::{Delta, DiffOptions, Oid, Repository, Sort};
 use serde::{Deserialize, Serialize};
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
@@ -350,6 +350,21 @@ pub struct BranchStatus {
     pub behind: usize,
 }
 
+/// Information about a single commit for ref pickers.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CommitInfo {
+    /// Full 40-char SHA.
+    pub sha: String,
+    /// Short SHA for compact display.
+    pub short_sha: String,
+    /// Commit summary line.
+    pub summary: String,
+    /// Author name, if available.
+    pub author: String,
+    /// Commit timestamp (unix seconds).
+    pub timestamp: i64,
+}
+
 // ── Git auto-discovery functions ──
 
 /// List all local branches.
@@ -434,6 +449,40 @@ pub fn list_worktrees(repo: &Repository) -> Result<Vec<WorktreeInfo>, GitError> 
     }
 
     Ok(result)
+}
+
+/// List recent commits from HEAD, newest first.
+///
+/// Returns up to `limit` commits with metadata suitable for branch/commit pickers.
+pub fn list_recent_commits(repo: &Repository, limit: usize) -> Result<Vec<CommitInfo>, GitError> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut revwalk = repo.revwalk()?;
+    revwalk.push_head().map_err(|_| GitError::EmptyRepo)?;
+    revwalk.set_sorting(Sort::TIME)?;
+
+    let mut commits = Vec::with_capacity(limit);
+    for oid_result in revwalk.take(limit) {
+        let oid = oid_result?;
+        let commit = repo.find_commit(oid)?;
+        let sha = oid.to_string();
+        let short_sha = sha.chars().take(12).collect::<String>();
+        let summary = commit.summary().unwrap_or("<no message>").to_string();
+        let author = commit.author().name().unwrap_or("unknown").to_string();
+        let timestamp = commit.time().seconds();
+
+        commits.push(CommitInfo {
+            sha,
+            short_sha,
+            summary,
+            author,
+            timestamp,
+        });
+    }
+
+    Ok(commits)
 }
 
 /// Get the current branch's tracking status (ahead/behind upstream).

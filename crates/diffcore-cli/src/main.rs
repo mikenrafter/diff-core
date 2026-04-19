@@ -55,6 +55,8 @@ enum Commands {
     ExportGroups(ExportGroupsArgs),
     /// Import flow groupings from a manifest JSON file
     ImportGroups(ImportGroupsArgs),
+    /// List available models for an LLM provider (Anthropic, OpenRouter, etc.)
+    ListModels(ListModelsArgs),
     /// Embed file diffs using local code embeddings and show pairwise similarity.
     /// Requires the `embeddings` feature flag.
     #[cfg(feature = "embeddings")]
@@ -247,6 +249,17 @@ struct ImportGroupsArgs {
     base: String,
 }
 
+#[derive(Parser)]
+struct ListModelsArgs {
+    /// LLM provider to list models for (anthropic, openrouter, openai, gemini, codex, claude)
+    #[arg(long)]
+    provider: String,
+
+    /// Bypass the 24-hour cache and fetch fresh model lists from the provider API
+    #[arg(long)]
+    refresh: bool,
+}
+
 #[cfg(feature = "embeddings")]
 #[derive(Parser)]
 struct EmbedDiffArgs {
@@ -302,6 +315,12 @@ fn main() {
         }
         Commands::ImportGroups(args) => {
             if let Err(e) = run_import_groups(args) {
+                error!("Error: {}", e);
+                process::exit(1);
+            }
+        }
+        Commands::ListModels(args) => {
+            if let Err(e) = run_list_models(args) {
                 error!("Error: {}", e);
                 process::exit(1);
             }
@@ -1020,6 +1039,30 @@ fn run_lint_goldens(args: LintGoldensArgs) {
             process::exit(1);
         }
     }
+}
+
+fn run_list_models(args: ListModelsArgs) -> Result<(), Box<dyn std::error::Error>> {
+    use diffcore_core::llm::models::{fetch_provider_models, SUPPORTED_PROVIDERS};
+
+    if !SUPPORTED_PROVIDERS.contains(&args.provider.as_str()) {
+        return Err(format!(
+            "Unknown provider '{}'. Supported: {}",
+            args.provider,
+            SUPPORTED_PROVIDERS.join(", ")
+        )
+        .into());
+    }
+
+    let rt = tokio::runtime::Runtime::new()?;
+    let models = rt.block_on(fetch_provider_models(&args.provider, args.refresh))?;
+
+    let json = serde_json::to_string_pretty(&models)?;
+    // Use write! to stdout instead of println! (clippy::print_stdout is denied)
+    use std::io::Write;
+    std::io::stdout().write_all(json.as_bytes())?;
+    std::io::stdout().write_all(b"\n")?;
+
+    Ok(())
 }
 
 #[cfg(feature = "embeddings")]

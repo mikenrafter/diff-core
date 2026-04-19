@@ -132,6 +132,8 @@ pub enum CommandError {
     Io(String),
     #[error("LLM error: {0}")]
     Llm(String),
+    #[error("Network error: {0}")]
+    Network(String),
 }
 
 impl serde::Serialize for CommandError {
@@ -1497,6 +1499,15 @@ pub fn list_branches(repo_path: String) -> Result<Vec<git::BranchInfo>, CommandE
     git::list_branches(&repo).map_err(|e| CommandError::Git(format!("{}", e)))
 }
 
+/// List recent commits for commit-level ref selection in the UI.
+#[tauri::command]
+pub fn list_commits(repo_path: String, limit: Option<usize>) -> Result<Vec<git::CommitInfo>, CommandError> {
+    let repo = open_repo(&repo_path)?;
+    let bounded_limit = limit.unwrap_or(50).clamp(1, 200);
+    git::list_recent_commits(&repo, bounded_limit)
+        .map_err(|e| CommandError::Git(format!("{}", e)))
+}
+
 /// List all git worktrees for the repository.
 #[tauri::command]
 pub fn list_worktrees(repo_path: String) -> Result<Vec<git::WorktreeInfo>, CommandError> {
@@ -1586,6 +1597,7 @@ pub fn get_llm_settings(repo_path: Option<String>) -> Result<LlmSettings, Comman
                 "anthropic" => "ANTHROPIC_API_KEY",
                 "openai" => "OPENAI_API_KEY",
                 "gemini" => "GEMINI_API_KEY",
+                "openrouter" => "OPENROUTER_API_KEY",
                 _ => "none",
             };
             if std::env::var(env_var).is_ok() {
@@ -1699,6 +1711,30 @@ pub fn clear_api_key(_repo_path: String) -> Result<(), CommandError> {
         .map_err(|e| CommandError::Config(format!("Failed to save config: {}", e)))?;
 
     Ok(())
+}
+
+/// Re-export the shared `ModelInfo` type for the Tauri frontend.
+pub use llm::models::ModelInfo;
+
+/// Fetch available models from a provider's API.
+///
+/// Delegates to the shared `diffcore-core` model listing module, which handles
+/// caching, API key resolution, and provider-specific fetching.
+/// Pass `force_refresh: true` to bypass the 24-hour cache.
+#[tauri::command]
+pub async fn fetch_provider_models(
+    provider: String,
+    force_refresh: bool,
+) -> Result<Vec<ModelInfo>, CommandError> {
+    llm::models::fetch_provider_models(&provider, force_refresh)
+        .await
+        .map_err(|e| match e {
+            llm::models::ModelListError::Network(msg) => CommandError::Network(msg),
+            llm::models::ModelListError::Config(msg) => CommandError::Config(msg),
+            llm::models::ModelListError::UnknownProvider(p) => {
+                CommandError::Config(format!("Unknown provider: {}", p))
+            }
+        })
 }
 
 /// Get the current ignore paths from `.diffcore.toml`.

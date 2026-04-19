@@ -126,6 +126,15 @@ export interface BranchInfo {
   has_upstream: boolean;
 }
 
+/** Information about a recent commit shown in ref pickers. */
+export interface CommitInfo {
+  sha: string;
+  short_sha: string;
+  summary: string;
+  author: string;
+  timestamp: number;
+}
+
 /** Information about a git worktree. */
 export interface WorktreeInfo {
   path: string;
@@ -330,12 +339,25 @@ export interface CommentInput {
   selected_code?: string;
 }
 
+/** Model descriptor returned by the fetch_provider_models command. */
+export interface ModelInfo {
+  /** Model identifier for API calls. */
+  id: string;
+  /** Human-readable display name. */
+  display_name: string;
+  /** Context window size in tokens, if known. */
+  context_length: number | null;
+}
+
+/** Diff viewer layout mode. */
+export type DiffViewMode = "side-by-side" | "inline" | "dynamic";
+
 /** Available LLM providers. */
 export const LLM_PROVIDERS = ["codex", "claude", "anthropic", "openai", "gemini", "openrouter"] as const;
 export type LlmProvider = (typeof LLM_PROVIDERS)[number];
 
-/** Models available per provider. */
-export const MODELS_BY_PROVIDER: Record<LlmProvider, string[]> = {
+/** Static fallback models per provider — used when API listing is unavailable. */
+export const DEFAULT_MODELS_BY_PROVIDER: Record<LlmProvider, string[]> = {
   codex: ["default", "gpt-5.4", "gpt-5.4-mini", "gpt-4.1", "o4-mini", "o3"],
   claude: ["default", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"],
   anthropic: ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"],
@@ -356,3 +378,8 @@ export const MODELS_BY_PROVIDER: Record<LlmProvider, string[]> = {
     "mistralai/mistral-large-latest",
   ],
 };
+
+/**
+ * @deprecated Use DEFAULT_MODELS_BY_PROVIDER instead. Kept for backward compat.
+ */
+export const MODELS_BY_PROVIDER = DEFAULT_MODELS_BY_PROVIDER;
