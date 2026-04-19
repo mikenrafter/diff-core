@@ -78,6 +78,8 @@ const API_PROVIDER_OPTIONS: LlmProvider[] = ["openai", "anthropic", "gemini", "o
 const ACTIVITY_STREAM_LIMIT = 10;
 const COMPARE_TARGET_UNSTAGED = "__DIFFCORE_UNSTAGED__";
 const COMPARE_TARGET_STAGED = "__DIFFCORE_STAGED__";
+// TODO: re-enable app state save/restore after UX and reliability pass.
+const STATE_SAVE_RESTORE_ENABLED = false;
 
 type CompareMode = "branch" | "unstaged_to_staged" | "invalid";
 
@@ -510,6 +512,7 @@ export default function App() {
   ]);
 
   const restoreLastSessionState = useCallback(async () => {
+    if (!STATE_SAVE_RESTORE_ENABLED) return;
     if (!IS_TAURI) return;
     try {
       const snapshot = await tauriInvoke<PersistedAppState | null>("load_last_app_state");
@@ -1584,6 +1587,7 @@ export default function App() {
 
   // Persist a full UI snapshot (including activity logs) to the app-state log folder.
   useEffect(() => {
+    if (!STATE_SAVE_RESTORE_ENABLED) return;
     if (!IS_TAURI) return;
     if (pendingAppStatePersist.current) {
       clearTimeout(pendingAppStatePersist.current);
@@ -1601,6 +1605,7 @@ export default function App() {
 
   // Auto-restore the latest snapshot once when running in Tauri.
   useEffect(() => {
+    if (!STATE_SAVE_RESTORE_ENABLED) return;
     if (!IS_TAURI) return;
     restoreLastSessionState();
   }, [restoreLastSessionState]);
@@ -4072,7 +4077,7 @@ export default function App() {
           </button>
         </div>
         <div className="top-bar-right">
-          {IS_TAURI && (
+          {IS_TAURI && STATE_SAVE_RESTORE_ENABLED && (
             <button
               className="btn"
               onClick={() => { void restoreLastSessionState(); }}
