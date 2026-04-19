@@ -4284,6 +4284,26 @@ body {
   border-left: 3px solid var(--accent) !important;
 }
 
+/* Monaco find widget readability in custom dark theme */
+.monaco-editor .find-widget {
+  background: #181825 !important;
+  border: 1px solid #6c7086 !important;
+}
+
+.monaco-editor .find-widget .monaco-inputbox {
+  background: #11111b !important;
+  border-color: #6c7086 !important;
+}
+
+.monaco-editor .find-widget .monaco-inputbox input {
+  color: #cdd6f4 !important;
+  background: #11111b !important;
+}
+
+.monaco-editor .find-widget .monaco-inputbox input::placeholder {
+  color: #9399b2 !important;
+}
+
 /* ── Comment Strip (below diff viewer) ── */
 
 .comment-strip {

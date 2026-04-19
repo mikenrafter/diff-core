@@ -6,9 +6,11 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use grep_regex::RegexMatcherBuilder;
+use grep_searcher::{sinks, SearcherBuilder};
+use ignore::WalkBuilder;
 use log::warn;
 use tauri::Emitter;
-use walkdir::WalkDir;
 
 use crate::activity_stream::{self, ActivityEntry, JobHandle};
 use diffcore_core::cache;
@@ -1548,6 +1550,17 @@ pub fn get_repo_info(repo_path: String) -> Result<RepoInfo, CommandError> {
     })
 }
 
+/// Return the first directory argument passed at app launch, if any.
+#[tauri::command]
+pub fn get_launch_directory() -> Option<String> {
+    std::env::args_os()
+        .skip(1)
+        .map(PathBuf::from)
+        .find(|path| path.is_dir())
+        .and_then(|path| std::fs::canonicalize(path).ok())
+        .map(|path| path.to_string_lossy().to_string())
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CrossFileSearchMatch {
     pub line_number: u32,
@@ -1592,10 +1605,19 @@ fn changed_files_from_state(state: &AppState) -> HashSet<String> {
 }
 
 fn workspace_files(workdir: &std::path::Path) -> Vec<String> {
-    WalkDir::new(workdir)
+    let mut builder = WalkBuilder::new(workdir);
+    builder
+        .hidden(false)
+        .ignore(true)
+        .git_ignore(true)
+        .git_exclude(true)
+        .parents(true);
+
+    builder
+        .build()
         .into_iter()
         .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_file())
+        .filter(|entry| entry.file_type().map(|ft| ft.is_file()).unwrap_or(false))
         .filter_map(|entry| {
             let rel = entry.path().strip_prefix(workdir).ok()?;
             let rel_str = rel.to_string_lossy().replace('\\', "/");
@@ -1633,7 +1655,18 @@ pub fn cross_file_search(
     };
     candidates.sort();
 
-    let needle = query.to_lowercase();
+    let matcher = RegexMatcherBuilder::new()
+        .case_insensitive(true)
+        .fixed_strings(true)
+        .build(query)
+        .map_err(|e| CommandError::Analysis(format!("Invalid search query: {}", e)))?;
+
+    let mut searcher = SearcherBuilder::new()
+        .line_number(true)
+        .multi_line(false)
+        .binary_detection(grep_searcher::BinaryDetection::quit(b'\x00'))
+        .build();
+
     let max_file_results = max_results.unwrap_or(200).max(1);
     let mut results = Vec::new();
     let mut total_matches = 0usize;
@@ -1652,26 +1685,23 @@ pub fn cross_file_search(
             continue;
         }
 
-        let content = match std::fs::read_to_string(&absolute_path) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-
         let mut file_matches = Vec::new();
-        for (idx, line) in content.lines().enumerate() {
-            if total_matches >= 1000 {
-                break;
+
+        let sink = sinks::UTF8(|line_number: u64, line: &str| {
+            if total_matches >= 1000 || file_matches.len() >= 50 {
+                return Ok(false);
             }
-            if line.to_lowercase().contains(&needle) {
-                file_matches.push(CrossFileSearchMatch {
-                    line_number: (idx + 1) as u32,
-                    line_text: line.to_string(),
-                });
-                total_matches += 1;
-                if file_matches.len() >= 50 {
-                    break;
-                }
-            }
+            let clean = line.trim_end_matches(&['\r', '\n'][..]).to_string();
+            file_matches.push(CrossFileSearchMatch {
+                line_number: line_number as u32,
+                line_text: clean,
+            });
+            total_matches += 1;
+            Ok(true)
+        });
+
+        if searcher.search_path(&matcher, &absolute_path, sink).is_err() {
+            continue;
         }
 
         if !file_matches.is_empty() {

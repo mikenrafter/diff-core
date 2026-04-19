@@ -358,6 +358,15 @@ const DiffViewer = forwardRef<DiffViewerHandle, DiffViewerProps>(function DiffVi
               "scrollbarSlider.background": "#45475a80",
               "scrollbarSlider.hoverBackground": "#6c7086",
               "scrollbarSlider.activeBackground": "#a6adc8",
+              "editorWidget.background": "#181825",
+              "editorWidget.border": "#6c7086",
+              "input.background": "#11111b",
+              "input.foreground": "#cdd6f4",
+              "input.border": "#6c7086",
+              "input.placeholderForeground": "#9399b2",
+              "editor.findMatchBackground": "#f9e2af55",
+              "editor.findMatchHighlightBackground": "#f9e2af22",
+              "editor.findRangeHighlightBackground": "#89b4fa1f",
             },
           });
         }}

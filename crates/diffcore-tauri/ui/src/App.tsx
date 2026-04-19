@@ -308,6 +308,7 @@ export default function App() {
   const commentInputRef = useRef<HTMLTextAreaElement>(null);
   const diffViewerRef = useRef<DiffViewerHandle>(null);
   const repoInputRef = useRef<HTMLInputElement>(null);
+  const launchDirectoryCheckedRef = useRef(false);
 
   // Annotation sub-tab: "info" | "graph" | "edges"
   const [annotationSubTab, setAnnotationSubTab] = useState<"info" | "graph" | "edges">("info");
@@ -650,6 +651,33 @@ export default function App() {
     // Load ignore paths
     loadIgnorePaths(path);
   }, [loadLlmSettings, loadIgnorePaths]);
+
+  const browseForRepository = useCallback(async () => {
+    if (!IS_TAURI) return;
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: "Select repository folder",
+      });
+      if (typeof selected === "string" && selected.length > 0) {
+        setRepoPath(selected);
+      }
+    } catch {
+      showToast("Failed to open folder picker");
+    }
+  }, [showToast]);
+
+  useEffect(() => {
+    if (!IS_TAURI || launchDirectoryCheckedRef.current || repoPath) return;
+    launchDirectoryCheckedRef.current = true;
+    tauriInvoke<string | null>("get_launch_directory")
+      .then((dir) => {
+        if (dir) setRepoPath(dir);
+      })
+      .catch(() => {});
+  }, [repoPath]);
 
   // Load repo info when repo path changes
   useEffect(() => {
@@ -3607,6 +3635,13 @@ export default function App() {
               }
             }}
           />
+          <button
+            className="btn"
+            onClick={() => { void browseForRepository(); }}
+            title="Browse for a repository folder"
+          >
+            Browse
+          </button>
 
           {/* Branch comparison: head (source) → base (target) */}
           <div className="branch-comparison">
@@ -4446,6 +4481,83 @@ export default function App() {
                 </button>
               </div>
             )}
+
+            <div className="refinement-banner" style={{ flexDirection: "column", alignItems: "stretch", gap: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span>Cross-file search</span>
+                <button
+                  className="btn btn-refine"
+                  style={{ fontSize: 10 }}
+                  onClick={() => setCrossFileSearchOpen((v) => !v)}
+                  title="Toggle cross-file search (F)"
+                >
+                  {crossFileSearchOpen ? "Hide" : "Show"}
+                </button>
+              </div>
+              {crossFileSearchOpen && (
+                <>
+                  <input
+                    ref={crossFileSearchInputRef}
+                    className="input"
+                    placeholder="Search across files..."
+                    value={crossFileSearchQuery}
+                    onChange={(e) => setCrossFileSearchQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        void runCrossFileSearch();
+                      }
+                      if (e.key === "Escape") {
+                        e.preventDefault();
+                        setCrossFileSearchOpen(false);
+                      }
+                    }}
+                    style={{ width: "100%" }}
+                  />
+                  <label className="settings-toggle" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <input
+                      type="checkbox"
+                      checked={showUnchangedFiles}
+                      onChange={(e) => setShowUnchangedFiles(e.target.checked)}
+                    />
+                    <span>show unchanged files</span>
+                  </label>
+                  <div className="comment-input-footer" style={{ justifyContent: "space-between" }}>
+                    <span className="comment-input-hint">
+                      {showUnchangedFiles ? "Searching changed + unchanged files" : "Searching changed files only"}
+                    </span>
+                    <button className="btn btn-comment-save" onClick={() => { void runCrossFileSearch(); }}>
+                      {crossFileSearchLoading ? "Searching..." : "Search"}
+                    </button>
+                  </div>
+                  {crossFileSearchError && (
+                    <div className="error-banner">{crossFileSearchError}</div>
+                  )}
+                  <div style={{ maxHeight: 220, overflow: "auto" }}>
+                    {crossFileSearchResults.length === 0 && !crossFileSearchLoading && crossFileSearchQuery.trim() && !crossFileSearchError && (
+                      <div className="comment-input-hint">No matches</div>
+                    )}
+                    {crossFileSearchResults.slice(0, 60).map((result) => (
+                      <div key={result.file_path} style={{ marginBottom: 8 }}>
+                        <div style={{ fontWeight: 600, fontSize: 12, opacity: 0.9 }}>{shortPath(result.file_path)}</div>
+                        {result.matches.slice(0, 4).map((m) => (
+                          <button
+                            key={`${result.file_path}:${m.line_number}:${m.line_text}`}
+                            className="comment-strip-item"
+                            style={{ width: "100%", textAlign: "left", marginTop: 4 }}
+                            onClick={() => {
+                              void openCrossFileSearchResult(result.file_path, m.line_number);
+                            }}
+                          >
+                            <strong>{m.line_number}</strong>: {m.line_text}
+                          </button>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
 
             <div
               className={`group-list group-list-${groupListTransitionState}`}
@@ -5294,78 +5406,6 @@ export default function App() {
             </>
           )}
         </footer>
-      )}
-
-      {/* Cross-file search overlay */}
-      {crossFileSearchOpen && (
-        <div className="comment-overlay" onClick={() => setCrossFileSearchOpen(false)}>
-          <div className="comment-input-panel" onClick={(e) => e.stopPropagation()}>
-            <div className="comment-input-header">
-              <span className="comment-input-scope">Cross-file search</span>
-              <button className="btn-close" onClick={() => setCrossFileSearchOpen(false)}>&times;</button>
-            </div>
-            <input
-              ref={crossFileSearchInputRef}
-              className="input"
-              placeholder="Search across files..."
-              value={crossFileSearchQuery}
-              onChange={(e) => setCrossFileSearchQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  void runCrossFileSearch();
-                }
-                if (e.key === "Escape") {
-                  e.preventDefault();
-                  setCrossFileSearchOpen(false);
-                }
-              }}
-              style={{ width: "100%", marginBottom: 10 }}
-            />
-            <label className="settings-toggle" style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-              <input
-                type="checkbox"
-                checked={showUnchangedFiles}
-                onChange={(e) => setShowUnchangedFiles(e.target.checked)}
-              />
-              <span>show unchanged files</span>
-            </label>
-            <div className="comment-input-footer" style={{ justifyContent: "space-between" }}>
-              <span className="comment-input-hint">
-                {showUnchangedFiles ? "Searching changed + unchanged files" : "Searching changed files only"}
-              </span>
-              <button className="btn btn-comment-save" onClick={() => { void runCrossFileSearch(); }}>
-                {crossFileSearchLoading ? "Searching..." : "Search"}
-              </button>
-            </div>
-            {crossFileSearchError && (
-              <div className="error-banner" style={{ marginTop: 10 }}>{crossFileSearchError}</div>
-            )}
-            <div style={{ marginTop: 12, maxHeight: 360, overflow: "auto" }}>
-              {crossFileSearchResults.length === 0 && !crossFileSearchLoading && crossFileSearchQuery.trim() && !crossFileSearchError && (
-                <div className="comment-input-hint">No matches</div>
-              )}
-              {crossFileSearchResults.map((result) => (
-                <div key={result.file_path} style={{ marginBottom: 10 }}>
-                  <div style={{ fontWeight: 600, fontSize: 12, opacity: 0.9 }}>{shortPath(result.file_path)}</div>
-                  {result.matches.slice(0, 8).map((m) => (
-                    <button
-                      key={`${result.file_path}:${m.line_number}:${m.line_text}`}
-                      className="comment-strip-item"
-                      style={{ width: "100%", textAlign: "left", marginTop: 4 }}
-                      onClick={() => {
-                        void openCrossFileSearchResult(result.file_path, m.line_number);
-                        setCrossFileSearchOpen(false);
-                      }}
-                    >
-                      <strong>{m.line_number}</strong>: {m.line_text}
-                    </button>
-                  ))}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
       )}
 
       {/* Comment input overlay */}
