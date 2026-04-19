@@ -94,6 +94,7 @@ type PersistedAppState = {
   reviewedGroupIds: string[];
   rightPanelTab: RightPanelTab;
   annotationSubTab: "info" | "graph" | "edges";
+  graphGranularity: "file" | "module_class_method";
   replayActive: boolean;
   replayStep: number;
   replayVisited: string[];
@@ -323,6 +324,7 @@ export default function App() {
 
   // Annotation sub-tab: "info" | "graph" | "edges"
   const [annotationSubTab, setAnnotationSubTab] = useState<"info" | "graph" | "edges">("info");
+  const [graphGranularity, setGraphGranularity] = useState<"file" | "module_class_method">("file");
   const [commentsCollapsed, setCommentsCollapsed] = useState(false);
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
   const pendingScrollToCommentRef = useRef<{ startLine: number; endLine?: number; commentId: string } | null>(null);
@@ -456,6 +458,7 @@ export default function App() {
     reviewedGroupIds: Array.from(reviewedGroupIds),
     rightPanelTab,
     annotationSubTab,
+    graphGranularity,
     replayActive,
     replayStep,
     replayVisited: Array.from(replayVisited),
@@ -484,6 +487,7 @@ export default function App() {
     reviewedGroupIds,
     rightPanelTab,
     annotationSubTab,
+    graphGranularity,
     replayActive,
     replayStep,
     replayVisited,
@@ -526,6 +530,7 @@ export default function App() {
       setReviewedGroupIds(new Set(snapshot.reviewedGroupIds ?? []));
       setRightPanelTab(snapshot.rightPanelTab ?? "annotations");
       setAnnotationSubTab(snapshot.annotationSubTab ?? "info");
+      setGraphGranularity(snapshot.graphGranularity ?? "file");
       setReplayActive(snapshot.replayActive ?? false);
       setReplayStep(snapshot.replayStep ?? 0);
       setReplayVisited(new Set(snapshot.replayVisited ?? []));
@@ -3296,6 +3301,23 @@ export default function App() {
 
       {annotationSubTab === "graph" && selectedGroup.edges.length > 0 && (
         <div className="annotation-section flow-graph-section flow-graph-full">
+          <div className="settings-row" style={{ marginBottom: 8, alignItems: "center" }}>
+            <label style={{ fontSize: 12, color: "var(--text-secondary)" }}>Granularity</label>
+            <select
+              className="settings-select"
+              value={graphGranularity}
+              onChange={(e) => setGraphGranularity(e.target.value as "file" | "module_class_method")}
+              style={{ maxWidth: 220, marginLeft: "auto" }}
+            >
+              <option value="file">file</option>
+              <option value="module_class_method">module/class/method (preview)</option>
+            </select>
+          </div>
+          {graphGranularity === "module_class_method" && (
+            <p className="settings-hint" style={{ marginBottom: 8 }}>
+              Preview mode: symbol-level graph is not available yet; rendering file-level graph as fallback.
+            </p>
+          )}
           <ErrorBoundary panelName="Flow Graph">
             <CrashTest panel="Flow Graph" />
             <FlowGraph
