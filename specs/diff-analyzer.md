@@ -1779,3 +1779,40 @@ All select/dropdown controls in these workflows MUST match the app theme:
 
 - Provider/model dropdowns in Info and settings-related flows MUST use the same themed styling as the rest of the UI.
 - New controls introduced by this section MUST not fall back to unthemed browser-default select styling.
+
+### 14.13 Left Pane File Metadata Presentation
+
+The left pane file rows MUST expose compact metadata optimized for scan speed:
+
+- Each file row MUST show git short status, abbreviated directory prefix, base filename, and extension tag.
+- Canonical visual layout example: `[M] s/m/rust/example-file [RS]`.
+- Directory prefix compaction SHOULD abbreviate leading directories for dense scanning while preserving enough path context to disambiguate sibling files.
+- Distinct semantic styling is required:
+  - status token (`M`, `A`, `D`, etc.) uses highlight foreground/background,
+  - directory prefix uses muted gray tone,
+  - base filename uses primary foreground,
+  - extension tag uses secondary highlight foreground/background.
+
+### 14.14 Project Navigation Quick-Pick (Recents + Favorites)
+
+Repository navigation MUST include quick project switching:
+
+- The top bar MUST provide a quick-pick interaction for recent repositories.
+- Users MUST be able to pin/unpin favorite repositories.
+- Favorites MUST be visibly distinct from non-favorites in quick-pick lists.
+- Recent/favorite repository lists MUST persist across sessions.
+
+### 14.15 Search Result Contrast
+
+Cross-file search result rows MUST remain legible under the active theme:
+
+- Search result text color MUST meet contrast expectations on result-row backgrounds.
+- Button-based or interactive result rows MUST not inherit default browser text colors that become illegible in dark themes.
+
+### 14.16 Hunk Navigation Reliability Across File Boundaries
+
+Hunk navigation MUST remain deterministic when moving between files:
+
+- Transitioning from the last hunk of one file to the first hunk of the next file MUST not exhibit race-driven target drift.
+- Pending cross-file hunk targets MUST be resolved only against the intended file's ready hunks.
+- If hunks are not immediately available after file switch, navigation MUST retry in a bounded, fail-safe manner rather than silently landing on incorrect hunks.

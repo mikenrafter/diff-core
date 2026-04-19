@@ -1561,6 +1561,49 @@ body {
   cursor: default;
 }
 
+.file-status-token {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.file-status-M {
+  color: #f9e2af;
+  background: rgba(249, 226, 175, 0.18);
+}
+
+.file-status-A {
+  color: #a6e3a1;
+  background: rgba(166, 227, 161, 0.18);
+}
+
+.file-status-D {
+  color: #f38ba8;
+  background: rgba(243, 139, 168, 0.18);
+}
+
+.file-dir-prefix {
+  color: var(--text-muted);
+}
+
+.file-base-name {
+  color: var(--text-primary);
+}
+
+.file-ext-token {
+  margin-left: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  color: #89dceb;
+  background: rgba(137, 220, 235, 0.16);
+  font-weight: 700;
+}
+
 .file-path {
   flex: 1;
   font-family: var(--font-mono);
@@ -4450,6 +4493,9 @@ body {
   border-radius: 4px;
   margin-bottom: 6px;
   background: var(--bg-surface);
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
   transition: background 0.15s;
 }
 
@@ -4464,6 +4510,10 @@ body {
 .comment-strip-item[role="button"]:hover {
   background: var(--bg-hover);
   border-left-color: var(--accent-hover);
+}
+
+.cross-search-result-line {
+  color: var(--text-primary) !important;
 }
 
 .comment-strip-item-active {

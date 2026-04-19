@@ -105,6 +105,8 @@ type PersistedAppState = {
   activityError: string | null;
   activityViewMode: ActivityViewMode;
   diffViewMode: DiffViewMode;
+  recentRepoPaths: string[];
+  favoriteRepoPaths: string[];
 };
 
 type CrossFileSearchMatch = {
@@ -202,6 +204,9 @@ export default function App() {
   const [crossFileSearchResults, setCrossFileSearchResults] = useState<CrossFileSearchResult[]>([]);
   const [crossFileSearchError, setCrossFileSearchError] = useState<string | null>(null);
   const crossFileSearchInputRef = useRef<HTMLInputElement>(null);
+  const [repoQuickPickOpen, setRepoQuickPickOpen] = useState(false);
+  const [recentRepoPaths, setRecentRepoPaths] = useState<string[]>([]);
+  const [favoriteRepoPaths, setFavoriteRepoPaths] = useState<string[]>([]);
 
   const comparisonMode = useMemo<CompareMode>(() => {
     const sourceIsUnstaged = headRef === COMPARE_TARGET_UNSTAGED;
@@ -315,7 +320,8 @@ export default function App() {
   const [commentsCollapsed, setCommentsCollapsed] = useState(false);
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
   const pendingScrollToCommentRef = useRef<{ startLine: number; endLine?: number; commentId: string } | null>(null);
-  const pendingReplayHunkScrollRef = useRef<{ filePath: string; targetHunkIndex: number } | null>(null);
+  const pendingReplayHunkScrollRef = useRef<{ filePath: string; targetHunkIndex: number; attempts: number } | null>(null);
+  const pendingReplayResolveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingSymbolScrollRef = useRef<{ symbol: string } | null>(null);
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const [editingCommentText, setEditingCommentText] = useState("");
@@ -422,6 +428,9 @@ export default function App() {
       if (pendingAppStatePersist.current) {
         clearTimeout(pendingAppStatePersist.current);
       }
+      if (pendingReplayResolveTimerRef.current) {
+        clearTimeout(pendingReplayResolveTimerRef.current);
+      }
     };
   }, []);
 
@@ -452,6 +461,8 @@ export default function App() {
     activityError,
     activityViewMode,
     diffViewMode,
+    recentRepoPaths,
+    favoriteRepoPaths,
   }), [
     repoPath,
     baseRef,
@@ -478,6 +489,8 @@ export default function App() {
     activityError,
     activityViewMode,
     diffViewMode,
+    recentRepoPaths,
+    favoriteRepoPaths,
   ]);
 
   const restoreLastSessionState = useCallback(async () => {
@@ -516,6 +529,8 @@ export default function App() {
       setActivityError(snapshot.activityError ?? null);
       setActivityViewMode(snapshot.activityViewMode ?? "stream");
       setDiffViewMode(snapshot.diffViewMode ?? "dynamic");
+      setRecentRepoPaths(snapshot.recentRepoPaths ?? []);
+      setFavoriteRepoPaths(snapshot.favoriteRepoPaths ?? []);
       setToast("Session restored");
     } catch {
       setToast("Failed to restore session");
@@ -699,6 +714,44 @@ export default function App() {
   useEffect(() => {
     window.localStorage.setItem("diffcore.diffViewMode", diffViewMode);
   }, [diffViewMode]);
+
+  useEffect(() => {
+    const recentRaw = window.localStorage.getItem("diffcore.recentRepos");
+    const favoriteRaw = window.localStorage.getItem("diffcore.favoriteRepos");
+    if (recentRaw) {
+      try {
+        const parsed = JSON.parse(recentRaw);
+        if (Array.isArray(parsed)) setRecentRepoPaths(parsed.filter((x) => typeof x === "string"));
+      } catch {
+        // ignore invalid saved recents
+      }
+    }
+    if (favoriteRaw) {
+      try {
+        const parsed = JSON.parse(favoriteRaw);
+        if (Array.isArray(parsed)) setFavoriteRepoPaths(parsed.filter((x) => typeof x === "string"));
+      } catch {
+        // ignore invalid saved favorites
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem("diffcore.recentRepos", JSON.stringify(recentRepoPaths));
+  }, [recentRepoPaths]);
+
+  useEffect(() => {
+    window.localStorage.setItem("diffcore.favoriteRepos", JSON.stringify(favoriteRepoPaths));
+  }, [favoriteRepoPaths]);
+
+  useEffect(() => {
+    const path = repoPath.trim();
+    if (!path) return;
+    setRecentRepoPaths((prev) => {
+      const deduped = [path, ...prev.filter((p) => p !== path)];
+      return deduped.slice(0, 12);
+    });
+  }, [repoPath]);
 
   useEffect(() => {
     if (!repoPath) {
@@ -964,6 +1017,7 @@ export default function App() {
         pendingReplayHunkScrollRef.current = {
           filePath: hunk.filePath,
           targetHunkIndex: clamped,
+          attempts: 0,
         };
         openFileInTab(hunk.filePath, group.id);
       } else {
@@ -1015,11 +1069,25 @@ export default function App() {
 
   useEffect(() => {
     if (!fileDiff || !pendingReplayHunkScrollRef.current) return;
-    const { filePath, targetHunkIndex } = pendingReplayHunkScrollRef.current;
+    const pending = pendingReplayHunkScrollRef.current;
+    const { filePath, targetHunkIndex } = pending;
     if (fileDiff.path !== filePath) return;
-    setTimeout(() => {
+
+    const tryResolve = () => {
       const visible = collectVisibleReplayHunks(filePath);
-      if (visible.length === 0) return;
+      if (visible.length === 0) {
+        if (!pendingReplayHunkScrollRef.current || pendingReplayHunkScrollRef.current.filePath !== filePath) {
+          return;
+        }
+        if (pending.attempts >= 8) {
+          pendingReplayHunkScrollRef.current = null;
+          return;
+        }
+        pending.attempts += 1;
+        pendingReplayResolveTimerRef.current = setTimeout(tryResolve, 60);
+        return;
+      }
+
       pendingReplayHunkScrollRef.current = null;
       setCurrentReplayHunks(visible);
       const fallback = Math.max(0, Math.min(targetHunkIndex, visible.length - 1));
@@ -1029,7 +1097,15 @@ export default function App() {
       if (hunk) {
         diffViewerRef.current?.scrollToLine(hunk.startLine, hunk.endLine);
       }
-    }, 100);
+    };
+
+    pendingReplayResolveTimerRef.current = setTimeout(tryResolve, 60);
+
+    return () => {
+      if (pendingReplayResolveTimerRef.current) {
+        clearTimeout(pendingReplayResolveTimerRef.current);
+      }
+    };
   }, [fileDiff, collectVisibleReplayHunks]);
 
   useEffect(() => {
@@ -1053,6 +1129,13 @@ export default function App() {
     const timer = setTimeout(() => {
       const visible = collectVisibleReplayHunks(fileDiff.path);
       setCurrentReplayHunks(visible);
+      const pending = pendingReplayHunkScrollRef.current;
+      if (pending && pending.filePath === fileDiff.path && visible.length > 0) {
+        const fallback = Math.max(0, Math.min(pending.targetHunkIndex, visible.length - 1));
+        const chosen = pending.targetHunkIndex < 0 ? visible.length - 1 : fallback;
+        setReplayHunkIndex(Math.max(0, chosen));
+        return;
+      }
       setReplayHunkIndex((prev) => {
         if (visible.length === 0) return 0;
         return Math.max(0, Math.min(prev, visible.length - 1));
@@ -2715,7 +2798,7 @@ export default function App() {
       const clamped = Math.max(0, Math.min(step, group.files.length - 1));
       setReplayStep(clamped);
       const filePath = group.files[clamped].path;
-      pendingReplayHunkScrollRef.current = { filePath, targetHunkIndex: 0 };
+      pendingReplayHunkScrollRef.current = { filePath, targetHunkIndex: 0, attempts: 0 };
       setReplayHunkIndex(0);
       setCurrentReplayHunks([]);
       setReplayVisited((prev) => {
@@ -2759,7 +2842,7 @@ export default function App() {
           });
           setCurrentReplayHunks([]);
           setReplayHunkIndex(0);
-          pendingReplayHunkScrollRef.current = { filePath: nextFilePath, targetHunkIndex: 0 };
+          pendingReplayHunkScrollRef.current = { filePath: nextFilePath, targetHunkIndex: 0, attempts: 0 };
           openFileInTab(nextFilePath, group.id);
         }
         return;
@@ -2780,7 +2863,7 @@ export default function App() {
         });
         setCurrentReplayHunks([]);
         setReplayHunkIndex(0); 
-        pendingReplayHunkScrollRef.current = { filePath: prevFilePath, targetHunkIndex: -1 };
+        pendingReplayHunkScrollRef.current = { filePath: prevFilePath, targetHunkIndex: -1, attempts: 0 };
         openFileInTab(prevFilePath, group.id);
       }
     },
@@ -3642,6 +3725,26 @@ export default function App() {
           >
             Browse
           </button>
+          <button
+            className="btn"
+            onClick={() => setRepoQuickPickOpen((v) => !v)}
+            title="Quick-pick recent and favorite repositories"
+          >
+            Recent
+          </button>
+          <button
+            className="btn"
+            onClick={() => {
+              const path = repoPath.trim();
+              if (!path) return;
+              setFavoriteRepoPaths((prev) => (
+                prev.includes(path) ? prev.filter((p) => p !== path) : [path, ...prev]
+              ));
+            }}
+            title="Pin or unpin current repository"
+          >
+            {favoriteRepoPaths.includes(repoPath.trim()) ? "Unpin" : "Pin"}
+          </button>
 
           {/* Branch comparison: head (source) → base (target) */}
           <div className="branch-comparison">
@@ -3795,6 +3898,50 @@ export default function App() {
               <span className="branch-worktree-badge" title="Linked worktree">worktree</span>
             )}
           </div>
+
+          {repoQuickPickOpen && (
+            <div className="branch-dropdown" style={{ maxHeight: 220, overflowY: "auto", minWidth: 320 }}>
+              {favoriteRepoPaths.length > 0 && (
+                <>
+                  <li className="branch-option disabled">Favorites</li>
+                  {favoriteRepoPaths.map((path) => (
+                    <li
+                      key={`fav-${path}`}
+                      className="branch-option"
+                      onClick={() => {
+                        setRepoPath(path);
+                        setRepoQuickPickOpen(false);
+                      }}
+                      title={path}
+                    >
+                      <span className="branch-option-name">★ {shortPath(path)}</span>
+                    </li>
+                  ))}
+                </>
+              )}
+              {recentRepoPaths.length > 0 && (
+                <>
+                  <li className="branch-option disabled">Recent</li>
+                  {recentRepoPaths.map((path) => (
+                    <li
+                      key={`recent-${path}`}
+                      className="branch-option"
+                      onClick={() => {
+                        setRepoPath(path);
+                        setRepoQuickPickOpen(false);
+                      }}
+                      title={path}
+                    >
+                      <span className="branch-option-name">{shortPath(path)}</span>
+                    </li>
+                  ))}
+                </>
+              )}
+              {favoriteRepoPaths.length === 0 && recentRepoPaths.length === 0 && (
+                <li className="branch-option disabled">No recent repositories</li>
+              )}
+            </div>
+          )}
 
           <button
             className="btn btn-primary"
@@ -4620,6 +4767,8 @@ export default function App() {
                             ? getFileMovedIndicator(file.path, refinementResponse)
                             : null;
                           const fileCommentCount = commentsForFile(file.path).length;
+                          const compact = compactFileLabel(file.path);
+                          const status = deriveGitShortStatus(file.changes.additions, file.changes.deletions);
 
                           return (
                             <li
@@ -4634,8 +4783,13 @@ export default function App() {
                               {replayActive && replayVisited.has(file.path) && (
                                 <span className="replay-visited-check" title="Visited">&#10003;</span>
                               )}
+                              <span className={`file-status-token file-status-${status}`}>[{status}]</span>
                               <span className="file-role" title={file.role}>{roleInitial(file.role)}</span>
-                              <span className="file-path" title={file.path}>{shortPath(file.path)}</span>
+                              <span className="file-path" title={file.path}>
+                                {compact.dirPrefix && <span className="file-dir-prefix">{compact.dirPrefix}</span>}
+                                <span className="file-base-name">{compact.baseName}</span>
+                                {compact.extension && <span className="file-ext-token">[{compact.extension}]</span>}
+                              </span>
                               <span className="file-changes">
                                 +{file.changes.additions} -{file.changes.deletions}
                               </span>
@@ -4728,7 +4882,9 @@ export default function App() {
                               </div>
                               {isSubExpanded && (
                                 <ul className="file-list">
-                                  {sg.files.map((f) => (
+                                  {sg.files.map((f) => {
+                                    const compact = compactFileLabel(f);
+                                    return (
                                     <li
                                       key={f}
                                       className={`file-item ${selectedFile === f ? "selected" : ""}`}
@@ -4737,9 +4893,15 @@ export default function App() {
                                         openFileInTab(f, "infra");
                                       }}
                                     >
-                                      <span className="file-path">{shortPath(f)}</span>
+                                      <span className="file-status-token file-status-M">[M]</span>
+                                      <span className="file-path">
+                                        {compact.dirPrefix && <span className="file-dir-prefix">{compact.dirPrefix}</span>}
+                                        <span className="file-base-name">{compact.baseName}</span>
+                                        {compact.extension && <span className="file-ext-token">[{compact.extension}]</span>}
+                                      </span>
                                     </li>
-                                  ))}
+                                    );
+                                  })}
                                 </ul>
                               )}
                             </div>
@@ -4750,7 +4912,9 @@ export default function App() {
                           {(infraShowAll
                             ? analysis.infrastructure_group.files
                             : analysis.infrastructure_group.files.slice(0, 50)
-                          ).map((f) => (
+                          ).map((f) => {
+                            const compact = compactFileLabel(f);
+                            return (
                             <li
                               key={f}
                               className={`file-item ${selectedFile === f ? "selected" : ""}`}
@@ -4759,9 +4923,15 @@ export default function App() {
                                 openFileInTab(f, "infra");
                               }}
                             >
-                              <span className="file-path">{shortPath(f)}</span>
+                              <span className="file-status-token file-status-M">[M]</span>
+                              <span className="file-path">
+                                {compact.dirPrefix && <span className="file-dir-prefix">{compact.dirPrefix}</span>}
+                                <span className="file-base-name">{compact.baseName}</span>
+                                {compact.extension && <span className="file-ext-token">[{compact.extension}]</span>}
+                              </span>
                             </li>
-                          ))}
+                            );
+                          })}
                           {!infraShowAll && analysis.infrastructure_group.files.length > 50 && (
                             <li
                               className="file-item"
@@ -6011,6 +6181,28 @@ function shortPath(path: string): string {
   const parts = path.split("/");
   if (parts.length <= 4) return path;
   return parts.slice(-4).join("/");
+}
+
+function deriveGitShortStatus(additions: number, deletions: number): "A" | "D" | "M" {
+  if (additions > 0 && deletions === 0) return "A";
+  if (deletions > 0 && additions === 0) return "D";
+  return "M";
+}
+
+function compactFileLabel(path: string): { dirPrefix: string; baseName: string; extension: string } {
+  const normalized = path.replace(/\\/g, "/");
+  const parts = normalized.split("/").filter(Boolean);
+  const filename = parts.pop() ?? normalized;
+  const dirs = parts;
+
+  const dotIndex = filename.lastIndexOf(".");
+  const baseName = dotIndex > 0 ? filename.slice(0, dotIndex) : filename;
+  const extension = dotIndex > 0 ? filename.slice(dotIndex + 1).toUpperCase() : "";
+
+  const abbreviatedDirs = dirs.map((dir, i) => (i < dirs.length - 1 ? dir.charAt(0) : dir));
+  const dirPrefix = abbreviatedDirs.length > 0 ? `${abbreviatedDirs.join("/")}/` : "";
+
+  return { dirPrefix, baseName, extension };
 }
 
 /** Map a FileRole to a single-letter abbreviation for compact display. */
