@@ -84,6 +84,7 @@ type PersistedAppState = {
   baseRef: string;
   headRef: string | null;
   includeUncommitted: boolean;
+  showUnchangedFiles: boolean;
   analysis: AnalysisOutput | null;
   selectedGroupId: string | null;
   selectedFile: string | null;
@@ -104,6 +105,16 @@ type PersistedAppState = {
   activityError: string | null;
   activityViewMode: ActivityViewMode;
   diffViewMode: DiffViewMode;
+};
+
+type CrossFileSearchMatch = {
+  line_number: number;
+  line_text: string;
+};
+
+type CrossFileSearchResult = {
+  file_path: string;
+  matches: CrossFileSearchMatch[];
 };
 
 const SUBSCRIPTION_BACKENDS: Array<{
@@ -184,6 +195,13 @@ export default function App() {
 
   // Diff behavior
   const [includeUncommitted, setIncludeUncommitted] = useState(true);
+  const [showUnchangedFiles, setShowUnchangedFiles] = useState(false);
+  const [crossFileSearchOpen, setCrossFileSearchOpen] = useState(false);
+  const [crossFileSearchQuery, setCrossFileSearchQuery] = useState("");
+  const [crossFileSearchLoading, setCrossFileSearchLoading] = useState(false);
+  const [crossFileSearchResults, setCrossFileSearchResults] = useState<CrossFileSearchResult[]>([]);
+  const [crossFileSearchError, setCrossFileSearchError] = useState<string | null>(null);
+  const crossFileSearchInputRef = useRef<HTMLInputElement>(null);
 
   const comparisonMode = useMemo<CompareMode>(() => {
     const sourceIsUnstaged = headRef === COMPARE_TARGET_UNSTAGED;
@@ -412,6 +430,7 @@ export default function App() {
     baseRef,
     headRef,
     includeUncommitted,
+    showUnchangedFiles,
     analysis,
     selectedGroupId: selectedGroup?.id ?? null,
     selectedFile,
@@ -437,6 +456,7 @@ export default function App() {
     baseRef,
     headRef,
     includeUncommitted,
+    showUnchangedFiles,
     analysis,
     selectedGroup,
     selectedFile,
@@ -472,6 +492,7 @@ export default function App() {
       setBaseRef(snapshot.baseRef || "main");
       setHeadRef(snapshot.headRef ?? null);
       setIncludeUncommitted(snapshot.includeUncommitted ?? false);
+      setShowUnchangedFiles(snapshot.showUnchangedFiles ?? false);
       setAnalysis(snapshot.analysis ?? null);
       setOverview(snapshot.overview ?? null);
       setDeepAnalyses(snapshot.deepAnalyses ?? {});
@@ -2526,6 +2547,107 @@ export default function App() {
     return () => document.removeEventListener("mousedown", handleClick);
   }, [openWithDropdown]);
 
+  const changedFilePathSet = useMemo(() => {
+    const set = new Set<string>();
+    if (!analysis) return set;
+    for (const group of analysis.groups) {
+      for (const file of group.files) {
+        set.add(file.path);
+      }
+    }
+    for (const file of analysis.infrastructure_group?.files ?? []) {
+      set.add(file);
+    }
+    return set;
+  }, [analysis]);
+
+  const openCrossFileSearchResult = useCallback(async (filePath: string, lineNumber: number) => {
+    const group = selectedGroupRef.current;
+    const changed = changedFilePathSet.has(filePath);
+
+    if (changed && group) {
+      openFileInTab(filePath, group.id);
+      setTimeout(() => {
+        diffViewerRef.current?.scrollToLine(lineNumber, lineNumber);
+      }, 120);
+      return;
+    }
+
+    if (IS_TAURI && repoPath) {
+      try {
+        const content = await tauriInvoke<FileDiffContent>("get_workspace_file_content", {
+          repoPath,
+          filePath,
+        });
+        setSelectedFile(filePath);
+        setFileDiff(content);
+        setOpenTabs((prev) => {
+          if (prev.some((t) => t.path === filePath)) return prev;
+          return [...prev, { path: filePath, groupId: group?.id ?? "__workspace_search__" }];
+        });
+        setTimeout(() => {
+          diffViewerRef.current?.scrollToLine(lineNumber, lineNumber);
+        }, 120);
+        return;
+      } catch (e) {
+        showToast(`Unable to open ${filePath}: ${String(e)}`);
+      }
+    }
+  }, [changedFilePathSet, openFileInTab, repoPath, showToast]);
+
+  const runCrossFileSearch = useCallback(async () => {
+    const query = crossFileSearchQuery.trim();
+    if (!query) {
+      setCrossFileSearchResults([]);
+      setCrossFileSearchError(null);
+      return;
+    }
+
+    setCrossFileSearchLoading(true);
+    setCrossFileSearchError(null);
+    try {
+      if (IS_TAURI && repoPath) {
+        const results = await tauriInvoke<CrossFileSearchResult[]>("cross_file_search", {
+          repoPath,
+          query,
+          showUnchangedFiles,
+          maxResults: 200,
+        });
+        setCrossFileSearchResults(results);
+      } else {
+        // Demo fallback: search known mock diff files.
+        const needle = query.toLowerCase();
+        const results: CrossFileSearchResult[] = Object.entries(MOCK_DIFFS)
+          .map(([path, diff]) => {
+            const lines = (diff?.new_content || "").split("\n");
+            const matches: CrossFileSearchMatch[] = [];
+            lines.forEach((line, idx) => {
+              if (line.toLowerCase().includes(needle)) {
+                matches.push({ line_number: idx + 1, line_text: line });
+              }
+            });
+            return { file_path: path, matches };
+          })
+          .filter((r) => r.matches.length > 0);
+        setCrossFileSearchResults(results);
+      }
+    } catch (e) {
+      setCrossFileSearchResults([]);
+      setCrossFileSearchError(String(e));
+    } finally {
+      setCrossFileSearchLoading(false);
+    }
+  }, [crossFileSearchQuery, repoPath, showUnchangedFiles]);
+
+  useEffect(() => {
+    if (!crossFileSearchOpen) return;
+    const timer = setTimeout(() => {
+      crossFileSearchInputRef.current?.focus();
+      crossFileSearchInputRef.current?.select();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [crossFileSearchOpen]);
+
   /** Handle right-click context menu on a file item. */
   const handleFileContextMenu = useCallback(
     (e: React.MouseEvent, filePath: string) => {
@@ -2629,7 +2751,7 @@ export default function App() {
           return next;
         });
         setCurrentReplayHunks([]);
-        setReplayHunkIndex(0);
+        setReplayHunkIndex(0); 
         pendingReplayHunkScrollRef.current = { filePath: prevFilePath, targetHunkIndex: -1 };
         openFileInTab(prevFilePath, group.id);
       }
@@ -2637,15 +2759,17 @@ export default function App() {
     [replayHunkIndex, replayHunks, replayStep, jumpToReplayHunk, openFileInTab],
   );
 
-  // Keyboard navigation: j/k = next/prev file, J/K = next/prev group, r = replay
+  // Keyboard navigation: j/k = next/prev file, J/K = next/prev group, r = replay, l/h = hunk next/prev
+  // Vim keys and arrow keys are supported
   // Registered on capture phase so shortcuts work even when Monaco editor has focus.
+  // Let Monaco pass through if edit mode is enabled.
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
-      // Skip if user is typing in an input field — but not Monaco's internal textarea
+      // Skip if user is typing in an input field — but not Monaco's internal textarea if immutable
       const target = e.target as HTMLElement;
-      const isInMonaco = !!target.closest(".monaco-editor");
+      const isInImmutableMonaco = !!target.closest(".monaco-editor") && !editsEnabled;
       if (
-        !isInMonaco &&
+        !isInImmutableMonaco &&
         (target.tagName === "INPUT" ||
           target.tagName === "TEXTAREA" ||
           target.tagName === "SELECT")
@@ -2662,10 +2786,24 @@ export default function App() {
         return;
       }
 
+      if (e.key === "F") {
+        e.preventDefault();
+        e.stopPropagation();
+        setCrossFileSearchOpen(true);
+        return;
+      }
+
+      if (e.key === "f") {
+        e.preventDefault();
+        e.stopPropagation();
+        diffViewerRef.current?.openFindWidget();
+        return;
+      }
+
       // When Monaco has focus, only intercept known app shortcut keys.
       // Let other keys (arrows, Page Up/Down, etc.) pass through to Monaco for scrolling.
-      if (isInMonaco) {
-        const appKeys = new Set(["j", "k", "J", "K", "r", "x", "y", "Y", "c", "C"]);
+      if (isInImmutableMonaco) {
+        const appKeys = new Set(["j", "k", "J", "K", "r", "x", "y", "Y", "c", "C", "f", "F"]);
         if (!appKeys.has(e.key)) {
           return;
         }
@@ -2737,6 +2875,30 @@ export default function App() {
       if (e.key === "Y" && group) {
         consume();
         copyFlowPaths(group);
+        return;
+      }
+
+      // h navigates to the previous hunk
+      if (e.key === "h") {
+        consume();
+        if (replayActiveRef.current) {
+          navigateReplayHunk(-1);
+        } else {
+          // TODO
+          // diffViewerRef.current?.scrollToPreviousHunk();
+        }
+        return;
+      }
+
+      // l navigates to the next hunk
+      if (e.key === "l") {
+        consume();
+        if (replayActiveRef.current) {
+          navigateReplayHunk(1);
+        } else {
+          // TODO
+          // diffViewerRef.current?.scrollToNextHunk();
+        }
         return;
       }
 
@@ -5127,9 +5289,83 @@ export default function App() {
               <span><kbd>c</kbd> comment</span>
               <span><kbd>C</kbd> copy comments</span>
               <span><kbd>r</kbd> replay flow</span>
+              <span><kbd>f</kbd> search</span>
+              <span><kbd>F</kbd> cross-file search</span>
             </>
           )}
         </footer>
+      )}
+
+      {/* Cross-file search overlay */}
+      {crossFileSearchOpen && (
+        <div className="comment-overlay" onClick={() => setCrossFileSearchOpen(false)}>
+          <div className="comment-input-panel" onClick={(e) => e.stopPropagation()}>
+            <div className="comment-input-header">
+              <span className="comment-input-scope">Cross-file search</span>
+              <button className="btn-close" onClick={() => setCrossFileSearchOpen(false)}>&times;</button>
+            </div>
+            <input
+              ref={crossFileSearchInputRef}
+              className="input"
+              placeholder="Search across files..."
+              value={crossFileSearchQuery}
+              onChange={(e) => setCrossFileSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void runCrossFileSearch();
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  setCrossFileSearchOpen(false);
+                }
+              }}
+              style={{ width: "100%", marginBottom: 10 }}
+            />
+            <label className="settings-toggle" style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+              <input
+                type="checkbox"
+                checked={showUnchangedFiles}
+                onChange={(e) => setShowUnchangedFiles(e.target.checked)}
+              />
+              <span>show unchanged files</span>
+            </label>
+            <div className="comment-input-footer" style={{ justifyContent: "space-between" }}>
+              <span className="comment-input-hint">
+                {showUnchangedFiles ? "Searching changed + unchanged files" : "Searching changed files only"}
+              </span>
+              <button className="btn btn-comment-save" onClick={() => { void runCrossFileSearch(); }}>
+                {crossFileSearchLoading ? "Searching..." : "Search"}
+              </button>
+            </div>
+            {crossFileSearchError && (
+              <div className="error-banner" style={{ marginTop: 10 }}>{crossFileSearchError}</div>
+            )}
+            <div style={{ marginTop: 12, maxHeight: 360, overflow: "auto" }}>
+              {crossFileSearchResults.length === 0 && !crossFileSearchLoading && crossFileSearchQuery.trim() && !crossFileSearchError && (
+                <div className="comment-input-hint">No matches</div>
+              )}
+              {crossFileSearchResults.map((result) => (
+                <div key={result.file_path} style={{ marginBottom: 10 }}>
+                  <div style={{ fontWeight: 600, fontSize: 12, opacity: 0.9 }}>{shortPath(result.file_path)}</div>
+                  {result.matches.slice(0, 8).map((m) => (
+                    <button
+                      key={`${result.file_path}:${m.line_number}:${m.line_text}`}
+                      className="comment-strip-item"
+                      style={{ width: "100%", textAlign: "left", marginTop: 4 }}
+                      onClick={() => {
+                        void openCrossFileSearchResult(result.file_path, m.line_number);
+                        setCrossFileSearchOpen(false);
+                      }}
+                    >
+                      <strong>{m.line_number}</strong>: {m.line_text}
+                    </button>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Comment input overlay */}

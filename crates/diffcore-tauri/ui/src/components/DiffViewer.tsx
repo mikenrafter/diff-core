@@ -15,6 +15,8 @@ export interface DiffViewerHandle {
   scrollToLine: (startLine: number, endLine?: number) => void;
   /** Return current Monaco diff hunks from the modified side. */
   getDiffHunks: () => EditedHunk[];
+  /** Open Monaco find widget for in-file search. */
+  openFindWidget: () => void;
 }
 
 interface DiffViewerProps {
@@ -283,6 +285,12 @@ const DiffViewer = forwardRef<DiffViewerHandle, DiffViewerProps>(function DiffVi
           selectedCode,
         };
       });
+    },
+    openFindWidget() {
+      const editor = editorRef.current?.getModifiedEditor?.();
+      if (!editor) return;
+      const findAction = editor.getAction?.("actions.find");
+      void findAction?.run?.();
     },
   }), [buildEditedHunks]);
 

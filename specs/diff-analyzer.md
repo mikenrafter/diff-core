@@ -1672,12 +1672,13 @@ The desktop app currently provides the following baseline behavior:
 
 The desktop app MUST provide an app-level cross-file search workflow with the following requirements:
 
-- `Ctrl+Shift+F` opens the app search UI (regardless of panel focus, including Monaco).
+- `F` opens the app cross-file search UI (regardless of panel focus, including Monaco), subject to the keyboard focus policy in Section 14.7.
+- `f` triggers in-file Monaco find/search for the currently visible editor content.
 - Search operates across the active analysis corpus and returns file + line matches with jump-to-location behavior.
 - A checkbox labeled `show unchanged files` MUST exist, defaulting to `false`.
 - When `show unchanged files` is `false`, search results and file-scoped navigation surfaces MUST prioritize changed files only.
 - When `show unchanged files` is `true`, search and relevant navigation surfaces MUST include unchanged files as first-class results.
-- The checkbox state MUST influence both the `Ctrl+Shift+F` workflow and any other file-visibility/filtering flows that share the same corpus selection semantics.
+- The checkbox state MUST influence the `F` cross-file search workflow and any other file-visibility/filtering flows that share the same corpus selection semantics.
 
 ### 14.3 Repository Selection and Startup Contract
 

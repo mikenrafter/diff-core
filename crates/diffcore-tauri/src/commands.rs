@@ -2,11 +2,13 @@
 //!
 //! Each `#[tauri::command]` function is callable from the frontend via `invoke()`.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use log::warn;
 use tauri::Emitter;
+use walkdir::WalkDir;
 
 use crate::activity_stream::{self, ActivityEntry, JobHandle};
 use diffcore_core::cache;
@@ -1543,6 +1545,170 @@ pub fn get_repo_info(repo_path: String) -> Result<RepoInfo, CommandError> {
         worktrees,
         status,
         is_worktree,
+    })
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CrossFileSearchMatch {
+    pub line_number: u32,
+    pub line_text: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CrossFileSearchResult {
+    pub file_path: String,
+    pub matches: Vec<CrossFileSearchMatch>,
+}
+
+fn changed_files_from_state(state: &AppState) -> HashSet<String> {
+    let mut files = HashSet::new();
+
+    if let Ok(guard) = state.last_analysis.lock() {
+        if let Some(analysis) = guard.as_ref() {
+            for group in &analysis.groups {
+                for file in &group.files {
+                    files.insert(file.path.clone());
+                }
+            }
+            if let Some(infra) = &analysis.infrastructure_group {
+                for file in &infra.files {
+                    files.insert(file.clone());
+                }
+            }
+        }
+    }
+
+    if files.is_empty() {
+        if let Ok(guard) = state.last_diff.lock() {
+            if let Some(cached) = guard.as_ref() {
+                for file in &cached.diff_result.files {
+                    files.insert(file.path().to_string());
+                }
+            }
+        }
+    }
+
+    files
+}
+
+fn workspace_files(workdir: &std::path::Path) -> Vec<String> {
+    WalkDir::new(workdir)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+        .filter_map(|entry| {
+            let rel = entry.path().strip_prefix(workdir).ok()?;
+            let rel_str = rel.to_string_lossy().replace('\\', "/");
+            if rel_str.starts_with(".git/") {
+                return None;
+            }
+            Some(rel_str)
+        })
+        .collect()
+}
+
+#[tauri::command]
+pub fn cross_file_search(
+    repo_path: String,
+    query: String,
+    show_unchanged_files: bool,
+    max_results: Option<usize>,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<CrossFileSearchResult>, CommandError> {
+    let query = query.trim();
+    if query.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let repo = open_repo(&repo_path)?;
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| CommandError::Git("Bare repositories are not supported".to_string()))?
+        .to_path_buf();
+
+    let mut candidates: Vec<String> = if show_unchanged_files {
+        workspace_files(&workdir)
+    } else {
+        changed_files_from_state(&state).into_iter().collect()
+    };
+    candidates.sort();
+
+    let needle = query.to_lowercase();
+    let max_file_results = max_results.unwrap_or(200).max(1);
+    let mut results = Vec::new();
+    let mut total_matches = 0usize;
+
+    for relative_path in candidates {
+        if results.len() >= max_file_results || total_matches >= 1000 {
+            break;
+        }
+
+        let absolute_path = workdir.join(&relative_path);
+        let metadata = match std::fs::metadata(&absolute_path) {
+            Ok(meta) => meta,
+            Err(_) => continue,
+        };
+        if metadata.len() > 2 * 1024 * 1024 {
+            continue;
+        }
+
+        let content = match std::fs::read_to_string(&absolute_path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        let mut file_matches = Vec::new();
+        for (idx, line) in content.lines().enumerate() {
+            if total_matches >= 1000 {
+                break;
+            }
+            if line.to_lowercase().contains(&needle) {
+                file_matches.push(CrossFileSearchMatch {
+                    line_number: (idx + 1) as u32,
+                    line_text: line.to_string(),
+                });
+                total_matches += 1;
+                if file_matches.len() >= 50 {
+                    break;
+                }
+            }
+        }
+
+        if !file_matches.is_empty() {
+            results.push(CrossFileSearchResult {
+                file_path: relative_path,
+                matches: file_matches,
+            });
+        }
+    }
+
+    Ok(results)
+}
+
+#[tauri::command]
+pub fn get_workspace_file_content(
+    repo_path: String,
+    file_path: String,
+) -> Result<FileDiffContent, CommandError> {
+    let repo = open_repo(&repo_path)?;
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| CommandError::Git("Bare repositories are not supported".to_string()))?
+        .to_path_buf();
+
+    let absolute = workdir.join(&file_path);
+    if !absolute.exists() || !absolute.is_file() {
+        return Err(CommandError::Io(format!("File not found: {}", file_path)));
+    }
+
+    let content = std::fs::read_to_string(&absolute)
+        .map_err(|e| CommandError::Io(format!("Failed to read file '{}': {}", file_path, e)))?;
+
+    Ok(FileDiffContent {
+        path: file_path.clone(),
+        old_content: content.clone(),
+        new_content: content,
+        language: detect_language(&file_path),
     })
 }
 
