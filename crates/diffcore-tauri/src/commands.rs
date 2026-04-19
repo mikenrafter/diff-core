@@ -1562,6 +1562,43 @@ pub fn get_launch_directory() -> Option<String> {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FileShortStatus {
+    pub path: String,
+    pub status: String,
+}
+
+#[tauri::command]
+pub fn get_last_diff_file_statuses(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<FileShortStatus>, CommandError> {
+    let guard = state
+        .last_diff
+        .lock()
+        .map_err(|e| CommandError::Analysis(format!("Lock poisoned: {}", e)))?;
+
+    let Some(cached) = guard.as_ref() else {
+        return Ok(vec![]);
+    };
+
+    let mut out = Vec::with_capacity(cached.diff_result.files.len());
+    for file in &cached.diff_result.files {
+        let status = match file.status {
+            diffcore_core::git::FileStatus::Added => "A",
+            diffcore_core::git::FileStatus::Modified => "M",
+            diffcore_core::git::FileStatus::Deleted => "D",
+            diffcore_core::git::FileStatus::Renamed => "R",
+            diffcore_core::git::FileStatus::Copied => "C",
+        };
+        out.push(FileShortStatus {
+            path: file.path().to_string(),
+            status: status.to_string(),
+        });
+    }
+
+    Ok(out)
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CrossFileSearchMatch {
     pub line_number: u32,
     pub line_text: String,

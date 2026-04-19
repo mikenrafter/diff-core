@@ -65,6 +65,7 @@ fn main() {
             commands::get_branch_status,
             commands::get_repo_info,
             commands::get_launch_directory,
+            commands::get_last_diff_file_statuses,
             commands::cross_file_search,
             commands::get_workspace_file_content,
             commands::check_api_key,

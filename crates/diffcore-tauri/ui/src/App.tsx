@@ -119,6 +119,11 @@ type CrossFileSearchResult = {
   matches: CrossFileSearchMatch[];
 };
 
+type FileShortStatus = {
+  path: string;
+  status: "A" | "M" | "D" | "R" | "C" | string;
+};
+
 const SUBSCRIPTION_BACKENDS: Array<{
   provider: SubscriptionProvider;
   title: string;
@@ -204,6 +209,7 @@ export default function App() {
   const [crossFileSearchResults, setCrossFileSearchResults] = useState<CrossFileSearchResult[]>([]);
   const [crossFileSearchError, setCrossFileSearchError] = useState<string | null>(null);
   const crossFileSearchInputRef = useRef<HTMLInputElement>(null);
+  const [fileStatusByPath, setFileStatusByPath] = useState<Record<string, string>>({});
   const [repoQuickPickOpen, setRepoQuickPickOpen] = useState(false);
   const [recentRepoPaths, setRecentRepoPaths] = useState<string[]>([]);
   const [favoriteRepoPaths, setFavoriteRepoPaths] = useState<string[]>([]);
@@ -1345,6 +1351,7 @@ export default function App() {
     setCommentText("");
     // Reset tabs
     setOpenTabs([]);
+    setFileStatusByPath({});
     try {
       let result: AnalysisOutput;
       if (IS_TAURI) {
@@ -1382,6 +1389,15 @@ export default function App() {
             applyRefinementResult(cached, { fromCache: true });
           }
         }).catch(() => {});
+        tauriInvoke<FileShortStatus[]>("get_last_diff_file_statuses")
+          .then((statuses) => {
+            const map: Record<string, string> = {};
+            for (const item of statuses) {
+              map[item.path] = item.status;
+            }
+            setFileStatusByPath(map);
+          })
+          .catch(() => {});
       }
     } catch (e) {
       setError(String(e));
@@ -4696,7 +4712,7 @@ export default function App() {
                               void openCrossFileSearchResult(result.file_path, m.line_number);
                             }}
                           >
-                            <strong>{m.line_number}</strong>: {m.line_text}
+                            <strong>{m.line_number}</strong>: {truncateSearchResultLine(m.line_text)}
                           </button>
                         ))}
                       </div>
@@ -4768,7 +4784,7 @@ export default function App() {
                             : null;
                           const fileCommentCount = commentsForFile(file.path).length;
                           const compact = compactFileLabel(file.path);
-                          const status = deriveGitShortStatus(file.changes.additions, file.changes.deletions);
+                          const status = resolveFileShortStatus(file.path, fileStatusByPath, file.changes.additions, file.changes.deletions);
 
                           return (
                             <li
@@ -4893,7 +4909,7 @@ export default function App() {
                                         openFileInTab(f, "infra");
                                       }}
                                     >
-                                      <span className="file-status-token file-status-M">[M]</span>
+                                      <span className={`file-status-token file-status-${resolveFileShortStatus(f, fileStatusByPath, 1, 1)}`}>{resolveFileShortStatus(f, fileStatusByPath, 1, 1)}</span>
                                       <span className="file-path">
                                         {compact.dirPrefix && <span className="file-dir-prefix">{compact.dirPrefix}</span>}
                                         <span className="file-base-name">{compact.baseName}</span>
@@ -4923,11 +4939,11 @@ export default function App() {
                                 openFileInTab(f, "infra");
                               }}
                             >
-                              <span className="file-status-token file-status-M">[M]</span>
+                              <span className={`file-status-token file-status-${resolveFileShortStatus(f, fileStatusByPath, 1, 1)}`}>{resolveFileShortStatus(f, fileStatusByPath, 1, 1)}</span>
                               <span className="file-path">
                                 {compact.dirPrefix && <span className="file-dir-prefix">{compact.dirPrefix}</span>}
                                 <span className="file-base-name">{compact.baseName}</span>
-                                {compact.extension && <span className="file-ext-token">[{compact.extension}]</span>}
+                                {compact.extension && <span className="file-ext-token">{compact.extension}</span>}
                               </span>
                             </li>
                             );
@@ -6189,6 +6205,19 @@ function deriveGitShortStatus(additions: number, deletions: number): "A" | "D" |
   return "M";
 }
 
+function resolveFileShortStatus(
+  path: string,
+  statusMap: Record<string, string>,
+  additions: number,
+  deletions: number,
+): "A" | "M" | "D" | "R" | "C" {
+  const fromMap = statusMap[path];
+  if (fromMap === "A" || fromMap === "M" || fromMap === "D" || fromMap === "R" || fromMap === "C") {
+    return fromMap;
+  }
+  return deriveGitShortStatus(additions, deletions);
+}
+
 function compactFileLabel(path: string): { dirPrefix: string; baseName: string; extension: string } {
   const normalized = path.replace(/\\/g, "/");
   const parts = normalized.split("/").filter(Boolean);
@@ -6199,10 +6228,32 @@ function compactFileLabel(path: string): { dirPrefix: string; baseName: string; 
   const baseName = dotIndex > 0 ? filename.slice(0, dotIndex) : filename;
   const extension = dotIndex > 0 ? filename.slice(dotIndex + 1).toUpperCase() : "";
 
-  const abbreviatedDirs = dirs.map((dir, i) => (i < dirs.length - 1 ? dir.charAt(0) : dir));
+  const abbreviatedDirs = dirs.map((dir, i) => (i === 0 ? abbreviateLeadingSegment(dir) : dir));
   const dirPrefix = abbreviatedDirs.length > 0 ? `${abbreviatedDirs.join("/")}/` : "";
 
   return { dirPrefix, baseName, extension };
+}
+
+function abbreviateLeadingSegment(segment: string): string {
+  if (segment.includes("-")) {
+    return segment
+      .split("-")
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toLowerCase())
+      .join("-");
+  }
+
+  const uppercase = segment.slice(1).match(/[A-Z]/g) ?? [];
+  if (uppercase.length > 0) {
+    return `~${segment.charAt(0)}${uppercase.join("")}`;
+  }
+
+  return segment;
+}
+
+function truncateSearchResultLine(line: string): string {
+  if (line.length <= 200) return line;
+  return `${line.slice(0, 200)}...`;
 }
 
 /** Map a FileRole to a single-letter abbreviation for compact display. */

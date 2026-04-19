@@ -1551,7 +1551,7 @@ body {
   justify-content: center;
   width: 18px;
   height: 18px;
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
   color: var(--text-secondary);
@@ -1583,6 +1583,16 @@ body {
 .file-status-D {
   color: #f38ba8;
   background: rgba(243, 139, 168, 0.18);
+}
+
+.file-status-R {
+  color: #cba6f7;
+  background: rgba(203, 166, 247, 0.18);
+}
+
+.file-status-C {
+  color: #89dceb;
+  background: rgba(137, 220, 235, 0.18);
 }
 
 .file-dir-prefix {
