@@ -665,9 +665,9 @@ export default function App() {
         setRepoPath(selected);
       }
     } catch {
-      showToast("Failed to open folder picker");
+      setToast("Failed to open folder picker");
     }
-  }, [showToast]);
+  }, []);
 
   useEffect(() => {
     if (!IS_TAURI || launchDirectoryCheckedRef.current || repoPath) return;
