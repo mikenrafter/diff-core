@@ -179,6 +179,9 @@ export default function App() {
   const activityLogRef = useRef<HTMLDivElement | null>(null);
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("annotations");
   const [sourceFocusRequest, setSourceFocusRequest] = useState<SourceFocusRequest | null>(null);
+  const [regenDialogOpen, setRegenDialogOpen] = useState(false);
+  const [regenFeedbackText, setRegenFeedbackText] = useState("");
+  const [regenIncludePreviousOutput, setRegenIncludePreviousOutput] = useState(true);
 
   // Repo and git state
   const [repoPath, setRepoPath] = useState(IS_TAURI ? "" : "/demo/repo");
@@ -1441,15 +1444,41 @@ export default function App() {
   const annotationsEnabled = (llmSettings?.annotations_enabled ?? false) || !!recommendedSubscriptionProvider;
 
   /** Run LLM Pass 1: overview annotation for all groups. */
-  const runAnnotateOverview = useCallback(async () => {
+  const runAnnotateOverview = useCallback(async (opts?: { feedback?: string; includePreviousOutput?: boolean }) => {
     setAnnotating(true);
     setError(null);
     try {
+      const feedback = opts?.feedback?.trim() ?? "";
+      const includePreviousOutput = opts?.includePreviousOutput ?? false;
+      const previousSections: string[] = [];
+      if (includePreviousOutput && overview) {
+        previousSections.push(`Previous overview summary:\n${overview.overall_summary}`);
+      }
+      if (includePreviousOutput && selectedGroup && deepAnalyses[selectedGroup.id]) {
+        previousSections.push(
+          `Previous group deep analysis (${selectedGroup.name}):\n${deepAnalyses[selectedGroup.id].flow_narrative}`,
+        );
+      }
+      const previousOutput = includePreviousOutput ? previousSections.join("\n\n") : "";
+      const userComments = comments.map((c) => {
+        if (c.file_path && c.start_line != null && c.end_line != null) {
+          return `${c.file_path}:${c.start_line}-${c.end_line} :: ${c.text}`;
+        }
+        if (c.file_path) {
+          return `${c.file_path} :: ${c.text}`;
+        }
+        return `group:${c.group_id} :: ${c.text}`;
+      });
+
       if (IS_TAURI) {
         await runStreamingJob<Pass1Response>("start_annotate_overview", {
           repoPath: repoPath || null,
           llmProvider: resolvedPrimaryProvider,
           llmModel: resolvedPrimaryModel,
+          userFeedback: feedback || null,
+          includePreviousOutput,
+          previousOutput: previousOutput || null,
+          userComments,
         }, (result) => {
           setOverview(result);
         });
@@ -1472,7 +1501,7 @@ export default function App() {
     } finally {
       setAnnotating(false);
     }
-  }, [repoPath, resolvedPrimaryModel, resolvedPrimaryProvider, runMockActivityJob, runStreamingJob]);
+  }, [comments, deepAnalyses, overview, repoPath, resolvedPrimaryModel, resolvedPrimaryProvider, runMockActivityJob, runStreamingJob, selectedGroup]);
 
   /** Run LLM Pass 2: deep analysis for the selected group. */
   const runDeepAnalysis = useCallback(async () => {
@@ -3178,6 +3207,39 @@ export default function App() {
               | Files: <strong>{selectedGroup.files.length}</strong> |
               Review order: <strong>#{selectedGroup.review_order}</strong>
             </p>
+            {llmSettings && (
+              <>
+                <div className="settings-row" style={{ marginTop: 8, alignItems: "center" }}>
+                  <label style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                    Model ({PROVIDER_LABELS[llmSettings.provider as LlmProvider]})
+                  </label>
+                  <select
+                    className="settings-select"
+                    value={llmSettings.model}
+                    onChange={(e) => updateSetting("model", e.target.value)}
+                    style={{ maxWidth: 260, marginLeft: "auto" }}
+                  >
+                    {modelsForProvider(llmSettings.provider).map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <button
+                  className="btn"
+                  style={{ marginTop: 8 }}
+                  onClick={() => {
+                    setRegenDialogOpen(true);
+                    setRegenFeedbackText("");
+                    setRegenIncludePreviousOutput(true);
+                  }}
+                  title="Regenerate annotations with additional guidance"
+                >
+                  Regenerate with feedback/question
+                </button>
+              </>
+            )}
             {selectedGroup.files.length > 1 && !replayActive && (
               <button
                 className="btn btn-replay"
@@ -5551,7 +5613,7 @@ export default function App() {
                 {!overview && !annotating && !refinedGroups && (
                   <button
                     className={`btn btn-summarize ${!aiAccessReady ? "no-api-key" : ""}`}
-                    onClick={runAnnotateOverview}
+                    onClick={() => { void runAnnotateOverview(); }}
                     disabled={annotating || !aiAccessReady || !annotationsEnabled}
                     title={
                       aiAccessReady
@@ -5659,6 +5721,51 @@ export default function App() {
                 disabled={!commentText.trim()}
               >
                 Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {regenDialogOpen && (
+        <div className="comment-overlay" onClick={() => setRegenDialogOpen(false)}>
+          <div className="comment-input-panel" onClick={(e) => e.stopPropagation()}>
+            <div className="comment-input-header">
+              <span className="comment-input-scope">Regenerate with feedback/question</span>
+              <button className="btn-close" onClick={() => setRegenDialogOpen(false)}>&times;</button>
+            </div>
+            <textarea
+              className="comment-textarea"
+              value={regenFeedbackText}
+              onChange={(e) => setRegenFeedbackText(e.target.value)}
+              placeholder="What should the next analysis focus on?"
+              rows={5}
+            />
+            <label className="settings-toggle" style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
+              <input
+                type="checkbox"
+                checked={regenIncludePreviousOutput}
+                onChange={(e) => setRegenIncludePreviousOutput(e.target.checked)}
+              />
+              <span>Include previous output as context</span>
+            </label>
+            <p className="settings-hint" style={{ marginTop: 8 }}>
+              Your feedback and current review comments are always included in reanalysis context.
+            </p>
+            <div className="comment-input-footer">
+              <button className="btn" onClick={() => setRegenDialogOpen(false)}>Cancel</button>
+              <button
+                className="btn btn-comment-save"
+                onClick={() => {
+                  setRegenDialogOpen(false);
+                  void runAnnotateOverview({
+                    feedback: regenFeedbackText,
+                    includePreviousOutput: regenIncludePreviousOutput,
+                  });
+                }}
+                disabled={annotating}
+              >
+                {annotating ? "Regenerating..." : "Regenerate"}
               </button>
             </div>
           </div>

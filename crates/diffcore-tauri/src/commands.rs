@@ -495,7 +495,10 @@ fn load_cached_analysis(
         .ok_or_else(|| CommandError::Analysis("No analysis available. Run analyze first.".into()))
 }
 
-fn build_pass1_request(analysis: &AnalysisOutput) -> llm::schema::Pass1Request {
+fn build_pass1_request(
+    analysis: &AnalysisOutput,
+    reanalysis_context: Option<&str>,
+) -> llm::schema::Pass1Request {
     let flow_groups: Vec<llm::schema::Pass1GroupInput> = analysis
         .groups
         .iter()
@@ -517,16 +520,68 @@ fn build_pass1_request(analysis: &AnalysisOutput) -> llm::schema::Pass1Request {
         })
         .collect();
 
-    llm::schema::Pass1Request {
-        diff_summary: format!(
+    let mut diff_summary = format!(
             "{} files changed across {} groups",
             analysis.summary.total_files_changed, analysis.summary.total_groups,
-        ),
+        );
+
+    if let Some(context) = reanalysis_context {
+        let trimmed = context.trim();
+        if !trimmed.is_empty() {
+            diff_summary.push_str("\n\n## Reanalysis Context\n");
+            diff_summary.push_str(trimmed);
+        }
+    }
+
+    llm::schema::Pass1Request {
+        diff_summary,
         flow_groups,
         graph_summary: format!(
             "{} groups, {} total files",
             analysis.summary.total_groups, analysis.summary.total_files_changed,
         ),
+    }
+}
+
+fn build_overview_reanalysis_context(
+    user_feedback: Option<String>,
+    include_previous_output: Option<bool>,
+    previous_output: Option<String>,
+    user_comments: Option<Vec<String>>,
+) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+
+    if let Some(feedback) = user_feedback {
+        let trimmed = feedback.trim();
+        if !trimmed.is_empty() {
+            parts.push(format!("User feedback/question:\n{}", trimmed));
+        }
+    }
+
+    if let Some(comments) = user_comments {
+        let non_empty: Vec<String> = comments
+            .into_iter()
+            .map(|c| c.trim().to_string())
+            .filter(|c| !c.is_empty())
+            .collect();
+        if !non_empty.is_empty() {
+            parts.push(format!("Review comments:\n- {}", non_empty.join("\n- ")));
+        }
+    }
+
+    if include_previous_output.unwrap_or(false) {
+        if let Some(previous) = previous_output {
+            let trimmed = previous.trim();
+            if !trimmed.is_empty() {
+                parts.push(format!("Previous output to consider:\n{}", trimmed));
+            }
+        }
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n\n"))
     }
 }
 
@@ -707,13 +762,12 @@ fn refinement_operations_summary(response: &RefinementResponse) -> String {
 }
 
 async fn run_overview_with_activity(
-    analysis: AnalysisOutput,
+    request: llm::schema::Pass1Request,
     llm_config: diffcore_core::config::LlmConfig,
     workdir: Option<PathBuf>,
     job: JobHandle,
 ) -> Result<Pass1Response, CommandError> {
     emit_diffcore_activity(&job, "Preparing overview request").await;
-    let request = build_pass1_request(&analysis);
     let provider = llm::create_provider_for_workdir(&llm_config, workdir.as_deref())
         .map_err(|e| CommandError::Llm(format!("{}", e)))?;
     let provider_name = provider.name().to_string();
@@ -865,6 +919,10 @@ pub fn start_annotate_overview(
     repo_path: Option<String>,
     llm_provider: Option<String>,
     llm_model: Option<String>,
+    user_feedback: Option<String>,
+    include_previous_output: Option<bool>,
+    previous_output: Option<String>,
+    user_comments: Option<Vec<String>>,
     state: tauri::State<'_, AppState>,
 ) -> Result<AsyncLlmJobStart, CommandError> {
     let analysis = load_cached_analysis(&state)?;
@@ -889,9 +947,16 @@ pub fn start_annotate_overview(
     let (job, start) =
         state.create_llm_job("overview", &provider_name, &model_name, "Summarizing PR")?;
     let llm_config = config.llm.clone();
+    let reanalysis_context = build_overview_reanalysis_context(
+        user_feedback,
+        include_previous_output,
+        previous_output,
+        user_comments,
+    );
+    let request = build_pass1_request(&analysis, reanalysis_context.as_deref());
 
     tauri::async_runtime::spawn(async move {
-        match run_overview_with_activity(analysis, llm_config, workdir, job.clone()).await {
+        match run_overview_with_activity(request, llm_config, workdir, job.clone()).await {
             Ok(response) => match serde_json::to_value(&response) {
                 Ok(value) => job.complete("overview", value).await,
                 Err(error) => {
@@ -1054,6 +1119,10 @@ pub async fn annotate_overview(
     repo_path: Option<String>,
     llm_provider: Option<String>,
     llm_model: Option<String>,
+    user_feedback: Option<String>,
+    include_previous_output: Option<bool>,
+    previous_output: Option<String>,
+    user_comments: Option<Vec<String>>,
     state: tauri::State<'_, AppState>,
 ) -> Result<Pass1Response, CommandError> {
     // Get the cached analysis to build the request
@@ -1082,39 +1151,13 @@ pub async fn annotate_overview(
     let provider = llm::create_provider_for_workdir(&config.llm, workdir.as_deref())
         .map_err(|e| CommandError::Llm(format!("{}", e)))?;
 
-    // Build Pass 1 request
-    let flow_groups: Vec<llm::schema::Pass1GroupInput> = analysis
-        .groups
-        .iter()
-        .map(|g| llm::schema::Pass1GroupInput {
-            id: g.id.clone(),
-            name: g.name.clone(),
-            entrypoint: g
-                .entrypoint
-                .as_ref()
-                .map(|ep| format!("{}::{}", ep.file, ep.symbol)),
-            files: g.files.iter().map(|f| f.path.clone()).collect(),
-            risk_score: g.risk_score,
-            edge_summary: g
-                .edges
-                .iter()
-                .map(|e| format!("{} -> {}", e.from, e.to))
-                .collect::<Vec<_>>()
-                .join(", "),
-        })
-        .collect();
-
-    let request = llm::schema::Pass1Request {
-        diff_summary: format!(
-            "{} files changed across {} groups",
-            analysis.summary.total_files_changed, analysis.summary.total_groups,
-        ),
-        flow_groups,
-        graph_summary: format!(
-            "{} groups, {} total files",
-            analysis.summary.total_groups, analysis.summary.total_files_changed,
-        ),
-    };
+    let reanalysis_context = build_overview_reanalysis_context(
+        user_feedback,
+        include_previous_output,
+        previous_output,
+        user_comments,
+    );
+    let request = build_pass1_request(&analysis, reanalysis_context.as_deref());
 
     let response = provider
         .annotate_overview(&request)
