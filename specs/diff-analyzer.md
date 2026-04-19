@@ -1653,3 +1653,128 @@ Before each release, run through manually:
 - [x] Run with `.diffcore.toml` — overrides apply correctly — config loads, validates (rejects invalid provider), ignore patterns filter parsing
 - [x] Run on empty diff — graceful "no changes" message — returns JSON with 0 files, 0 groups, no error
 - [x] Performance: 100-file diff completes in under 15 seconds — 78-file diff completes in 65ms (release build)
+
+## 14. Desktop Review UX and Restorable State (Normative)
+
+This section defines how the desktop app MUST behave. It is a product behavior contract, not a task checklist.
+
+### 14.1 Implemented Baseline (As of 2026-04-19)
+
+The desktop app currently provides the following baseline behavior:
+
+- Replay mode supports hunk-level navigation across files in flow order, marks visited hunks, and supports comment-on-current-hunk using the existing code-comment mechanism.
+- Flow graph edges and the edges list are clickable and navigate to the corresponding file/symbol location in the diff viewer.
+- The diff editor supports editing in compare modes that explicitly allow edits; branch/commit comparisons run without uncommitted worktree inclusion.
+- Tool-generated edit comments are debounced and update per edited hunk; reverting edited hunks removes corresponding auto comments.
+- Branch/commit comparison and explicit uncommitted comparison targets (staged/unstaged) are both represented in the UI.
+
+### 14.2 Cross-File Search Contract
+
+The desktop app MUST provide an app-level cross-file search workflow with the following requirements:
+
+- `Ctrl+Shift+F` opens the app search UI (regardless of panel focus, including Monaco).
+- Search operates across the active analysis corpus and returns file + line matches with jump-to-location behavior.
+- A checkbox labeled `show unchanged files` MUST exist, defaulting to `false`.
+- When `show unchanged files` is `false`, search results and file-scoped navigation surfaces MUST prioritize changed files only.
+- When `show unchanged files` is `true`, search and relevant navigation surfaces MUST include unchanged files as first-class results.
+- The checkbox state MUST influence both the `Ctrl+Shift+F` workflow and any other file-visibility/filtering flows that share the same corpus selection semantics.
+
+### 14.3 Repository Selection and Startup Contract
+
+The desktop app MUST support repository selection and startup behavior as follows:
+
+- If the app is launched with a directory argument, that directory MUST be opened as the initial repository path.
+- The top bar MUST provide a `Browse` button that opens a native folder picker.
+- Selecting a folder via `Browse` MUST populate the repository input and load repository metadata as if it were typed manually.
+
+### 14.4 Full Application State Persistence and Restore Contract
+
+The desktop app MUST persist and restore complete application state, not only isolated artifacts.
+
+- A durable state snapshot MUST include at minimum: repository path, compare targets, view filters (including `show unchanged files`), selected group/file, open tabs, replay state, comments, activity timeline/events, analysis outputs, LLM summaries/annotations, and persisted logs.
+- The storage model MUST include a log folder concept under the config hierarchy, defaulting to `$CONFIG/logs/`.
+- State snapshots and logs MUST be versioned and timestamped so they can be reopened safely across app restarts.
+- The UI MUST provide a trivial restore path (for example: `Restore Last Session` and/or `Restore Snapshot...`) without requiring manual filesystem edits.
+- Restore MUST be best-effort and fault-tolerant: invalid or partial snapshot data must not crash the app and must surface a user-visible recovery message.
+
+### 14.5 Separation of Concerns
+
+To avoid regressions, the following boundaries are mandatory:
+
+- Replay hunk navigation MUST derive from editor-visible review hunks, not the comments subsystem.
+- Auto-generated edit comments MUST derive from user edits relative to baseline content and MUST NOT drive replay-hunk navigation state.
+- Scroll orchestration may share a common mechanism, but hunk-source semantics and comment-source semantics MUST remain independent.
+
+### 14.5.5 Hunk Navigation Visibility
+
+- Hunk navigation must be available and visible even outside of replay mode.
+- In fact, ALL OTHER replay mode navigation buttons must be visible (even if disabled) at all times, to provide users with a consistent mental model of the available navigation actions.
+- Hunk navigation buttons must be disabled when there are no review hunks in the current file, but they must not be hidden.
+- Hunk navigation buttons must be enabled when there are review hunks in the current file, regardless of whether the user is currently in replay mode or not.
+
+### 14.6 Editing Controls and Save Semantics
+
+The desktop app MUST expose explicit editing controls in the top bar:
+
+- `Allow editing files` toggle.
+- `Auto save` toggle.
+- `Save` button for manual persistence when auto-save is disabled.
+
+Control behavior requirements:
+
+- `Allow editing files` MUST be disabled and unchecked outside supported compare target pairings.
+- When editing is disabled, the Monaco modified pane MUST be read-only.
+- When `Auto save` is enabled, edit persistence MUST continue to use debounced save behavior.
+- When `Auto save` is disabled, edits MUST remain local until `Save` is pressed.
+
+### 14.7 Keyboard and Focus Policy
+
+Keyboard behavior MUST be focus-aware:
+
+- While Monaco is actively editing (focused and editing enabled), app-level navigation keybinds MUST be suppressed.
+- When Monaco is unfocused, or editing is disabled, app-level keybinds MUST be active.
+- App-level navigation MUST support both vim-style keys and arrow keys for equivalent movement actions.
+- Monaco default editor keybinds (for example F12 and multi-cursor/editing shortcuts) MUST always remain available, except when they directly conflict with app-level navigation in which case the above focus policy applies.
+- Focus state MUST be visually indicated to the user (for example, Monaco border highlight when focused).
+- Monaco editor keybinds must continue to work even when the editor is in read-only mode (editing disabled), except for those that conflict with app-level navigation. E.g. F12 must coninue to work for "Go to Definition" even when editing is disabled.
+
+### 14.8 Source Tab Changed-State Visibility
+
+The Subsystem Source tab MUST expose changed-state affordances:
+
+- Changed items MUST be visually highlighted.
+- A `show unchanged` toggle MUST exist in the Source tab, defaulting to `true`.
+- When `show unchanged` is disabled in Source tab context, unchanged items MUST be hidden from that tab's list/tree views.
+
+### 14.9 Persisted Review Progress
+
+Flow review progress MUST persist across sessions and re-analysis:
+
+- Reviewed flow-group state MUST be stored in restorable app state.
+- Re-running analysis MUST restore prior reviewed progress where groups can be matched deterministically.
+- When the group structure changes, progress reconciliation MUST be best-effort and transparent to the user.
+
+### 14.10 Graph Granularity Setting (Stub)
+
+Graph view configuration MUST include a granularity selector that supports future symbol-level graph rendering:
+
+- Add a graph granularity setting that includes at least `file` and a stub option for `module/class/method`.
+- For now, non-file granularity may be marked as preview/stub, but the UI contract and persisted setting must exist.
+
+### 14.11 Info Tab Reanalysis Controls
+
+The Info view MUST support per-provider model control and guided regeneration:
+
+- A model dropdown for the currently selected provider MUST be available directly in Info view.
+- A `Regenerate with feedback/question` action MUST open a dialog that:
+  - captures user feedback/question text,
+  - asks whether to include previous output as context.
+- Added user feedback/comments MUST always be included in reanalysis context.
+- Inclusion of previous output MUST follow the explicit user choice from the dialog.
+
+### 14.12 Theming Consistency
+
+All select/dropdown controls in these workflows MUST match the app theme:
+
+- Provider/model dropdowns in Info and settings-related flows MUST use the same themed styling as the rest of the UI.
+- New controls introduced by this section MUST not fall back to unthemed browser-default select styling.
