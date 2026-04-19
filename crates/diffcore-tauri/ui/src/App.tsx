@@ -23,7 +23,7 @@ import type {
 } from "./types";
 import { LLM_PROVIDERS, DEFAULT_MODELS_BY_PROVIDER } from "./types";
 import type { ModelInfo } from "./types";
-import DiffViewer, { type DiffViewerHandle } from "./components/DiffViewer";
+import DiffViewer, { type DiffViewerHandle, type EditedHunk } from "./components/DiffViewer";
 import FlowGraph from "./components/FlowGraph";
 import SourceExplorer, { type SourceFocusRequest } from "./components/SourceExplorer";
 // RiskHeatmap hidden (Phase 9.4) — component kept for future re-enablement
@@ -54,6 +54,13 @@ type OnboardingStep = "recommended" | "api";
 type SubscriptionProvider = "codex" | "claude";
 type RightPanelTab = "activity" | "annotations" | "source" | "comments";
 type ActivityViewMode = "stream" | "all";
+type ReplayHunk = {
+  id: string;
+  filePath: string;
+  startLine: number;
+  endLine: number;
+  selectedCode: string | null;
+};
 type ActivityKind =
   | "system"
   | "search"
@@ -66,6 +73,10 @@ type ActivityKind =
 
 const API_PROVIDER_OPTIONS: LlmProvider[] = ["openai", "anthropic", "gemini", "openrouter"];
 const ACTIVITY_STREAM_LIMIT = 10;
+const COMPARE_TARGET_UNSTAGED = "__DIFFCORE_UNSTAGED__";
+const COMPARE_TARGET_STAGED = "__DIFFCORE_STAGED__";
+
+type CompareMode = "branch" | "unstaged_to_staged" | "invalid";
 
 const SUBSCRIPTION_BACKENDS: Array<{
   provider: SubscriptionProvider;
@@ -146,6 +157,62 @@ export default function App() {
   // Diff behavior
   const [includeUncommitted, setIncludeUncommitted] = useState(true);
 
+  const comparisonMode = useMemo<CompareMode>(() => {
+    const sourceIsUnstaged = headRef === COMPARE_TARGET_UNSTAGED;
+    const targetIsStaged = baseRef === COMPARE_TARGET_STAGED;
+    const sourceIsSpecial = sourceIsUnstaged || headRef === COMPARE_TARGET_STAGED;
+    const targetIsSpecial = targetIsStaged || baseRef === COMPARE_TARGET_UNSTAGED;
+
+    if (sourceIsUnstaged && targetIsStaged) return "unstaged_to_staged";
+    if (!sourceIsSpecial && !targetIsSpecial) return "branch";
+    return "invalid";
+  }, [headRef, baseRef]);
+
+  const analysisDiffArgs = useMemo(() => {
+    if (comparisonMode === "unstaged_to_staged") {
+      return {
+        base: null as string | null,
+        head: null as string | null,
+        staged: false,
+        unstaged: true,
+        prPreview: false,
+        includeUncommitted: false,
+      };
+    }
+
+    return {
+      base: baseRef || "main",
+      head: headRef || null,
+      staged: false,
+      unstaged: false,
+      prPreview: true,
+      // Branch comparison explicitly excludes uncommitted worktree changes.
+      includeUncommitted: false,
+    };
+  }, [comparisonMode, baseRef, headRef]);
+
+  const fileDiffArgs = useMemo(() => {
+    if (comparisonMode === "unstaged_to_staged") {
+      return {
+        base: null as string | null,
+        head: null as string | null,
+        staged: false,
+        unstaged: true,
+        includeUncommitted: false,
+      };
+    }
+
+    return {
+      base: baseRef || "main",
+      head: null as string | null,
+      staged: false,
+      unstaged: false,
+      includeUncommitted: false,
+    };
+  }, [comparisonMode, baseRef]);
+
+  const editsEnabled = comparisonMode === "unstaged_to_staged";
+
   // LLM settings
   const [llmSettings, setLlmSettings] = useState<LlmSettings | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -165,6 +232,9 @@ export default function App() {
   const [replayActive, setReplayActive] = useState(false);
   const [replayStep, setReplayStep] = useState(0);
   const [replayVisited, setReplayVisited] = useState<Set<string>>(new Set());
+  const [replayHunkIndex, setReplayHunkIndex] = useState(0);
+  const [replayViewedHunkIds, setReplayViewedHunkIds] = useState<Set<string>>(new Set());
+  const [currentReplayHunks, setCurrentReplayHunks] = useState<ReplayHunk[]>([]);
 
   // Refinement state
   const [originalGroups, setOriginalGroups] = useState<FlowGroup[] | null>(null);
@@ -198,6 +268,8 @@ export default function App() {
   const [commentsCollapsed, setCommentsCollapsed] = useState(false);
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
   const pendingScrollToCommentRef = useRef<{ startLine: number; endLine?: number; commentId: string } | null>(null);
+  const pendingReplayHunkScrollRef = useRef<{ filePath: string; targetHunkIndex: number } | null>(null);
+  const pendingSymbolScrollRef = useRef<{ symbol: string } | null>(null);
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const [editingCommentText, setEditingCommentText] = useState("");
 
@@ -284,6 +356,23 @@ export default function App() {
   const pendingFileNav = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Staleness guard: incremented on each file selection, stale responses are discarded
   const fileDiffGeneration = useRef(0);
+  // Debounced editor-to-disk/comment sync state
+  const pendingEditSync = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const latestEditPayloadRef = useRef<{
+    filePath: string;
+    groupId: string;
+    newContent: string;
+    hunks: EditedHunk[];
+  } | null>(null);
+  const fileEditBaselineRef = useRef<Map<string, string>>(new Map());
+
+  useEffect(() => {
+    return () => {
+      if (pendingEditSync.current) {
+        clearTimeout(pendingEditSync.current);
+      }
+    };
+  }, []);
 
   /** Load LLM settings from backend. */
   const loadLlmSettings = useCallback(async (path: string | null) => {
@@ -606,15 +695,16 @@ export default function App() {
           const diff = await tauriInvoke<FileDiffContent>("get_file_diff", {
             repoPath,
             filePath: path,
-            base: baseRef || "main",
-            head: null,
+            base: fileDiffArgs.base,
+            head: fileDiffArgs.head,
             range: null,
-            staged: false,
-            unstaged: false,
-            includeUncommitted: includeUncommitted,
+            staged: fileDiffArgs.staged,
+            unstaged: fileDiffArgs.unstaged,
+            includeUncommitted: fileDiffArgs.includeUncommitted,
           });
           // Only apply if this is still the latest request
           if (generation === fileDiffGeneration.current) {
+            fileEditBaselineRef.current.set(path, diff.new_content || "");
             setFileDiff(diff);
           }
         } catch (e) {
@@ -625,11 +715,15 @@ export default function App() {
         }
       } else {
         if (generation === fileDiffGeneration.current) {
-          setFileDiff(MOCK_DIFFS[path] || null);
+          const mock = MOCK_DIFFS[path] || null;
+          if (mock) {
+            fileEditBaselineRef.current.set(path, mock.new_content || "");
+          }
+          setFileDiff(mock);
         }
       }
     },
-    [repoPath, baseRef, includeUncommitted],
+    [repoPath, fileDiffArgs],
   );
 
   /** Debounced file selection for keyboard navigation — updates highlight immediately,
@@ -659,6 +753,78 @@ export default function App() {
     [handleSelectFile],
   );
 
+  const replayHunks = currentReplayHunks;
+
+  const mapEditedHunksToReplayHunks = useCallback((filePath: string, hunks: EditedHunk[]): ReplayHunk[] => {
+    return hunks.map((h, index) => ({
+      id: `monaco_hunk_${filePath}_${h.modifiedStartLine}_${h.modifiedEndLine}_${index}`,
+      filePath,
+      startLine: h.modifiedStartLine,
+      endLine: h.modifiedEndLine,
+      selectedCode: h.selectedCode || null,
+    }));
+  }, []);
+
+  const collectVisibleReplayHunks = useCallback((filePath: string): ReplayHunk[] => {
+    const fromEditor = diffViewerRef.current?.getDiffHunks?.() ?? [];
+    return mapEditedHunksToReplayHunks(filePath, fromEditor);
+  }, [mapEditedHunksToReplayHunks]);
+
+  const jumpToReplayHunk = useCallback(
+    (index: number) => {
+      const group = selectedGroupRef.current;
+      if (!group || replayHunks.length === 0) return;
+      const clamped = Math.max(0, Math.min(index, replayHunks.length - 1));
+      const hunk = replayHunks[clamped];
+      setReplayHunkIndex(clamped);
+      if (replayActiveRef.current) {
+        setReplayViewedHunkIds((prev) => {
+          const next = new Set(prev);
+          next.add(hunk.id);
+          return next;
+        });
+      }
+
+      if (selectedFileRef.current !== hunk.filePath) {
+        pendingReplayHunkScrollRef.current = {
+          filePath: hunk.filePath,
+          targetHunkIndex: clamped,
+        };
+        openFileInTab(hunk.filePath, group.id);
+      } else {
+        diffViewerRef.current?.scrollToLine(hunk.startLine, hunk.endLine);
+      }
+
+      const fileStepIndex = group.files.findIndex((f) => f.path === hunk.filePath);
+      if (fileStepIndex >= 0) {
+        setReplayStep(fileStepIndex);
+        setReplayVisited((prev) => {
+          const next = new Set(prev);
+          next.add(hunk.filePath);
+          return next;
+        });
+      }
+    },
+    [replayHunks, openFileInTab],
+  );
+
+  const commentOnCurrentReplayHunk = useCallback(() => {
+    const group = selectedGroupRef.current;
+    if (!group || replayHunks.length === 0) return;
+    const hunk = replayHunks[Math.max(0, Math.min(replayHunkIndex, replayHunks.length - 1))];
+    jumpToReplayHunk(replayHunkIndex);
+    setCommentInput({
+      type: "code",
+      group_id: group.id,
+      file_path: hunk.filePath,
+      start_line: hunk.startLine,
+      end_line: hunk.endLine,
+      selected_code: hunk.selectedCode ?? undefined,
+    });
+    setCommentText("");
+    setTimeout(() => commentInputRef.current?.focus(), 50);
+  }, [replayHunkIndex, replayHunks, jumpToReplayHunk]);
+
   // When fileDiff loads and a pending scroll-to-comment is queued, scroll the diff viewer
   useEffect(() => {
     if (fileDiff && pendingScrollToCommentRef.current) {
@@ -671,6 +837,54 @@ export default function App() {
       }, 100);
     }
   }, [fileDiff]);
+
+  useEffect(() => {
+    if (!fileDiff || !pendingReplayHunkScrollRef.current) return;
+    const { filePath, targetHunkIndex } = pendingReplayHunkScrollRef.current;
+    if (fileDiff.path !== filePath) return;
+    setTimeout(() => {
+      const visible = collectVisibleReplayHunks(filePath);
+      if (visible.length === 0) return;
+      pendingReplayHunkScrollRef.current = null;
+      setCurrentReplayHunks(visible);
+      const fallback = Math.max(0, Math.min(targetHunkIndex, visible.length - 1));
+      const chosen = targetHunkIndex < 0 ? visible.length - 1 : fallback;
+      const hunk = visible[Math.max(0, chosen)];
+      setReplayHunkIndex(Math.max(0, chosen));
+      if (hunk) {
+        diffViewerRef.current?.scrollToLine(hunk.startLine, hunk.endLine);
+      }
+    }, 100);
+  }, [fileDiff, collectVisibleReplayHunks]);
+
+  useEffect(() => {
+    if (!fileDiff || !pendingSymbolScrollRef.current) return;
+    const { symbol } = pendingSymbolScrollRef.current;
+    pendingSymbolScrollRef.current = null;
+    const targetLine = findLineContainingSymbol(fileDiff.new_content || fileDiff.old_content || "", symbol);
+    if (targetLine != null) {
+      setTimeout(() => {
+        diffViewerRef.current?.scrollToLine(targetLine, targetLine);
+      }, 100);
+    }
+  }, [fileDiff]);
+
+  useEffect(() => {
+    if (!fileDiff) {
+      setCurrentReplayHunks([]);
+      setReplayHunkIndex(0);
+      return;
+    }
+    const timer = setTimeout(() => {
+      const visible = collectVisibleReplayHunks(fileDiff.path);
+      setCurrentReplayHunks(visible);
+      setReplayHunkIndex((prev) => {
+        if (visible.length === 0) return 0;
+        return Math.max(0, Math.min(prev, visible.length - 1));
+      });
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [fileDiff, collectVisibleReplayHunks]);
 
   /** Close a single tab. If it was active, activate a neighbor. */
   const closeTab = useCallback(
@@ -713,6 +927,48 @@ export default function App() {
       handleSelectFile(path);
     },
     [handleSelectFile],
+  );
+
+  const resolveGroupFilePath = useCallback((fileLike: string, group: FlowGroup): string | null => {
+    const direct = group.files.find((f) => f.path === fileLike);
+    if (direct) return direct.path;
+    const suffix = `/${fileLike}`;
+    const bySuffix = group.files.find((f) => f.path.endsWith(suffix));
+    return bySuffix?.path ?? null;
+  }, []);
+
+  const handleEdgeEndpointClick = useCallback(
+    (endpoint: string) => {
+      const group = selectedGroupRef.current;
+      if (!group) return;
+      const { filePath, symbol } = parseSymbolEndpoint(endpoint);
+      const targetPath = resolveGroupFilePath(filePath, group);
+      if (!targetPath) return;
+      if (symbol) {
+        pendingSymbolScrollRef.current = { symbol };
+      }
+      openFileInTab(targetPath, group.id);
+    },
+    [openFileInTab, resolveGroupFilePath],
+  );
+
+  const handleGraphEdgeClick = useCallback(
+    (sourceEndpoint: string, targetEndpoint: string) => {
+      const group = selectedGroupRef.current;
+      if (!group) return;
+      const source = parseSymbolEndpoint(sourceEndpoint);
+      const target = parseSymbolEndpoint(targetEndpoint);
+      const canUseTarget = resolveGroupFilePath(target.filePath, group) != null;
+      const canUseSource = resolveGroupFilePath(source.filePath, group) != null;
+      if (canUseTarget) {
+        handleEdgeEndpointClick(targetEndpoint);
+        return;
+      }
+      if (canUseSource) {
+        handleEdgeEndpointClick(sourceEndpoint);
+      }
+    },
+    [handleEdgeEndpointClick, resolveGroupFilePath],
   );
 
   const handleSourceNavigate = useCallback(
@@ -780,6 +1036,8 @@ export default function App() {
       setReplayActive(false);
       setReplayStep(0);
       setReplayVisited(new Set());
+      setReplayHunkIndex(0);
+      setReplayViewedHunkIds(new Set());
       // Reset annotation sub-tab when switching groups
       setAnnotationSubTab("info");
       // Auto-select first file in group
@@ -795,6 +1053,10 @@ export default function App() {
 
   const runAnalysis = useCallback(async () => {
     if (!repoPath) return;
+    if (comparisonMode === "invalid") {
+      setError("Unsupported compare targets. Use source=Unstaged changes and target=Staged changes, or regular branch/commit targets.");
+      return;
+    }
     setLoading(true);
     setError(null);
     // Reset LLM state on new analysis
@@ -830,13 +1092,13 @@ export default function App() {
       if (IS_TAURI) {
         result = await tauriInvoke<AnalysisOutput>("analyze", {
           repoPath,
-          base: baseRef || "main",
-          head: headRef || null,
+          base: analysisDiffArgs.base,
+          head: analysisDiffArgs.head,
           range: null,
-          staged: false,
-          unstaged: false,
-          prPreview: true, // Default to PR preview mode (merge-base diff)
-          includeUncommitted: includeUncommitted,
+          staged: analysisDiffArgs.staged,
+          unstaged: analysisDiffArgs.unstaged,
+          prPreview: analysisDiffArgs.prPreview,
+          includeUncommitted: analysisDiffArgs.includeUncommitted,
         });
       } else {
         // Demo mode: simulate short delay then return mock data
@@ -871,7 +1133,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [repoPath, baseRef, headRef, handleSelectGroup, closeActivityStream]);
+  }, [repoPath, comparisonMode, analysisDiffArgs, handleSelectGroup, closeActivityStream]);
 
   const recommendedSubscriptionProvider: SubscriptionProvider | null = llmSettings?.codex_authenticated
     ? "codex"
@@ -944,11 +1206,11 @@ export default function App() {
         await runStreamingJob<Pass2Response>("start_annotate_group", {
           groupId: selectedGroup.id,
           repoPath,
-          base: baseRef || "main",
-          head: null,
+          base: analysisDiffArgs.base,
+          head: analysisDiffArgs.head,
           range: null,
-          staged: false,
-          unstaged: false,
+          staged: analysisDiffArgs.staged,
+          unstaged: analysisDiffArgs.unstaged,
           llmProvider: resolvedPrimaryProvider,
           llmModel: resolvedPrimaryModel,
         }, (result) => {
@@ -983,7 +1245,7 @@ export default function App() {
         setDeepAnalyzing(false);
       }
     }
-  }, [selectedGroup, repoPath, baseRef, resolvedPrimaryModel, resolvedPrimaryProvider, runMockActivityJob, runStreamingJob]);
+  }, [selectedGroup, repoPath, analysisDiffArgs, resolvedPrimaryModel, resolvedPrimaryProvider, runMockActivityJob, runStreamingJob]);
 
   /** Show a toast notification that auto-dismisses. */
   const showToast = useCallback((message: string) => {
@@ -1574,6 +1836,82 @@ export default function App() {
     [buildAbsolutePath, showToast],
   );
 
+  /** Build readable auto-comment text for an edited hunk. */
+  const autoEditCommentText = useCallback((hunk: EditedHunk): string => {
+    const isDeletionOnly = hunk.modifiedStartLine === 0 || hunk.modifiedEndLine === 0;
+    if (isDeletionOnly) {
+      return `Edited hunk: deleted original lines ${hunk.originalStartLine}-${hunk.originalEndLine}.`;
+    }
+    return `Edited hunk: original ${hunk.originalStartLine}-${hunk.originalEndLine} -> modified ${hunk.modifiedStartLine}-${hunk.modifiedEndLine}.`;
+  }, []);
+
+  /** Persist edited file content to disk and replace auto-generated hunk comments. */
+  const syncEditedFileAndComments = useCallback(async (
+    filePath: string,
+    groupId: string,
+    newContent: string,
+    hunks: EditedHunk[],
+  ) => {
+    if (IS_TAURI) {
+      const absoluteFilePath = buildAbsolutePath(filePath);
+      try {
+        await tauriInvoke("save_file_content", {
+          filePath: absoluteFilePath,
+          content: newContent,
+        });
+      } catch (e) {
+        showToast(`Failed to save edits to disk: ${String(e)}`);
+        return;
+      }
+    }
+
+    const existingAutoComments = comments.filter(
+      (c) => c.type === "code" && c.file_path === filePath && c.id.startsWith("auto_edit_hunk_"),
+    );
+
+    const nextAutoComments: ReviewComment[] = hunks.map((hunk, index) => {
+      const hasModifiedRange = hunk.modifiedStartLine > 0 && hunk.modifiedEndLine > 0;
+      const startLine = hasModifiedRange
+        ? hunk.modifiedStartLine
+        : Math.max(1, hunk.originalStartLine);
+      const endLine = hasModifiedRange
+        ? Math.max(hunk.modifiedStartLine, hunk.modifiedEndLine)
+        : Math.max(startLine, hunk.originalEndLine);
+
+      return {
+        id: `auto_edit_hunk_${filePath}_${index}`,
+        type: "code",
+        group_id: groupId,
+        file_path: filePath,
+        start_line: startLine,
+        end_line: endLine,
+        selected_code: hunk.selectedCode || null,
+        text: autoEditCommentText(hunk),
+        created_at: new Date().toISOString(),
+      };
+    });
+
+    setComments((prev) => {
+      const retained = prev.filter(
+        (c) => !(c.type === "code" && c.file_path === filePath && c.id.startsWith("auto_edit_hunk_")),
+      );
+      return [...retained, ...nextAutoComments];
+    });
+
+    if (IS_TAURI && repoPath) {
+      try {
+        for (const existing of existingAutoComments) {
+          await tauriInvoke("delete_comment_cached", { repoPath, commentId: existing.id });
+        }
+        for (const comment of nextAutoComments) {
+          await tauriInvoke("save_comment_cached", { repoPath, comment });
+        }
+      } catch {
+        // Non-fatal: local UI state still reflects current edits.
+      }
+    }
+  }, [autoEditCommentText, buildAbsolutePath, comments, repoPath, showToast]);
+
   /** Export the overview as a PR-description-style brief. */
   const copyPrDescription = useCallback(async () => {
     if (!overview) {
@@ -1942,10 +2280,7 @@ export default function App() {
     if (!fileChange) return true;
     const totalChanged = fileChange.changes.additions + fileChange.changes.deletions;
     const density = totalChanged / maxLines;
-    // Full rewrite (>80% changed) or sparse (<30% changed) → side-by-side
-    // Dense targeted edits (30-80% changed) → inline
-    if (density > 0.8 || density < 0.3) return true;
-    return false;
+    return  density > (2/3);
   }, [diffViewMode, fileDiff, selectedGroup, selectedFile]);
 
   /** Code-level comments for the selected file, passed to DiffViewer. */
@@ -2059,6 +2394,8 @@ export default function App() {
     setReplayActive(true);
     setReplayStep(0);
     setReplayVisited(new Set([group.files[0].path]));
+    setReplayHunkIndex(0);
+    setReplayViewedHunkIds(new Set());
     handleSelectFile(group.files[0].path);
   }, [handleSelectFile]);
 
@@ -2067,6 +2404,8 @@ export default function App() {
     setReplayActive(false);
     setReplayStep(0);
     setReplayVisited(new Set());
+    setReplayHunkIndex(0);
+    setReplayViewedHunkIds(new Set());
   }, []);
 
   /** Move to a specific replay step. */
@@ -2077,6 +2416,9 @@ export default function App() {
       const clamped = Math.max(0, Math.min(step, group.files.length - 1));
       setReplayStep(clamped);
       const filePath = group.files[clamped].path;
+      pendingReplayHunkScrollRef.current = { filePath, targetHunkIndex: 0 };
+      setReplayHunkIndex(0);
+      setCurrentReplayHunks([]);
       setReplayVisited((prev) => {
         const next = new Set(prev);
         next.add(filePath);
@@ -2085,6 +2427,65 @@ export default function App() {
       handleSelectFile(filePath);
     },
     [handleSelectFile],
+  );
+
+  const hasNextReplayHunk = (
+    replayHunkIndex < replayHunks.length - 1
+    || !!selectedGroup?.files[replayStep + 1]
+  );
+  const hasPrevReplayHunk = (
+    replayHunkIndex > 0
+    || !!selectedGroup?.files[replayStep - 1]
+  );
+
+  const navigateReplayHunk = useCallback(
+    (direction: 1 | -1) => {
+      const group = selectedGroupRef.current;
+      if (!group || group.files.length === 0) return;
+      const hunks = replayHunks;
+
+      if (direction > 0) {
+        if (replayHunkIndex < hunks.length - 1) {
+          jumpToReplayHunk(replayHunkIndex + 1);
+          return;
+        }
+        if (replayStep < group.files.length - 1) {
+          const nextStep = replayStep + 1;
+          const nextFilePath = group.files[nextStep].path;
+          setReplayStep(nextStep);
+          setReplayVisited((prev) => {
+            const next = new Set(prev);
+            next.add(nextFilePath);
+            return next;
+          });
+          setCurrentReplayHunks([]);
+          setReplayHunkIndex(0);
+          pendingReplayHunkScrollRef.current = { filePath: nextFilePath, targetHunkIndex: 0 };
+          openFileInTab(nextFilePath, group.id);
+        }
+        return;
+      }
+
+      if (replayHunkIndex > 0) {
+        jumpToReplayHunk(replayHunkIndex - 1);
+        return;
+      }
+      if (replayStep > 0) {
+        const prevStep = replayStep - 1;
+        const prevFilePath = group.files[prevStep].path;
+        setReplayStep(prevStep);
+        setReplayVisited((prev) => {
+          const next = new Set(prev);
+          next.add(prevFilePath);
+          return next;
+        });
+        setCurrentReplayHunks([]);
+        setReplayHunkIndex(0);
+        pendingReplayHunkScrollRef.current = { filePath: prevFilePath, targetHunkIndex: -1 };
+        openFileInTab(prevFilePath, group.id);
+      }
+    },
+    [replayHunkIndex, replayHunks, replayStep, jumpToReplayHunk, openFileInTab],
   );
 
   // Keyboard navigation: j/k = next/prev file, J/K = next/prev group, r = replay
@@ -2283,8 +2684,8 @@ export default function App() {
 
   // Derived: all branches for the dropdowns
   const baseBranches: BranchInfo[] = repoInfo?.branches ?? [];
-  const headLabel = formatRefLabel(headRef, recentCommits) ?? "HEAD";
-  const baseLabel = formatRefLabel(baseRef, recentCommits) ?? baseRef;
+  const headLabel = formatCompareTargetLabel(headRef, recentCommits) ?? "HEAD";
+  const baseLabel = formatCompareTargetLabel(baseRef, recentCommits) ?? baseRef;
 
   // Status display
   const statusText = formatBranchStatus(repoInfo);
@@ -2463,6 +2864,7 @@ export default function App() {
               edges={selectedGroup.edges}
               files={selectedGroup.files}
               onNodeClick={handleGraphNodeClick}
+              onEdgeClick={handleGraphEdgeClick}
               replayNodeId={replayActive && selectedGroup.files[replayStep] ? selectedGroup.files[replayStep].path : null}
             />
           </ErrorBoundary>
@@ -2475,9 +2877,9 @@ export default function App() {
             {selectedGroup.edges.map((edge, i) => (
               <li key={i} className="edge-item">
                 <span className="edge-type">{edge.edge_type}</span>
-                <span className="edge-from">{shortSymbol(edge.from)}</span>
+                <button className="edge-endpoint edge-from" onClick={() => handleEdgeEndpointClick(edge.from)} title={edge.from}>{shortSymbol(edge.from)}</button>
                 <span className="edge-arrow">&rarr;</span>
-                <span className="edge-to">{shortSymbol(edge.to)}</span>
+                <button className="edge-endpoint edge-to" onClick={() => handleEdgeEndpointClick(edge.to)} title={edge.to}>{shortSymbol(edge.to)}</button>
               </li>
             ))}
           </ul>
@@ -2914,6 +3316,18 @@ export default function App() {
               </button>
               {headBranchDropdownOpen && (
                 <ul className="branch-dropdown">
+                  <li
+                    className={`branch-option ${headRef === COMPARE_TARGET_UNSTAGED ? "selected" : ""}`}
+                    onClick={() => handleSelectHead(COMPARE_TARGET_UNSTAGED)}
+                  >
+                    <span className="branch-option-name">Unstaged changes</span>
+                  </li>
+                  <li
+                    className={`branch-option ${headRef === COMPARE_TARGET_STAGED ? "selected" : ""}`}
+                    onClick={() => handleSelectHead(COMPARE_TARGET_STAGED)}
+                  >
+                    <span className="branch-option-name">Staged changes</span>
+                  </li>
                   {baseBranches.map((b) => (
                     <li
                       key={b.name}
@@ -2974,6 +3388,18 @@ export default function App() {
               </button>
               {branchDropdownOpen && (
                 <ul className="branch-dropdown">
+                  <li
+                    className={`branch-option ${baseRef === COMPARE_TARGET_UNSTAGED ? "selected" : ""}`}
+                    onClick={() => handleSelectBase(COMPARE_TARGET_UNSTAGED)}
+                  >
+                    <span className="branch-option-name">Unstaged changes</span>
+                  </li>
+                  <li
+                    className={`branch-option ${baseRef === COMPARE_TARGET_STAGED ? "selected" : ""}`}
+                    onClick={() => handleSelectBase(COMPARE_TARGET_STAGED)}
+                  >
+                    <span className="branch-option-name">Staged changes</span>
+                  </li>
                   {baseBranches.map((b) => (
                     <li
                       key={b.name}
@@ -3027,7 +3453,7 @@ export default function App() {
           <button
             className="btn btn-primary"
             onClick={runAnalysis}
-            disabled={loading || !repoPath}
+            disabled={loading || !repoPath || comparisonMode === "invalid"}
           >
             {loading ? "Analyzing..." : "Analyze"}
           </button>
@@ -4049,13 +4475,44 @@ export default function App() {
                 </div>
               </div>
               <div className="replay-bar-right">
+                {
+                  <>
+                    <span className="replay-hunk-status">
+                      Hunk {replayHunks.length === 0 ? 0 : Math.min(replayHunkIndex + 1, replayHunks.length)}/{replayHunks.length}
+                      {replayHunks[replayHunkIndex] && replayViewedHunkIds.has(replayHunks[replayHunkIndex].id) ? " viewed" : ""}
+                    </span>
+                    <button
+                      className="btn replay-btn replay-comment-btn"
+                      onClick={commentOnCurrentReplayHunk}
+                      title="Comment on current hunk"
+                    >
+                      + Hunk Comment
+                    </button>
+                    <button
+                      className="btn replay-btn replay-hunk-btn"
+                      onClick={() => navigateReplayHunk(-1)}
+                      disabled={!hasPrevReplayHunk}
+                      title="Jump to previous hunk"
+                    >
+                      &#9664;&nbsp;Hunk
+                    </button>
+                    <button
+                      className="btn replay-btn replay-hunk-btn"
+                      onClick={() => navigateReplayHunk(1)}
+                      disabled={!hasNextReplayHunk}
+                      title="Jump to next hunk"
+                    >
+                      Hunk&nbsp;&#9654;
+                    </button>
+                  </>
+                }
                 <button
                   className="btn replay-btn"
                   onClick={() => goToReplayStep(replayStep - 1)}
                   disabled={replayStep === 0}
                   title="Previous (p / Left Arrow)"
                 >
-                  &#9664;
+                  &#9664;&nbsp;File
                 </button>
                 <button
                   className="btn replay-btn"
@@ -4063,7 +4520,7 @@ export default function App() {
                   disabled={replayStep >= selectedGroup.files.length - 1}
                   title="Next (n / Right Arrow / Space)"
                 >
-                  &#9654;
+                  File&nbsp;&#9654;
                 </button>
                 <button
                   className="btn replay-btn replay-exit"
@@ -4081,6 +4538,7 @@ export default function App() {
               <DiffViewer
                 ref={diffViewerRef}
                 fileDiff={fileDiff}
+                editable={editsEnabled}
                 renderSideBySide={shouldRenderSideBySide}
                 onCommentRequest={(startLine: number, endLine: number, selectedCode: string) => {
                   const group = selectedGroupRef.current;
@@ -4108,6 +4566,67 @@ export default function App() {
                   }, 100);
                 }}
                 onGoToDefinition={handleGoToDefinition}
+                onEditedContentChange={(newContent: string, _hunks: EditedHunk[]) => {
+                  const file = selectedFileRef.current;
+                  const group = selectedGroupRef.current;
+                  if (!file || !group) return;
+
+                  setFileDiff((prev) => {
+                    if (!prev || prev.path !== file) return prev;
+                    return { ...prev, new_content: newContent };
+                  });
+
+                  const baseline = fileEditBaselineRef.current.get(file) ?? "";
+                  const toolEditHunks = computeToolEditHunks(baseline, newContent);
+                  const hasExistingAutoComments = comments.some(
+                    (c) => c.type === "code" && c.file_path === file && c.id.startsWith("auto_edit_hunk_"),
+                  );
+
+                  // Ignore mount/view noise: only sync when there are true tool edits
+                  // or when existing auto-comments need cleanup after revert.
+                  if (toolEditHunks.length === 0 && !hasExistingAutoComments && newContent === baseline) {
+                    return;
+                  }
+
+                  latestEditPayloadRef.current = {
+                    filePath: file,
+                    groupId: group.id,
+                    newContent,
+                    hunks: toolEditHunks,
+                  };
+
+                  if (pendingEditSync.current) {
+                    clearTimeout(pendingEditSync.current);
+                  }
+                  pendingEditSync.current = setTimeout(() => {
+                    const payload = latestEditPayloadRef.current;
+                    if (!payload) return;
+                    void syncEditedFileAndComments(
+                      payload.filePath,
+                      payload.groupId,
+                      payload.newContent,
+                      payload.hunks,
+                    );
+                  }, 2000);
+                }}
+                onDiffHunksChange={(hunks: EditedHunk[]) => {
+                  const file = selectedFileRef.current;
+                  if (!file) return;
+                  const visible = mapEditedHunksToReplayHunks(file, hunks);
+                  setCurrentReplayHunks(visible);
+
+                  const pending = pendingReplayHunkScrollRef.current;
+                  if (pending && pending.filePath === file && visible.length > 0) {
+                    const fallback = Math.max(0, Math.min(pending.targetHunkIndex, visible.length - 1));
+                    const chosen = pending.targetHunkIndex < 0 ? visible.length - 1 : fallback;
+                    const hunk = visible[Math.max(0, chosen)];
+                    pendingReplayHunkScrollRef.current = null;
+                    setReplayHunkIndex(Math.max(0, chosen));
+                    if (hunk) {
+                      diffViewerRef.current?.scrollToLine(hunk.startLine, hunk.endLine);
+                    }
+                  }
+                }}
               />
             </ErrorBoundary>
           </div>
@@ -4640,9 +5159,15 @@ function resolveInteractiveModel(
   return DEFAULT_MODELS_BY_PROVIDER[resolvedProvider]?.[0] ?? configuredModel ?? "default";
 }
 
-function formatRefLabel(refName: string | null, recentCommits: CommitInfo[]): string | null {
+function formatCompareTargetLabel(refName: string | null, recentCommits: CommitInfo[]): string | null {
   if (!refName) {
     return null;
+  }
+  if (refName === COMPARE_TARGET_UNSTAGED) {
+    return "Unstaged changes";
+  }
+  if (refName === COMPARE_TARGET_STAGED) {
+    return "Staged changes";
   }
   const commit = recentCommits.find((item) => item.sha === refName);
   if (!commit) {
@@ -5074,6 +5599,98 @@ function shortSymbol(symbol: string): string {
   const parts = symbol.split("::");
   if (parts.length <= 1) return symbol;
   return parts[parts.length - 1];
+}
+
+function computeToolEditHunks(baselineContent: string, currentContent: string): EditedHunk[] {
+  if (baselineContent === currentContent) return [];
+
+  const baselineLines = baselineContent.split("\n");
+  const currentLines = currentContent.split("\n");
+  const hunks: EditedHunk[] = [];
+
+  let i = 0;
+  let j = 0;
+  const LOOKAHEAD = 80;
+
+  while (i < baselineLines.length || j < currentLines.length) {
+    if (i < baselineLines.length && j < currentLines.length && baselineLines[i] === currentLines[j]) {
+      i += 1;
+      j += 1;
+      continue;
+    }
+
+    const startOld = i;
+    const startNew = j;
+    let aligned = false;
+
+    for (let offset = 1; offset <= LOOKAHEAD; offset += 1) {
+      const oldIdx = i + offset;
+      const newIdx = j + offset;
+
+      if (j + offset < currentLines.length && i < baselineLines.length && baselineLines[i] === currentLines[j + offset]) {
+        j += offset;
+        aligned = true;
+        break;
+      }
+      if (i + offset < baselineLines.length && j < currentLines.length && baselineLines[i + offset] === currentLines[j]) {
+        i += offset;
+        aligned = true;
+        break;
+      }
+      if (oldIdx < baselineLines.length && newIdx < currentLines.length && baselineLines[oldIdx] === currentLines[newIdx]) {
+        i = oldIdx;
+        j = newIdx;
+        aligned = true;
+        break;
+      }
+    }
+
+    if (!aligned) {
+      i = baselineLines.length;
+      j = currentLines.length;
+    }
+
+    const oldStartLine = startOld + 1;
+    const oldEndLine = Math.max(oldStartLine, i);
+    const newStartLine = startNew + 1;
+    const rawNewEndLine = j;
+    const isDeletionOnly = rawNewEndLine < newStartLine;
+    const safeNewLine = Math.max(1, Math.min(newStartLine, currentLines.length || 1));
+    const newEndLine = isDeletionOnly ? safeNewLine : Math.max(newStartLine, rawNewEndLine);
+    const selectedCode = isDeletionOnly
+      ? ""
+      : currentLines.slice(startNew, j).join("\n");
+
+    hunks.push({
+      originalStartLine: oldStartLine,
+      originalEndLine: oldEndLine,
+      modifiedStartLine: isDeletionOnly ? 0 : newStartLine,
+      modifiedEndLine: isDeletionOnly ? 0 : newEndLine,
+      selectedCode,
+    });
+  }
+
+  return hunks;
+}
+
+function parseSymbolEndpoint(endpoint: string): { filePath: string; symbol: string | null } {
+  const [filePath, ...symbolParts] = endpoint.split("::");
+  return {
+    filePath,
+    symbol: symbolParts.length > 0 ? symbolParts.join("::") : null,
+  };
+}
+
+function findLineContainingSymbol(content: string, symbol: string): number | null {
+  const cleaned = symbol.split(".").pop()?.split("::").pop()?.trim();
+  if (!cleaned) return null;
+  const lines = content.split("\n");
+  for (let index = 0; index < lines.length; index += 1) {
+    if (lines[index].includes(cleaned)) {
+      return index + 1;
+    }
+  }
+  return null;
 }
 
 /** Get a change indicator for a group based on the refinement response. */

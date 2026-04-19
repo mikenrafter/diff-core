@@ -72,6 +72,7 @@ fn main() {
             commands::refine_groups,
             commands::list_commits,
             commands::open_in_editor,
+            commands::save_file_content,
             commands::check_editors_available,
             commands::save_comment,
             commands::delete_comment,

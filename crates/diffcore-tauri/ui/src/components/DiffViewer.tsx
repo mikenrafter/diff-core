@@ -2,13 +2,25 @@ import { useState, useCallback, useRef, useImperativeHandle, forwardRef, useEffe
 import { DiffEditor } from "@monaco-editor/react";
 import type { FileDiffContent, ReviewComment } from "../types";
 
+export interface EditedHunk {
+  originalStartLine: number;
+  originalEndLine: number;
+  modifiedStartLine: number;
+  modifiedEndLine: number;
+  selectedCode: string;
+}
+
 export interface DiffViewerHandle {
   /** Scroll the modified editor to a line range, select it, and briefly highlight it. */
   scrollToLine: (startLine: number, endLine?: number) => void;
+  /** Return current Monaco diff hunks from the modified side. */
+  getDiffHunks: () => EditedHunk[];
 }
 
 interface DiffViewerProps {
   fileDiff: FileDiffContent | null;
+  /** Whether modified pane is editable. */
+  editable?: boolean;
   /** Whether to render side-by-side (true) or inline/unified (false). Default: true. */
   renderSideBySide?: boolean;
   /** Called when user selects lines and clicks "Comment" in the modified editor. */
@@ -19,10 +31,14 @@ interface DiffViewerProps {
   onGlyphClick?: (commentId: string) => void;
   /** Called when user triggers "Go To Definition" on a word — receives the word under cursor. */
   onGoToDefinition?: (word: string) => void;
+  /** Called when modified content changes so parent can persist edits and sync comments. */
+  onEditedContentChange?: (newContent: string, hunks: EditedHunk[]) => void;
+  /** Called when Monaco recomputes diff hunks for the current file. */
+  onDiffHunksChange?: (hunks: EditedHunk[]) => void;
 }
 
 /** Monaco-based side-by-side diff viewer for the center panel. */
-const DiffViewer = forwardRef<DiffViewerHandle, DiffViewerProps>(function DiffViewer({ fileDiff, onCommentRequest, codeComments, onGlyphClick, onGoToDefinition, renderSideBySide: renderSideBySideProp = true }, ref) {
+const DiffViewer = forwardRef<DiffViewerHandle, DiffViewerProps>(function DiffViewer({ fileDiff, editable = false, onCommentRequest, codeComments, onGlyphClick, onGoToDefinition, renderSideBySide: renderSideBySideProp = true, onEditedContentChange, onDiffHunksChange }, ref) {
   const [selectionRange, setSelectionRange] = useState<{ startLine: number; endLine: number } | null>(null);
   const [commentBtnPos, setCommentBtnPos] = useState<{ top: number; left: number } | null>(null);
   const editorRef = useRef<any>(null);
@@ -31,6 +47,38 @@ const DiffViewer = forwardRef<DiffViewerHandle, DiffViewerProps>(function DiffVi
   goToDefRef.current = onGoToDefinition;
 
   const decorationsRef = useRef<any>(null);
+
+  const buildEditedHunks = useCallback((diffEditor: any, modifiedModel: any): EditedHunk[] => {
+    if (!diffEditor || !modifiedModel) return [];
+    const lineCount = modifiedModel.getLineCount?.() ?? 1;
+    const lineChanges = diffEditor.getLineChanges?.() ?? [];
+    return lineChanges.map((change: any) => {
+      const modifiedStart = change.modifiedStartLineNumber;
+      const modifiedEnd = change.modifiedEndLineNumber;
+      const isDeletionOnly = modifiedStart === 0 || modifiedEnd === 0;
+      const safeStart = isDeletionOnly
+        ? Math.max(1, Math.min(change.originalStartLineNumber ?? 1, lineCount))
+        : Math.max(1, Math.min(modifiedStart, lineCount));
+      const safeEnd = isDeletionOnly
+        ? safeStart
+        : Math.max(safeStart, Math.min(modifiedEnd, lineCount));
+      const selectedCode = isDeletionOnly
+        ? ""
+        : modifiedModel.getValueInRange({
+            startLineNumber: safeStart,
+            startColumn: 1,
+            endLineNumber: safeEnd,
+            endColumn: modifiedModel.getLineMaxColumn(safeEnd),
+          });
+      return {
+        originalStartLine: change.originalStartLineNumber,
+        originalEndLine: change.originalEndLineNumber,
+        modifiedStartLine: safeStart,
+        modifiedEndLine: safeEnd,
+        selectedCode,
+      };
+    });
+  }, []);
 
   const handleEditorMount = useCallback(
     (editor: any) => {
@@ -84,6 +132,30 @@ const DiffViewer = forwardRef<DiffViewerHandle, DiffViewerProps>(function DiffVi
           setCommentBtnPos(null);
         }
       });
+
+      modifiedEditor.onDidChangeModelContent(() => {
+        if (!onEditedContentChange) return;
+        const modifiedModel = modifiedEditor.getModel();
+        if (!modifiedModel) return;
+        const newContent = modifiedModel.getValue();
+        const hunks = buildEditedHunks(editor, modifiedModel);
+        onEditedContentChange(newContent, hunks);
+      });
+
+      editor.onDidUpdateDiff?.(() => {
+        if (!onDiffHunksChange) return;
+        const model = modifiedEditor.getModel();
+        if (!model) return;
+        onDiffHunksChange(buildEditedHunks(editor, model));
+      });
+
+      if (onDiffHunksChange) {
+        setTimeout(() => {
+          const model = modifiedEditor.getModel();
+          if (!model) return;
+          onDiffHunksChange(buildEditedHunks(editor, model));
+        }, 0);
+      }
 
       // Register "Go To Definition" action on both sub-editors
       const registerGoToDef = (subEditor: any) => {
@@ -156,24 +228,63 @@ const DiffViewer = forwardRef<DiffViewerHandle, DiffViewerProps>(function DiffVi
     scrollToLine(startLine: number, endLine?: number) {
       const editor = editorRef.current?.getModifiedEditor?.();
       if (!editor) return;
-      const end = endLine ?? startLine;
+      const model = editor.getModel?.();
+      const lineCount = model?.getLineCount?.() ?? 1;
+      const safeStart = Math.max(1, Math.min(startLine, lineCount));
+      const rawEnd = endLine ?? safeStart;
+      const safeEnd = Math.max(safeStart, Math.min(rawEnd, lineCount));
       // Scroll to the range center
-      editor.revealLineInCenter(startLine);
+      editor.revealLineInCenter(safeStart);
       // Select the entire range so the code block is visually obvious
       editor.setSelection({
-        startLineNumber: startLine,
+        startLineNumber: safeStart,
         startColumn: 1,
-        endLineNumber: end,
-        endColumn: editor.getModel()?.getLineMaxColumn(end) ?? 1,
+        endLineNumber: safeEnd,
+        endColumn: model?.getLineMaxColumn(safeEnd) ?? 1,
       });
       // Add a temporary highlight decoration on top
       const decs = editor.createDecorationsCollection([{
-        range: { startLineNumber: startLine, startColumn: 1, endLineNumber: end, endColumn: 1 },
+        range: { startLineNumber: safeStart, startColumn: 1, endLineNumber: safeEnd, endColumn: 1 },
         options: { isWholeLine: true, className: "comment-scroll-highlight" },
       }]);
       setTimeout(() => decs.clear(), 2500);
     },
-  }), []);
+    getDiffHunks() {
+      const diffEditor = editorRef.current;
+      const modifiedEditor = diffEditor?.getModifiedEditor?.();
+      const modifiedModel = modifiedEditor?.getModel?.();
+      if (!diffEditor || !modifiedModel) return [];
+
+      const lineCount = modifiedModel.getLineCount?.() ?? 1;
+      const lineChanges = diffEditor.getLineChanges?.() ?? [];
+      return lineChanges.map((change: any) => {
+        const modifiedStart = change.modifiedStartLineNumber;
+        const modifiedEnd = change.modifiedEndLineNumber;
+        const isDeletionOnly = modifiedStart === 0 || modifiedEnd === 0;
+        const safeStart = isDeletionOnly
+          ? Math.max(1, Math.min(change.originalStartLineNumber ?? 1, lineCount))
+          : Math.max(1, Math.min(modifiedStart, lineCount));
+        const safeEnd = isDeletionOnly
+          ? safeStart
+          : Math.max(safeStart, Math.min(modifiedEnd, lineCount));
+        const selectedCode = isDeletionOnly
+          ? ""
+          : modifiedModel.getValueInRange({
+              startLineNumber: safeStart,
+              startColumn: 1,
+              endLineNumber: safeEnd,
+              endColumn: modifiedModel.getLineMaxColumn(safeEnd),
+            });
+        return {
+          originalStartLine: change.originalStartLineNumber,
+          originalEndLine: change.originalEndLineNumber,
+          modifiedStartLine: safeStart,
+          modifiedEndLine: safeEnd,
+          selectedCode,
+        };
+      });
+    },
+  }), [buildEditedHunks]);
 
   if (!fileDiff) {
     return (
@@ -192,7 +303,8 @@ const DiffViewer = forwardRef<DiffViewerHandle, DiffViewerProps>(function DiffVi
         language={monacoLang}
         theme="diffcore-dark"
         options={{
-          readOnly: true,
+          readOnly: !editable,
+          originalEditable: false,
           readOnlyMessage: { value: "" },
           renderSideBySide: renderSideBySideProp,
           enableSplitViewResizing: true,

@@ -24,6 +24,7 @@ interface FlowGraphProps {
   edges: FlowEdge[];
   files: FileChange[];
   onNodeClick?: (filePath: string) => void;
+  onEdgeClick?: (sourceEndpoint: string, targetEndpoint: string) => void;
   /** File path of the node to highlight during flow replay. */
   replayNodeId?: string | null;
 }
@@ -79,8 +80,8 @@ function shortPath(path: string): string {
 /** Deduplicate edges to file-level (multiple symbol edges between same files → one edge). */
 function deduplicateEdges(
   edges: FlowEdge[],
-): { from: string; to: string; types: EdgeType[] }[] {
-  const map = new Map<string, EdgeType[]>();
+): { from: string; to: string; types: EdgeType[]; sampleFrom: string; sampleTo: string }[] {
+  const map = new Map<string, { types: EdgeType[]; sampleFrom: string; sampleTo: string }>();
   for (const e of edges) {
     const fromFile = extractFilePath(e.from);
     const toFile = extractFilePath(e.to);
@@ -88,14 +89,20 @@ function deduplicateEdges(
     const key = `${fromFile}→${toFile}`;
     const existing = map.get(key);
     if (existing) {
-      if (!existing.includes(e.edge_type)) existing.push(e.edge_type);
+      if (!existing.types.includes(e.edge_type)) existing.types.push(e.edge_type);
     } else {
-      map.set(key, [e.edge_type]);
+      map.set(key, { types: [e.edge_type], sampleFrom: e.from, sampleTo: e.to });
     }
   }
-  return Array.from(map.entries()).map(([key, types]) => {
+  return Array.from(map.entries()).map(([key, value]) => {
     const [from, to] = key.split("→");
-    return { from, to, types };
+    return {
+      from,
+      to,
+      types: value.types,
+      sampleFrom: value.sampleFrom,
+      sampleTo: value.sampleTo,
+    };
   });
 }
 
@@ -147,6 +154,7 @@ function layoutGraph(
 function buildGraph(
   flowEdges: FlowEdge[],
   files: FileChange[],
+  onEdgeClick?: (sourceEndpoint: string, targetEndpoint: string) => void,
 ): { nodes: Node[]; edges: Edge[] } {
   const fileMap = new Map<string, FileChange>();
   for (const f of files) {
@@ -198,6 +206,9 @@ function buildGraph(
         color,
         hoverDetail,
         dimmed: false,
+        sourceEndpoint: e.sampleFrom,
+        targetEndpoint: e.sampleTo,
+        onEdgeClick,
       },
       style: { stroke: color, strokeWidth: 3 },
       markerEnd: {
@@ -240,6 +251,16 @@ function AnimatedBezierEdge({
   const opacity = dimmed ? 0.15 : 1;
   const label = data?.label as string;
   const hoverDetail = data?.hoverDetail as string;
+  const sourceEndpoint = data?.sourceEndpoint as string | undefined;
+  const targetEndpoint = data?.targetEndpoint as string | undefined;
+  const onEdgeClick = data?.onEdgeClick as
+    | ((source: string, target: string) => void)
+    | undefined;
+
+  const handleEdgeClick = () => {
+    if (!onEdgeClick || !sourceEndpoint || !targetEndpoint) return;
+    onEdgeClick(sourceEndpoint, targetEndpoint);
+  };
 
   return (
     <g
@@ -247,7 +268,14 @@ function AnimatedBezierEdge({
       onMouseLeave={() => setHovered(false)}
     >
       {/* Invisible wider hit area for hover detection */}
-      <path d={edgePath} fill="none" stroke="transparent" strokeWidth={20} style={{ cursor: "pointer" }} />
+      <path
+        d={edgePath}
+        fill="none"
+        stroke="transparent"
+        strokeWidth={20}
+        style={{ cursor: "pointer" }}
+        onClick={handleEdgeClick}
+      />
 
       {/* Visible bezier edge */}
       <path
@@ -289,6 +317,8 @@ function AnimatedBezierEdge({
             fontSize={11}
             fontWeight={500}
             fontFamily="'JetBrains Mono', monospace"
+            style={{ cursor: "pointer" }}
+            onClick={handleEdgeClick}
           >
             {label}
           </text>
@@ -399,10 +429,10 @@ function Legend() {
   );
 }
 
-export default function FlowGraph({ edges, files, onNodeClick, replayNodeId }: FlowGraphProps) {
+export default function FlowGraph({ edges, files, onNodeClick, onEdgeClick, replayNodeId }: FlowGraphProps) {
   const { nodes: initialNodes, edges: initialEdges } = useMemo(
-    () => buildGraph(edges, files),
-    [edges, files],
+    () => buildGraph(edges, files, onEdgeClick),
+    [edges, files, onEdgeClick],
   );
 
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);

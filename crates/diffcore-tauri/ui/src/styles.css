@@ -1735,6 +1735,22 @@ body {
   min-width: 0;
 }
 
+.edge-endpoint {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.edge-endpoint:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
 .edge-arrow {
   color: var(--text-muted);
   flex-shrink: 0;
@@ -3715,11 +3731,31 @@ body {
 .replay-btn {
   width: 28px;
   height: 24px;
-  padding: 0;
+  padding: 0 8px;
   font-size: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.replay-hunk-btn,
+.replay-comment-btn {
+  width: auto;
+  min-width: 76px;
+  padding: 0 8px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+}
+
+.replay-comment-btn {
+  min-width: 68px;
+}
+
+.replay-hunk-status {
+  font-size: 10px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  margin: 0 4px;
 }
 
 .replay-exit {

@@ -536,7 +536,7 @@ async function resolveRenderSideBySide(groupId: string, filePath: string): Promi
   const maxLines = Math.max(linesInHead, linesInBase, 1);
   const density = totalChanged / maxLines;
 
-  return density < 0.3 || density > 0.8;
+  return density > (2/3);
 }
 
 async function safeCountHeadFileLines(filePath: string): Promise<number> {

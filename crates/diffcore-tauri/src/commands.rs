@@ -2012,6 +2012,35 @@ pub fn check_editors_available() -> std::collections::HashMap<String, bool> {
     result
 }
 
+/// Persist edited file content to disk.
+///
+/// Failure modes:
+/// - Returns IO error when the path does not exist or is a directory.
+/// - Returns IO error when the parent directory is missing.
+/// - Returns IO error when the write fails (permissions, disk full, etc).
+#[tauri::command]
+pub fn save_file_content(file_path: String, content: String) -> Result<(), CommandError> {
+    let path = PathBuf::from(&file_path);
+    if !path.exists() {
+        return Err(CommandError::Io(format!("File not found: {}", file_path)));
+    }
+    if !path.is_file() {
+        return Err(CommandError::Io(format!("Path is not a file: {}", file_path)));
+    }
+    let parent = path.parent().ok_or_else(|| {
+        CommandError::Io(format!("Cannot determine parent directory for: {}", file_path))
+    })?;
+    if !parent.exists() {
+        return Err(CommandError::Io(format!(
+            "Parent directory does not exist: {}",
+            parent.display()
+        )));
+    }
+
+    std::fs::write(&path, content)
+        .map_err(|e| CommandError::Io(format!("Failed to write file '{}': {}", file_path, e)))
+}
+
 /// Load config from a repo path, returning both config and optional workdir.
 fn load_config_from_path(repo_path: Option<&str>) -> (DiffcoreConfig, Option<PathBuf>) {
     if let Some(path) = repo_path {
