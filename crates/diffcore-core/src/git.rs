@@ -162,9 +162,16 @@ pub fn diff_staged(repo: &Repository) -> Result<DiffResult, GitError> {
 pub fn diff_unstaged(repo: &Repository) -> Result<DiffResult, GitError> {
     let mut opts = DiffOptions::new();
     opts.context_lines(3);
+    // Include untracked paths so unstaged-vs-staged mode can surface added files.
+    opts.include_untracked(true);
+    opts.recurse_untracked_dirs(true);
+    opts.show_untracked_content(true);
 
-    let diff = repo.diff_index_to_workdir(None, Some(&mut opts))?;
-    let files = extract_file_diffs(repo, &diff)?;
+    let mut diff = repo.diff_index_to_workdir(None, Some(&mut opts))?;
+    find_renames(&mut diff)?;
+    let mut files = extract_file_diffs(repo, &diff)?;
+    append_untracked_workdir_files(repo, &mut files)?;
+    files.sort_by(|a, b| a.path().cmp(b.path()));
 
     Ok(DiffResult {
         files,

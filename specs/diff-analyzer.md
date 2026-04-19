@@ -1784,14 +1784,24 @@ All select/dropdown controls in these workflows MUST match the app theme:
 
 The left pane file rows MUST expose compact metadata optimized for scan speed:
 
-- Each file row MUST show git short status, abbreviated directory prefix, base filename, and extension tag.
-- Canonical visual layout example: `[M] s/m/rust/example-file [RS]`.
+- Each file row MUST show git short status, file classification, file extension, filename, abbreviated folder, and line deltas.
+- Canonical visual layout example: `M H RS example-file: s/m/rust +12 -3`.
+- Literal wrapper punctuation such as `[` and `]` MUST NOT be required for status/extension tokens.
 - Directory prefix compaction SHOULD abbreviate leading directories for dense scanning while preserving enough path context to disambiguate sibling files.
 - Distinct semantic styling is required:
   - status token (`M`, `A`, `D`, etc.) uses highlight foreground/background,
   - directory prefix uses muted gray tone,
   - base filename uses primary foreground,
   - extension tag uses secondary highlight foreground/background.
+
+### 14.13.5 Unstaged-to-Staged Status Coverage
+
+In the `unstaged -> staged` comparison mode, file status coverage MUST include additions and deletions in addition to modifications:
+
+- Modified files MUST surface as `M`.
+- Added files MUST surface as `A`.
+- Deleted files MUST surface as `D`.
+- The mode MUST not silently collapse all statuses to `M`.
 
 ### 14.14 Project Navigation Quick-Pick (Recents + Favorites)
 
@@ -1816,3 +1826,9 @@ Hunk navigation MUST remain deterministic when moving between files:
 - Transitioning from the last hunk of one file to the first hunk of the next file MUST not exhibit race-driven target drift.
 - Pending cross-file hunk targets MUST be resolved only against the intended file's ready hunks.
 - If hunks are not immediately available after file switch, navigation MUST retry in a bounded, fail-safe manner rather than silently landing on incorrect hunks.
+- Hunk navigation MUST be aware of diff rendering mode (`inline` vs `side-by-side`) and navigate to the correct visible location in either mode.
+- Removal-only hunks MUST account for line-offset semantics so navigation does not progressively drift as offsets accumulate.
+- When the user navigates across file boundaries (e.g., next hunk from the final hunk in a file), the target MUST be the first hunk in the next file (or last hunk when moving backward).
+- `diff hunks` and `user edit hunks` are distinct concepts and MUST NOT be conflated.
+- APIs/methods that expose review/navigation hunks MUST use diff-hunk semantics.
+- APIs/methods that expose user-entered local edits MUST use user-edit semantics (for example naming akin to `getUserEdits`), and must not be used as the source of replay navigation.

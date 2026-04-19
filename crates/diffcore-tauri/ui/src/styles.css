@@ -1603,6 +1603,11 @@ body {
   color: var(--text-primary);
 }
 
+.file-folder-sep {
+  color: var(--text-secondary);
+  margin: 0 4px;
+}
+
 .file-ext-token {
   margin-left: 6px;
   font-family: var(--font-mono);

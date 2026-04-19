@@ -8,6 +8,7 @@ export interface EditedHunk {
   modifiedStartLine: number;
   modifiedEndLine: number;
   selectedCode: string;
+  isDeletionOnly?: boolean;
 }
 
 export interface DiffViewerHandle {
@@ -15,6 +16,10 @@ export interface DiffViewerHandle {
   scrollToLine: (startLine: number, endLine?: number) => void;
   /** Return current Monaco diff hunks from the modified side. */
   getDiffHunks: () => EditedHunk[];
+  /** Return user edit hunks relative to the file's initial modified content. */
+  getUserEdits: () => EditedHunk[];
+  /** Scroll to a specific hunk, mode-aware for deletion-only hunks. */
+  scrollToHunk: (hunk: EditedHunk) => void;
   /** Open Monaco find widget for in-file search. */
   openFindWidget: () => void;
 }
@@ -49,17 +54,32 @@ const DiffViewer = forwardRef<DiffViewerHandle, DiffViewerProps>(function DiffVi
   goToDefRef.current = onGoToDefinition;
 
   const decorationsRef = useRef<any>(null);
+  const baselineModifiedContentRef = useRef(fileDiff?.new_content || "");
 
-  const buildEditedHunks = useCallback((diffEditor: any, modifiedModel: any): EditedHunk[] => {
+  useEffect(() => {
+    baselineModifiedContentRef.current = fileDiff?.new_content || "";
+  }, [fileDiff?.path, fileDiff?.new_content]);
+
+  const buildDiffHunks = useCallback((diffEditor: any, modifiedModel: any): EditedHunk[] => {
     if (!diffEditor || !modifiedModel) return [];
     const lineCount = modifiedModel.getLineCount?.() ?? 1;
     const lineChanges = diffEditor.getLineChanges?.() ?? [];
+    let runningOffset = 0;
     return lineChanges.map((change: any) => {
+      const originalStart = change.originalStartLineNumber ?? 0;
+      const originalEnd = change.originalEndLineNumber ?? 0;
       const modifiedStart = change.modifiedStartLineNumber;
       const modifiedEnd = change.modifiedEndLineNumber;
       const isDeletionOnly = modifiedStart === 0 || modifiedEnd === 0;
+      const originalLines = originalStart > 0 && originalEnd > 0
+        ? Math.max(0, originalEnd - originalStart + 1)
+        : 0;
+      const modifiedLines = modifiedStart > 0 && modifiedEnd > 0
+        ? Math.max(0, modifiedEnd - modifiedStart + 1)
+        : 0;
+      const mappedDeletionAnchor = Math.max(1, Math.min(originalStart + runningOffset, lineCount));
       const safeStart = isDeletionOnly
-        ? Math.max(1, Math.min(change.originalStartLineNumber ?? 1, lineCount))
+        ? mappedDeletionAnchor
         : Math.max(1, Math.min(modifiedStart, lineCount));
       const safeEnd = isDeletionOnly
         ? safeStart
@@ -72,14 +92,96 @@ const DiffViewer = forwardRef<DiffViewerHandle, DiffViewerProps>(function DiffVi
             endLineNumber: safeEnd,
             endColumn: modifiedModel.getLineMaxColumn(safeEnd),
           });
+      runningOffset += modifiedLines - originalLines;
+
       return {
-        originalStartLine: change.originalStartLineNumber,
-        originalEndLine: change.originalEndLineNumber,
+        originalStartLine: originalStart,
+        originalEndLine: originalEnd,
         modifiedStartLine: safeStart,
         modifiedEndLine: safeEnd,
         selectedCode,
+        isDeletionOnly,
       };
     });
+  }, []);
+
+  const buildUserEdits = useCallback((modifiedModel: any): EditedHunk[] => {
+    if (!modifiedModel) return [];
+    const baseline = baselineModifiedContentRef.current || "";
+    const current = modifiedModel.getValue?.() ?? "";
+    if (baseline === current) return [];
+
+    const baselineLines = baseline.split("\n");
+    const currentLines = current.split("\n");
+    const hunks: EditedHunk[] = [];
+
+    let i = 0;
+    let j = 0;
+    const LOOKAHEAD = 80;
+
+    while (i < baselineLines.length || j < currentLines.length) {
+      if (i < baselineLines.length && j < currentLines.length && baselineLines[i] === currentLines[j]) {
+        i += 1;
+        j += 1;
+        continue;
+      }
+
+      const startOld = i;
+      const startNew = j;
+      let aligned = false;
+
+      for (let offset = 1; offset <= LOOKAHEAD; offset += 1) {
+        if (
+          j + offset < currentLines.length
+          && i < baselineLines.length
+          && baselineLines[i] === currentLines[j + offset]
+        ) {
+          j += offset;
+          aligned = true;
+          break;
+        }
+        if (
+          i + offset < baselineLines.length
+          && j < currentLines.length
+          && baselineLines[i + offset] === currentLines[j]
+        ) {
+          i += offset;
+          aligned = true;
+          break;
+        }
+        if (
+          i + offset < baselineLines.length
+          && j + offset < currentLines.length
+          && baselineLines[i + offset] === currentLines[j + offset]
+        ) {
+          i += offset;
+          j += offset;
+          aligned = true;
+          break;
+        }
+      }
+
+      if (!aligned) {
+        i = baselineLines.length;
+        j = currentLines.length;
+      }
+
+      const oldEnd = i;
+      const newEnd = j;
+      const modifiedStart = Math.min(startNew + 1, currentLines.length || 1);
+      const modifiedEnd = Math.max(modifiedStart, Math.max(newEnd, startNew + 1));
+      const selectedCode = currentLines.slice(modifiedStart - 1, modifiedEnd).join("\n");
+
+      hunks.push({
+        originalStartLine: Math.min(startOld + 1, baselineLines.length || 1),
+        originalEndLine: Math.max(startOld + 1, oldEnd),
+        modifiedStartLine: modifiedStart,
+        modifiedEndLine: modifiedEnd,
+        selectedCode,
+      });
+    }
+
+    return hunks;
   }, []);
 
   const handleEditorMount = useCallback(
@@ -140,7 +242,7 @@ const DiffViewer = forwardRef<DiffViewerHandle, DiffViewerProps>(function DiffVi
         const modifiedModel = modifiedEditor.getModel();
         if (!modifiedModel) return;
         const newContent = modifiedModel.getValue();
-        const hunks = buildEditedHunks(editor, modifiedModel);
+        const hunks = buildUserEdits(modifiedModel);
         onEditedContentChange(newContent, hunks);
       });
 
@@ -148,14 +250,14 @@ const DiffViewer = forwardRef<DiffViewerHandle, DiffViewerProps>(function DiffVi
         if (!onDiffHunksChange) return;
         const model = modifiedEditor.getModel();
         if (!model) return;
-        onDiffHunksChange(buildEditedHunks(editor, model));
+        onDiffHunksChange(buildDiffHunks(editor, model));
       });
 
       if (onDiffHunksChange) {
         setTimeout(() => {
           const model = modifiedEditor.getModel();
           if (!model) return;
-          onDiffHunksChange(buildEditedHunks(editor, model));
+          onDiffHunksChange(buildDiffHunks(editor, model));
         }, 0);
       }
 
@@ -256,35 +358,45 @@ const DiffViewer = forwardRef<DiffViewerHandle, DiffViewerProps>(function DiffVi
       const modifiedEditor = diffEditor?.getModifiedEditor?.();
       const modifiedModel = modifiedEditor?.getModel?.();
       if (!diffEditor || !modifiedModel) return [];
+      return buildDiffHunks(diffEditor, modifiedModel);
+    },
+    getUserEdits() {
+      const diffEditor = editorRef.current;
+      const modifiedEditor = diffEditor?.getModifiedEditor?.();
+      const modifiedModel = modifiedEditor?.getModel?.();
+      if (!modifiedModel) return [];
+      return buildUserEdits(modifiedModel);
+    },
+    scrollToHunk(hunk: EditedHunk) {
+      const diffEditor = editorRef.current;
+      const modified = diffEditor?.getModifiedEditor?.();
+      const original = diffEditor?.getOriginalEditor?.();
+      if (!modified) return;
 
-      const lineCount = modifiedModel.getLineCount?.() ?? 1;
-      const lineChanges = diffEditor.getLineChanges?.() ?? [];
-      return lineChanges.map((change: any) => {
-        const modifiedStart = change.modifiedStartLineNumber;
-        const modifiedEnd = change.modifiedEndLineNumber;
-        const isDeletionOnly = modifiedStart === 0 || modifiedEnd === 0;
-        const safeStart = isDeletionOnly
-          ? Math.max(1, Math.min(change.originalStartLineNumber ?? 1, lineCount))
-          : Math.max(1, Math.min(modifiedStart, lineCount));
-        const safeEnd = isDeletionOnly
-          ? safeStart
-          : Math.max(safeStart, Math.min(modifiedEnd, lineCount));
-        const selectedCode = isDeletionOnly
-          ? ""
-          : modifiedModel.getValueInRange({
-              startLineNumber: safeStart,
-              startColumn: 1,
-              endLineNumber: safeEnd,
-              endColumn: modifiedModel.getLineMaxColumn(safeEnd),
-            });
-        return {
-          originalStartLine: change.originalStartLineNumber,
-          originalEndLine: change.originalEndLineNumber,
-          modifiedStartLine: safeStart,
-          modifiedEndLine: safeEnd,
-          selectedCode,
-        };
+      const targetEditor = hunk.isDeletionOnly && renderSideBySideProp && original ? original : modified;
+      const model = targetEditor.getModel?.();
+      const lineCount = model?.getLineCount?.() ?? 1;
+      const rawStart = hunk.isDeletionOnly && targetEditor === original
+        ? (hunk.originalStartLine || hunk.modifiedStartLine)
+        : hunk.modifiedStartLine;
+      const rawEnd = hunk.isDeletionOnly && targetEditor === original
+        ? (hunk.originalEndLine || rawStart)
+        : hunk.modifiedEndLine;
+      const safeStart = Math.max(1, Math.min(rawStart || 1, lineCount));
+      const safeEnd = Math.max(safeStart, Math.min(rawEnd || safeStart, lineCount));
+
+      targetEditor.revealLineInCenter(safeStart);
+      targetEditor.setSelection({
+        startLineNumber: safeStart,
+        startColumn: 1,
+        endLineNumber: safeEnd,
+        endColumn: model?.getLineMaxColumn(safeEnd) ?? 1,
       });
+      const decs = targetEditor.createDecorationsCollection([{
+        range: { startLineNumber: safeStart, startColumn: 1, endLineNumber: safeEnd, endColumn: 1 },
+        options: { isWholeLine: true, className: "comment-scroll-highlight" },
+      }]);
+      setTimeout(() => decs.clear(), 2500);
     },
     openFindWidget() {
       const editor = editorRef.current?.getModifiedEditor?.();
@@ -292,7 +404,7 @@ const DiffViewer = forwardRef<DiffViewerHandle, DiffViewerProps>(function DiffVi
       const findAction = editor.getAction?.("actions.find");
       void findAction?.run?.();
     },
-  }), [buildEditedHunks]);
+  }), [buildDiffHunks, buildUserEdits, renderSideBySideProp]);
 
   if (!fileDiff) {
     return (

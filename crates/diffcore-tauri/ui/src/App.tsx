@@ -59,6 +59,9 @@ type ReplayHunk = {
   filePath: string;
   startLine: number;
   endLine: number;
+  originalStartLine: number;
+  originalEndLine: number;
+  isDeletionOnly: boolean;
   selectedCode: string | null;
 };
 type ActivityKind =
@@ -1003,6 +1006,9 @@ export default function App() {
       filePath,
       startLine: h.modifiedStartLine,
       endLine: h.modifiedEndLine,
+      originalStartLine: h.originalStartLine,
+      originalEndLine: h.originalEndLine,
+      isDeletionOnly: !!h.isDeletionOnly,
       selectedCode: h.selectedCode || null,
     }));
   }, []);
@@ -1035,7 +1041,14 @@ export default function App() {
         };
         openFileInTab(hunk.filePath, group.id);
       } else {
-        diffViewerRef.current?.scrollToLine(hunk.startLine, hunk.endLine);
+        diffViewerRef.current?.scrollToHunk?.({
+          originalStartLine: hunk.originalStartLine,
+          originalEndLine: hunk.originalEndLine,
+          modifiedStartLine: hunk.startLine,
+          modifiedEndLine: hunk.endLine,
+          selectedCode: hunk.selectedCode ?? "",
+          isDeletionOnly: hunk.isDeletionOnly,
+        });
       }
 
       const fileStepIndex = group.files.findIndex((f) => f.path === hunk.filePath);
@@ -1109,7 +1122,14 @@ export default function App() {
       const hunk = visible[Math.max(0, chosen)];
       setReplayHunkIndex(Math.max(0, chosen));
       if (hunk) {
-        diffViewerRef.current?.scrollToLine(hunk.startLine, hunk.endLine);
+        diffViewerRef.current?.scrollToHunk?.({
+          originalStartLine: hunk.originalStartLine,
+          originalEndLine: hunk.originalEndLine,
+          modifiedStartLine: hunk.startLine,
+          modifiedEndLine: hunk.endLine,
+          selectedCode: hunk.selectedCode ?? "",
+          isDeletionOnly: hunk.isDeletionOnly,
+        });
       }
     };
 
@@ -4883,12 +4903,13 @@ export default function App() {
                               {replayActive && replayVisited.has(file.path) && (
                                 <span className="replay-visited-check" title="Visited">&#10003;</span>
                               )}
-                              <span className={`file-status-token file-status-${status}`}>[{status}]</span>
+                              <span className={`file-status-token file-status-${status}`}>{status}</span>
                               <span className="file-role" title={file.role}>{roleInitial(file.role)}</span>
+                              <span className="file-ext-token">{compact.extension || "-"}</span>
                               <span className="file-path" title={file.path}>
-                                {compact.dirPrefix && <span className="file-dir-prefix">{compact.dirPrefix}</span>}
                                 <span className="file-base-name">{compact.baseName}</span>
-                                {compact.extension && <span className="file-ext-token">[{compact.extension}]</span>}
+                                <span className="file-folder-sep">:</span>
+                                {compact.dirPrefix && <span className="file-dir-prefix">{compact.dirPrefix}</span>}
                               </span>
                               <span className="file-changes">
                                 +{file.changes.additions} -{file.changes.deletions}
@@ -4994,10 +5015,11 @@ export default function App() {
                                       }}
                                     >
                                       <span className={`file-status-token file-status-${resolveFileShortStatus(f, fileStatusByPath, 1, 1)}`}>{resolveFileShortStatus(f, fileStatusByPath, 1, 1)}</span>
+                                      <span className="file-ext-token">{compact.extension || "-"}</span>
                                       <span className="file-path">
-                                        {compact.dirPrefix && <span className="file-dir-prefix">{compact.dirPrefix}</span>}
                                         <span className="file-base-name">{compact.baseName}</span>
-                                        {compact.extension && <span className="file-ext-token">[{compact.extension}]</span>}
+                                        <span className="file-folder-sep">:</span>
+                                        {compact.dirPrefix && <span className="file-dir-prefix">{compact.dirPrefix}</span>}
                                       </span>
                                     </li>
                                     );
@@ -5024,10 +5046,11 @@ export default function App() {
                               }}
                             >
                               <span className={`file-status-token file-status-${resolveFileShortStatus(f, fileStatusByPath, 1, 1)}`}>{resolveFileShortStatus(f, fileStatusByPath, 1, 1)}</span>
+                              <span className="file-ext-token">{compact.extension || "-"}</span>
                               <span className="file-path">
-                                {compact.dirPrefix && <span className="file-dir-prefix">{compact.dirPrefix}</span>}
                                 <span className="file-base-name">{compact.baseName}</span>
-                                {compact.extension && <span className="file-ext-token">{compact.extension}</span>}
+                                <span className="file-folder-sep">:</span>
+                                {compact.dirPrefix && <span className="file-dir-prefix">{compact.dirPrefix}</span>}
                               </span>
                             </li>
                             );
@@ -5325,7 +5348,14 @@ export default function App() {
                     pendingReplayHunkScrollRef.current = null;
                     setReplayHunkIndex(Math.max(0, chosen));
                     if (hunk) {
-                      diffViewerRef.current?.scrollToLine(hunk.startLine, hunk.endLine);
+                      diffViewerRef.current?.scrollToHunk?.({
+                        originalStartLine: hunk.originalStartLine,
+                        originalEndLine: hunk.originalEndLine,
+                        modifiedStartLine: hunk.startLine,
+                        modifiedEndLine: hunk.endLine,
+                        selectedCode: hunk.selectedCode ?? "",
+                        isDeletionOnly: hunk.isDeletionOnly,
+                      });
                     }
                   }
                 }}
@@ -6358,7 +6388,7 @@ function compactFileLabel(path: string): { dirPrefix: string; baseName: string; 
   const extension = dotIndex > 0 ? filename.slice(dotIndex + 1).toUpperCase() : "";
 
   const abbreviatedDirs = dirs.map((dir, i) => (i === 0 ? abbreviateLeadingSegment(dir) : dir));
-  const dirPrefix = abbreviatedDirs.length > 0 ? `${abbreviatedDirs.join("/")}/` : "";
+  const dirPrefix = abbreviatedDirs.join("/");
 
   return { dirPrefix, baseName, extension };
 }
