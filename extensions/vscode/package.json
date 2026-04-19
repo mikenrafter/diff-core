@@ -57,6 +57,12 @@
         "title": "Show Annotations Panel",
         "category": "diffcore",
         "icon": "$(book)"
+      },
+      {
+        "command": "diffcore.refreshProviderModels",
+        "title": "Refresh Models for Provider",
+        "category": "diffcore",
+        "icon": "$(refresh)"
       }
     ],
     "viewsContainers": {
@@ -128,6 +134,21 @@
           "type": "string",
           "default": "main",
           "description": "Default base branch for analysis."
+        },
+        "diffcore.diffViewMode": {
+          "type": "string",
+          "enum": [
+            "sideBySide",
+            "inline",
+            "dynamic"
+          ],
+          "default": "sideBySide",
+          "description": "Diff layout mode. Dynamic chooses side-by-side for sparse/full-rewrite files and inline for denser targeted changes."
+        },
+        "diffcore.modelsConfigPath": {
+          "type": "string",
+          "default": "~/.diffcore/provider-models.json",
+          "description": "Path to provider model catalog JSON updated by 'diffcore: Refresh Models for Provider'."
         }
       }
     }
