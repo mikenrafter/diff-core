@@ -54,8 +54,9 @@ pub async fn fetch_provider_models(
         }
     }
 
-    // CLI-backed providers: return static lists, no API to call
-    if matches!(provider, "codex" | "claude") {
+    // CLI-backed providers and Copilot (no public /models endpoint) return
+    // static lists — no API to call here.
+    if matches!(provider, "codex" | "claude" | "github_copilot") {
         return Ok(static_models_for_cli_provider(provider));
     }
 
@@ -103,7 +104,7 @@ pub async fn fetch_provider_models_with_key(
         }
     }
 
-    if matches!(provider, "codex" | "claude") {
+    if matches!(provider, "codex" | "claude" | "github_copilot") {
         return Ok(static_models_for_cli_provider(provider));
     }
 
@@ -128,6 +129,7 @@ pub const SUPPORTED_PROVIDERS: &[&str] = &[
     "openai",
     "gemini",
     "openrouter",
+    "github_copilot",
     "codex",
     "claude",
 ];
@@ -149,6 +151,18 @@ fn static_models_for_cli_provider(provider: &str) -> Vec<ModelInfo> {
             ("claude-opus-4-6", "Claude Opus 4.6"),
             ("claude-sonnet-4-6", "Claude Sonnet 4.6"),
             ("claude-haiku-4-5", "Claude Haiku 4.5"),
+        ],
+        "github_copilot" => vec![
+            // GitHub Copilot exposes a curated set of upstream models with no
+            // public listing API — keep this list synced with what Copilot
+            // currently offers in their Chat product.
+            ("gpt-4.1", "GPT-4.1"),
+            ("gpt-5", "GPT-5"),
+            ("o4-mini", "o4-mini"),
+            ("claude-sonnet-4-6", "Claude Sonnet 4.6"),
+            ("claude-opus-4-6", "Claude Opus 4.6"),
+            ("claude-opus-4-7", "Claude Opus 4.7"),
+            ("gemini-2.5-pro", "Gemini 2.5 Pro"),
         ],
         _ => vec![],
     };

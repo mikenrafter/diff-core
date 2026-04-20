@@ -1874,6 +1874,7 @@ pub fn get_llm_settings(repo_path: Option<String>) -> Result<LlmSettings, Comman
                 "openai" => "OPENAI_API_KEY",
                 "gemini" => "GEMINI_API_KEY",
                 "openrouter" => "OPENROUTER_API_KEY",
+                "github_copilot" => "GITHUB_COPILOT_TOKEN",
                 _ => "none",
             };
             if std::env::var(env_var).is_ok() {
@@ -2342,6 +2343,8 @@ fn default_model_for_provider(provider: &str) -> &str {
         "anthropic" => "claude-sonnet-4-6",
         "openai" => "gpt-4.1",
         "gemini" => "gemini-2.5-flash",
+        "openrouter" => "anthropic/claude-sonnet-4-6",
+        "github_copilot" => "gpt-4.1",
         _ => "default",
     }
 }

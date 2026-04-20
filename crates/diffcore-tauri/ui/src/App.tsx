@@ -50,6 +50,7 @@ const PROVIDER_LABELS: Record<LlmProvider, string> = {
   openai: "OpenAI API",
   gemini: "Gemini API",
   openrouter: "OpenRouter",
+  github_copilot: "GitHub Copilot",
 };
 
 type OnboardingStep = "recommended" | "api";
@@ -76,7 +77,7 @@ type ActivityKind =
   | "warning"
   | "error";
 
-const API_PROVIDER_OPTIONS: LlmProvider[] = ["openai", "anthropic", "gemini", "openrouter"];
+const API_PROVIDER_OPTIONS: LlmProvider[] = ["openai", "anthropic", "gemini", "openrouter", "github_copilot"];
 const ACTIVITY_STREAM_LIMIT = 10;
 const COMPARE_TARGET_UNSTAGED = "__DIFFCORE_UNSTAGED__";
 const COMPARE_TARGET_STAGED = "__DIFFCORE_STAGED__";
@@ -156,7 +157,13 @@ const SUBSCRIPTION_BACKENDS: Array<{
 ];
 
 function isApiProvider(provider: string): boolean {
-  return provider === "anthropic" || provider === "openai" || provider === "gemini";
+  return (
+    provider === "anthropic"
+    || provider === "openai"
+    || provider === "gemini"
+    || provider === "openrouter"
+    || provider === "github_copilot"
+  );
 }
 
 /** Three-panel layout: flow groups | diff viewer | annotations */

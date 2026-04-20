@@ -353,7 +353,7 @@ export interface ModelInfo {
 export type DiffViewMode = "side-by-side" | "inline" | "dynamic";
 
 /** Available LLM providers. */
-export const LLM_PROVIDERS = ["codex", "claude", "anthropic", "openai", "gemini", "openrouter"] as const;
+export const LLM_PROVIDERS = ["codex", "claude", "anthropic", "openai", "gemini", "openrouter", "github_copilot"] as const;
 export type LlmProvider = (typeof LLM_PROVIDERS)[number];
 
 /** Static fallback models per provider — used when API listing is unavailable. */
@@ -376,6 +376,15 @@ export const DEFAULT_MODELS_BY_PROVIDER: Record<LlmProvider, string[]> = {
     "deepseek/deepseek-r1",
     "qwen/qwen3-235b-a22b",
     "mistralai/mistral-large-latest",
+  ],
+  github_copilot: [
+    "gpt-4.1",
+    "gpt-5",
+    "o4-mini",
+    "claude-sonnet-4-6",
+    "claude-opus-4-6",
+    "claude-opus-4-7",
+    "gemini-2.5-pro",
   ],
 };
 

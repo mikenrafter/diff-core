@@ -13,6 +13,7 @@ pub mod anthropic;
 pub mod claude_cli;
 pub mod codex_cli;
 pub mod gemini;
+pub mod github_copilot;
 pub mod judge;
 pub mod models;
 pub mod openai;
@@ -390,6 +391,7 @@ pub fn resolve_api_key(config: &LlmConfig, provider: &str) -> Result<String, Llm
         "openai" => "OPENAI_API_KEY",
         "gemini" => "GEMINI_API_KEY",
         "openrouter" => "OPENROUTER_API_KEY",
+        "github_copilot" => "GITHUB_COPILOT_TOKEN",
         other => return Err(LlmError::UnsupportedProvider(other.to_string())),
     };
 
@@ -479,6 +481,7 @@ pub fn create_provider_for_workdir(
             || std::env::var("OPENAI_API_KEY").is_ok()
             || std::env::var("GEMINI_API_KEY").is_ok()
             || std::env::var("OPENROUTER_API_KEY").is_ok()
+            || std::env::var("GITHUB_COPILOT_TOKEN").is_ok()
         {
             "anthropic"
         } else {
@@ -530,6 +533,13 @@ pub fn create_provider_for_workdir(
                 .as_deref()
                 .unwrap_or("anthropic/claude-sonnet-4-6");
             Ok(Box::new(openrouter::OpenRouterProvider::new(
+                api_key,
+                model.to_string(),
+            )))
+        }
+        "github_copilot" => {
+            let model = config.model.as_deref().unwrap_or("gpt-4.1");
+            Ok(Box::new(github_copilot::GitHubCopilotProvider::new(
                 api_key,
                 model.to_string(),
             )))
