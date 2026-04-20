@@ -1,213 +1,486 @@
-//! Tauri IPC commands — bridge between the React frontend and diffcore-core.
-//!
-//! Each `#[tauri::command]` function is callable from the frontend via `invoke()`.
+#![deny(clippy::unwrap_used)]
+#![deny(clippy::expect_used)]
+#![deny(clippy::panic)]
+#![deny(clippy::todo)]
+#![deny(clippy::unimplemented)]
+#![deny(clippy::dbg_macro)]
+#![deny(clippy::print_stdout)]
+#![deny(clippy::print_stderr)]
 
-use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::process;
 
-use grep_regex::RegexMatcherBuilder;
-use grep_searcher::{sinks, SearcherBuilder};
-use ignore::WalkBuilder;
-use log::warn;
-use tauri::Emitter;
+use clap::{Parser, Subcommand, ValueEnum};
+use git2::Repository;
+use log::{error, info, warn};
 
-use crate::activity_stream::{self, ActivityEntry, JobHandle};
 use diffcore_core::cache;
 use diffcore_core::cluster;
 use diffcore_core::config::DiffcoreConfig;
 use diffcore_core::entrypoint;
+use diffcore_core::eval;
 use diffcore_core::flow::{self, FlowConfig};
 use diffcore_core::git;
 use diffcore_core::graph::SymbolGraph;
 use diffcore_core::llm;
 use diffcore_core::llm::refinement;
-use diffcore_core::llm::schema::{Pass1Response, Pass2Response, RefinementResponse};
 use diffcore_core::output::{self, build_analysis_output};
 use diffcore_core::pipeline;
 use diffcore_core::rank;
 use diffcore_core::types::{AnalysisOutput, GroupRankInput};
 
-/// Application state shared across commands.
-pub struct AppState {
-    /// The most recent analysis result, available for subsequent queries.
-    pub last_analysis: Mutex<Option<AnalysisOutput>>,
-    /// Cached diff result from the most recent analysis, for instant file diff lookups.
-    pub last_diff: Mutex<Option<CachedDiff>>,
-    /// Background LLM job manager for live SSE activity streams.
-    pub activity_manager: Arc<activity_stream::ActivityManager>,
-    /// Base URL for the embedded localhost SSE server.
-    pub activity_stream_base_url: Mutex<Option<String>>,
-    /// Cache key from the most recent analysis, for refinement cache lookups.
-    pub last_cache_key: Mutex<Option<String>>,
-    /// Path to the currently watched manifest file.
-    pub watched_manifest_path: Mutex<Option<PathBuf>>,
+#[derive(Parser)]
+#[command(
+    name = "diffcore",
+    about = "Semantic diff review tool with ranked data-flow grouping"
+)]
+#[command(version)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
 }
 
-/// Cached diff result with the parameters that produced it, for cache invalidation.
-pub struct CachedDiff {
-    pub repo_path: PathBuf,
-    pub base: Option<String>,
-    pub diff_result: git::DiffResult,
+#[derive(Subcommand)]
+enum Commands {
+    /// Analyze a diff and produce semantic flow groups
+    Analyze(AnalyzeArgs),
+    /// Launch an external diff tool for a flow group's files
+    Launch(LaunchArgs),
+    /// Run the eval suite against synthetic fixture codebases
+    Eval(EvalArgs),
+    /// Check that every file in each repo's diff is classified in the golden expectations.
+    /// Exits with code 1 if any repo has unclassified files.
+    LintGoldens(LintGoldensArgs),
+    /// Export flow groupings as an editable manifest JSON file
+    ExportGroups(ExportGroupsArgs),
+    /// Import flow groupings from a manifest JSON file
+    ImportGroups(ImportGroupsArgs),
+    /// List available models for an LLM provider (Anthropic, OpenRouter, etc.)
+    ListModels(ListModelsArgs),
+    /// Embed file diffs using local code embeddings and show pairwise similarity.
+    /// Requires the `embeddings` feature flag.
+    #[cfg(feature = "embeddings")]
+    EmbedDiff(EmbedDiffArgs),
 }
 
-impl AppState {
-    pub fn new() -> Self {
-        Self {
-            last_analysis: Mutex::new(None),
-            last_diff: Mutex::new(None),
-            activity_manager: Arc::new(activity_stream::ActivityManager::new()),
-            activity_stream_base_url: Mutex::new(None),
-            last_cache_key: Mutex::new(None),
-            watched_manifest_path: Mutex::new(None),
-        }
-    }
-
-    pub fn init_activity_stream(&self) -> Result<(), CommandError> {
-        let mut base_url = self
-            .activity_stream_base_url
-            .lock()
-            .map_err(|e| CommandError::Analysis(format!("Lock poisoned: {}", e)))?;
-        if base_url.is_none() {
-            *base_url = Some(
-                activity_stream::spawn_sse_server(Arc::clone(&self.activity_manager))
-                    .map_err(|e| CommandError::Io(format!("Failed to start SSE server: {}", e)))?,
-            );
-        }
-        Ok(())
-    }
-
-    pub fn create_llm_job(
-        &self,
-        operation: &str,
-        provider: &str,
-        model: &str,
-        title: &str,
-    ) -> Result<(JobHandle, AsyncLlmJobStart), CommandError> {
-        self.init_activity_stream()?;
-        let base_url = self
-            .activity_stream_base_url
-            .lock()
-            .map_err(|e| CommandError::Analysis(format!("Lock poisoned: {}", e)))?
-            .clone()
-            .ok_or_else(|| {
-                CommandError::Io("Activity SSE server was not initialized".to_string())
-            })?;
-
-        let manager = Arc::clone(&self.activity_manager);
-        let operation = operation.to_string();
-        let provider = provider.to_string();
-        let model = model.to_string();
-        let title = title.to_string();
-        let job_operation = operation.clone();
-        let job_provider = provider.clone();
-        let job_model = model.clone();
-        let job_title = title.clone();
-
-        let handle = tauri::async_runtime::block_on(async move {
-            manager
-                .create_job(job_operation, job_provider, job_model, job_title)
-                .await
-        });
-
-        let start = AsyncLlmJobStart {
-            job_id: handle.job_id().to_string(),
-            stream_url: format!("{}/llm/jobs/{}/events", base_url, handle.job_id()),
-            operation,
-            provider,
-            model,
-            title,
-        };
-
-        Ok((handle, start))
-    }
-}
-
-/// Error type for Tauri commands — must implement `Into<tauri::InvokeError>`.
-#[derive(Debug, thiserror::Error)]
-pub enum CommandError {
-    #[error("Git error: {0}")]
-    Git(String),
-    #[error("Analysis error: {0}")]
-    Analysis(String),
-    #[error("Config error: {0}")]
-    Config(String),
-    #[error("IO error: {0}")]
-    Io(String),
-    #[error("LLM error: {0}")]
-    Llm(String),
-    #[error("Network error: {0}")]
-    Network(String),
-}
-
-impl serde::Serialize for CommandError {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(&self.to_string())
-    }
-}
-
-/// Analyze a git diff and return semantic flow groups.
-///
-/// This is the primary IPC command — equivalent to `diffcore analyze` in the CLI.
-/// When `pr_preview` is true, uses merge-base diff (shows what the branch introduces
-/// relative to where it diverged from the base).
-#[tauri::command]
-pub fn analyze(
-    repo_path: String,
+#[derive(Parser)]
+struct AnalyzeArgs {
+    /// Base ref for branch comparison (e.g., "main")
+    #[arg(long)]
     base: Option<String>,
+
+    /// Head ref for branch comparison (e.g., "feature-branch")
+    #[arg(long)]
     head: Option<String>,
+
+    /// Commit range (e.g., "HEAD~5..HEAD")
+    #[arg(long)]
     range: Option<String>,
+
+    /// Analyze staged changes
+    #[arg(long)]
     staged: bool,
+
+    /// Analyze unstaged changes
+    #[arg(long)]
     unstaged: bool,
-    pr_preview: Option<bool>,
-    include_uncommitted: Option<bool>,
-    state: tauri::State<'_, AppState>,
-) -> Result<AnalysisOutput, CommandError> {
-    let repo_path = PathBuf::from(&repo_path);
-    let repo_path = std::fs::canonicalize(&repo_path)
-        .map_err(|e| CommandError::Io(format!("Invalid repo path: {}", e)))?;
 
-    let repo = git2::Repository::discover(&repo_path)
-        .map_err(|e| CommandError::Git(format!("Not a git repository: {}", e)))?;
+    /// Include uncommitted working tree changes in branch comparisons
+    #[arg(long)]
+    include_uncommitted: bool,
 
+    /// Exclude uncommitted changes (only show committed branch diff)
+    #[arg(long, conflicts_with = "include_uncommitted")]
+    no_include_uncommitted: bool,
+
+    /// Output file path (defaults to stdout)
+    #[arg(short, long)]
+    output: Option<PathBuf>,
+
+    /// Enable LLM annotation (Pass 1: overview)
+    #[arg(long)]
+    annotate: bool,
+
+    /// Enable LLM refinement pass (overrides config)
+    #[arg(long)]
+    refine: bool,
+
+    /// Model for refinement pass (e.g., "gpt-4.1", "claude-sonnet-4-6")
+    #[arg(long)]
+    refine_model: Option<String>,
+
+    /// Disable disk-persistent IR parse cache
+    #[arg(long)]
+    no_cache: bool,
+
+    /// Path to the git repository (defaults to current directory)
+    #[arg(long, default_value = ".")]
+    repo: PathBuf,
+}
+
+/// Supported external diff tools.
+#[derive(Debug, Clone, ValueEnum)]
+enum DiffTool {
+    /// Beyond Compare
+    Bcompare,
+    /// Meld
+    Meld,
+    /// KDiff3
+    Kdiff3,
+    /// VS Code
+    Code,
+    /// macOS FileMerge
+    Opendiff,
+}
+
+impl DiffTool {
+    /// Returns the executable name for this diff tool.
+    fn executable(&self) -> &str {
+        match self {
+            DiffTool::Bcompare => "bcompare",
+            DiffTool::Meld => "meld",
+            DiffTool::Kdiff3 => "kdiff3",
+            DiffTool::Code => "code",
+            DiffTool::Opendiff => "opendiff",
+        }
+    }
+
+    /// Returns the display name for this diff tool.
+    fn display_name(&self) -> &str {
+        match self {
+            DiffTool::Bcompare => "Beyond Compare",
+            DiffTool::Meld => "Meld",
+            DiffTool::Kdiff3 => "KDiff3",
+            DiffTool::Code => "VS Code",
+            DiffTool::Opendiff => "FileMerge",
+        }
+    }
+}
+
+#[derive(Parser)]
+struct LaunchArgs {
+    /// External diff tool to use
+    #[arg(long, value_enum)]
+    tool: DiffTool,
+
+    /// Flow group ID to open (e.g., "group_1")
+    #[arg(long)]
+    group: String,
+
+    /// Path to the analysis JSON file (output of `diffcore analyze`)
+    #[arg(long)]
+    input: PathBuf,
+
+    /// Path to the git repository (defaults to current directory)
+    #[arg(long, default_value = ".")]
+    repo: PathBuf,
+}
+
+#[derive(Parser)]
+struct EvalArgs {
+    /// Run only this fixture (e.g., "ts-express", "python-fastapi")
+    #[arg(long)]
+    fixture: Option<String>,
+
+    /// Path to a repo eval manifest (TOML). When provided, runs repo-based eval
+    /// instead of synthetic fixtures.
+    #[arg(long)]
+    manifest: Option<PathBuf>,
+
+    /// Output format: "text", "json", or "html"
+    #[arg(long, default_value = "text")]
+    format: String,
+
+    /// Minimum acceptable overall score (exit code 1 if below)
+    #[arg(long, default_value = "0.50")]
+    min_score: f64,
+
+    /// Path to score history file (JSONL) for regression tracking
+    #[arg(long)]
+    history_file: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+struct LintGoldensArgs {
+    /// Path to the repo eval manifest (TOML)
+    #[arg(long)]
+    manifest: PathBuf,
+
+    /// Minimum required file coverage (0.0–1.0). Default 1.0 = every file must be classified.
+    #[arg(long, default_value = "1.0")]
+    min_coverage: f64,
+}
+
+#[derive(Parser)]
+struct ExportGroupsArgs {
+    /// Path to the analysis JSON to export groups from (default: run fresh analysis)
+    #[arg(long, short)]
+    input: Option<PathBuf>,
+
+    /// Output path for the groups manifest (default: stdout)
+    #[arg(long, short)]
+    output: Option<PathBuf>,
+
+    /// Path to the git repository
+    #[arg(long, default_value = ".")]
+    repo: PathBuf,
+
+    /// Base ref for analysis (when no --input given)
+    #[arg(long, default_value = "main")]
+    base: String,
+}
+
+#[derive(Parser)]
+struct ImportGroupsArgs {
+    /// Path to the groups manifest JSON
+    #[arg(long, short)]
+    input: PathBuf,
+
+    /// Output path for the modified analysis JSON (default: stdout)
+    #[arg(long, short)]
+    output: Option<PathBuf>,
+
+    /// Path to the git repository
+    #[arg(long, default_value = ".")]
+    repo: PathBuf,
+
+    /// Base ref for the underlying analysis
+    #[arg(long, default_value = "main")]
+    base: String,
+}
+
+#[derive(Parser)]
+struct ListModelsArgs {
+    /// LLM provider to list models for (anthropic, openrouter, openai, gemini, github_copilot, codex, claude)
+    #[arg(long)]
+    provider: String,
+
+    /// Bypass the 24-hour cache and fetch fresh model lists from the provider API
+    #[arg(long)]
+    refresh: bool,
+}
+
+#[cfg(feature = "embeddings")]
+#[derive(Parser)]
+struct EmbedDiffArgs {
+    /// Path to the git repository
+    #[arg(long, default_value = ".")]
+    repo: PathBuf,
+
+    /// Base ref (e.g., commit SHA)
+    #[arg(long)]
+    base: String,
+
+    /// Head ref (e.g., commit SHA)
+    #[arg(long)]
+    head: String,
+
+    /// Similarity threshold for clustering (0.0–1.0)
+    #[arg(long, default_value = "0.75")]
+    threshold: f32,
+
+    /// Output format: "text" or "json"
+    #[arg(long, default_value = "text")]
+    format: String,
+}
+
+fn main() {
+    env_logger::init();
+    let cli = Cli::parse();
+
+    match cli.command {
+        Commands::Analyze(args) => {
+            if let Err(e) = run_analyze(args) {
+                error!("Error: {}", e);
+                process::exit(1);
+            }
+        }
+        Commands::Launch(args) => {
+            if let Err(e) = run_launch(args) {
+                error!("Error: {}", e);
+                process::exit(1);
+            }
+        }
+        Commands::Eval(args) => {
+            run_eval_command(args);
+        }
+        Commands::LintGoldens(args) => {
+            run_lint_goldens(args);
+        }
+        Commands::ExportGroups(args) => {
+            if let Err(e) = run_export_groups(args) {
+                error!("Error: {}", e);
+                process::exit(1);
+            }
+        }
+        Commands::ImportGroups(args) => {
+            if let Err(e) = run_import_groups(args) {
+                error!("Error: {}", e);
+                process::exit(1);
+            }
+        }
+        Commands::ListModels(args) => {
+            if let Err(e) = run_list_models(args) {
+                error!("Error: {}", e);
+                process::exit(1);
+            }
+        }
+        #[cfg(feature = "embeddings")]
+        Commands::EmbedDiff(args) => {
+            if let Err(e) = run_embed_diff(args) {
+                error!("Error: {}", e);
+                process::exit(1);
+            }
+        }
+    }
+}
+
+/// Run analysis and return the output (without writing or LLM steps).
+fn run_analyze_and_return(args: AnalyzeArgs) -> Result<AnalysisOutput, Box<dyn std::error::Error>> {
+    let repo_path = std::fs::canonicalize(&args.repo)?;
+    let repo =
+        Repository::discover(&repo_path).map_err(|e| format!("Not a git repository: {}", e))?;
     let workdir = repo
         .workdir()
-        .ok_or_else(|| CommandError::Git("Bare repositories are not supported".to_string()))?
+        .ok_or("Bare repositories are not supported")?
+        .to_path_buf();
+    let config = DiffcoreConfig::load_with_global_llm_from_dir(&workdir)
+        .map_err(|e| format!("Config error: {}", e))?;
+
+    let include_uncommitted = if args.include_uncommitted {
+        true
+    } else if args.no_include_uncommitted {
+        false
+    } else {
+        config.diff.include_uncommitted
+    };
+
+    let (diff_result, diff_source) = extract_diff(&repo, &args, include_uncommitted)?;
+
+    if diff_result.files.is_empty() {
+        return Ok(AnalysisOutput {
+            version: "1.0.0".to_string(),
+            diff_source,
+            summary: diffcore_core::types::AnalysisSummary {
+                total_files_changed: 0,
+                total_groups: 0,
+                languages_detected: vec![],
+                frameworks_detected: vec![],
+            },
+            groups: vec![],
+            infrastructure_group: None,
+            annotations: None,
+        });
+    }
+
+    let cache_key = cache::compute_cache_key(&diff_result);
+    if let Some(cached) = cache::load_cached(&workdir, &cache_key) {
+        return Ok(cached);
+    }
+
+    let file_inputs: Vec<(&str, &str)> = diff_result
+        .files
+        .iter()
+        .filter_map(|file_diff| {
+            let content = file_diff
+                .new_content
+                .as_deref()
+                .or(file_diff.old_content.as_deref())?;
+            let path = file_diff.path();
+            if config.is_ignored(path) {
+                return None;
+            }
+            Some((path, content))
+        })
+        .collect();
+    let parsed_files = pipeline::parse_files_parallel(&file_inputs);
+    let workspace_map = diffcore_core::graph::build_workspace_map(&workdir);
+    let mut graph = SymbolGraph::build_with_workspace(&parsed_files, &workspace_map);
+    let entrypoints = entrypoint::detect_entrypoints(&parsed_files);
+    let flow_analysis = flow::analyze_data_flow(&parsed_files, &FlowConfig::default());
+    flow::enrich_graph(&mut graph, &flow_analysis);
+    let changed_files: Vec<String> = diff_result
+        .files
+        .iter()
+        .filter(|f| !config.is_ignored(f.path()))
+        .map(|f| f.path().to_string())
+        .collect();
+    let cluster_result = cluster::cluster_files(&graph, &entrypoints, &changed_files);
+    let weights = config.ranking.clone();
+    let rank_inputs: Vec<GroupRankInput> = cluster_result
+        .groups
+        .iter()
+        .map(|group| {
+            let risk_flags = output::compute_group_risk_flags(
+                &group
+                    .files
+                    .iter()
+                    .map(|f| f.path.as_str())
+                    .collect::<Vec<_>>(),
+            );
+            let total_add: u32 = group.files.iter().map(|f| f.changes.additions).sum();
+            let total_del: u32 = group.files.iter().map(|f| f.changes.deletions).sum();
+            GroupRankInput {
+                group_id: group.id.clone(),
+                risk: rank::compute_risk_score(
+                    risk_flags.has_schema_change,
+                    risk_flags.has_api_change,
+                    risk_flags.has_auth_change,
+                    false,
+                ),
+                centrality: 0.5,
+                surface_area: rank::compute_surface_area(total_add, total_del, 1000),
+                uncertainty: if risk_flags.has_test_only { 0.1 } else { 0.5 },
+            }
+        })
+        .collect();
+    let ranked = rank::rank_groups(&rank_inputs, &weights);
+
+    let analysis_output = build_analysis_output(
+        &diff_result,
+        diff_source,
+        &parsed_files,
+        &cluster_result,
+        &ranked,
+    );
+    cache::store_cached(&workdir, &cache_key, &analysis_output);
+    Ok(analysis_output)
+}
+
+fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::error::Error>> {
+    // Resolve repo path
+    let repo_path = std::fs::canonicalize(&args.repo)?;
+    let repo =
+        Repository::discover(&repo_path).map_err(|e| format!("Not a git repository: {}", e))?;
+    let workdir = repo
+        .workdir()
+        .ok_or("Bare repositories are not supported")?
         .to_path_buf();
 
     // Load config
-    let config = DiffcoreConfig::load_with_global_llm_from_dir(&workdir)
-        .map_err(|e| CommandError::Config(format!("{}", e)))?;
+    let mut config = DiffcoreConfig::load_with_global_llm_from_dir(&workdir)
+        .map_err(|e| format!("Config error: {}", e))?;
 
-    // Resolve include_uncommitted: UI override > config > default (true)
-    let effective_include_uncommitted = include_uncommitted.unwrap_or(config.diff.include_uncommitted);
+    // Apply CLI overrides for refinement
+    if args.refine {
+        config.llm.refinement.enabled = true;
+    }
+    if let Some(ref model) = args.refine_model {
+        config.llm.refinement.enabled = true;
+        config.llm.refinement.model = Some(model.clone());
+    }
+
+    // Resolve include_uncommitted: CLI flag > config > default (true)
+    let include_uncommitted = if args.include_uncommitted {
+        true
+    } else if args.no_include_uncommitted {
+        false
+    } else {
+        config.diff.include_uncommitted
+    };
 
     // Extract diff
-    let (diff_result, diff_source) = extract_diff(
-        &repo,
-        base.clone(),
-        head,
-        range,
-        staged,
-        unstaged,
-        pr_preview.unwrap_or(false),
-        effective_include_uncommitted,
-    )?;
-
-    // Cache the diff result for subsequent get_file_diff() calls
-    match state.last_diff.lock() {
-        Ok(mut cached) => {
-            *cached = Some(CachedDiff {
-                repo_path: repo_path.clone(),
-                base: base,
-                diff_result: diff_result.clone(),
-            });
-        }
-        Err(e) => warn!("Failed to update last_diff state (lock poisoned): {}", e),
-    }
+    let (diff_result, diff_source) = extract_diff(&repo, &args, include_uncommitted)?;
 
     if diff_result.files.is_empty() {
         let empty_output = AnalysisOutput {
@@ -223,30 +496,15 @@ pub fn analyze(
             infrastructure_group: None,
             annotations: None,
         };
-        match state.last_analysis.lock() {
-            Ok(mut last) => *last = Some(empty_output.clone()),
-            Err(e) => warn!(
-                "Failed to update last_analysis state (lock poisoned): {}",
-                e
-            ),
-        }
-        return Ok(empty_output);
+        return write_output(&empty_output, args.output.as_deref());
     }
 
-    // Check cache for previously computed results
+    // Check cache (skip if LLM annotation or refinement requested — those are additive)
     let cache_key = cache::compute_cache_key(&diff_result);
-    if let Some(cached) = cache::load_cached(&workdir, &cache_key) {
-        match state.last_analysis.lock() {
-            Ok(mut last) => *last = Some(cached.clone()),
-            Err(e) => warn!(
-                "Failed to update last_analysis state (lock poisoned): {}",
-                e
-            ),
+    if !args.annotate && !args.refine && args.refine_model.is_none() {
+        if let Some(cached) = cache::load_cached(&workdir, &cache_key) {
+            return write_output(&cached, args.output.as_deref());
         }
-        if let Ok(mut key) = state.last_cache_key.lock() {
-            *key = Some(cache_key);
-        }
-        return Ok(cached);
     }
 
     // Parse all changed files in parallel
@@ -266,6 +524,19 @@ pub fn analyze(
         })
         .collect();
     let parsed_files = pipeline::parse_files_parallel(&file_inputs);
+
+    // Populate the disk-persistent IR cache (so future runs benefit).
+    // Loading the cache is skipped when --no-cache is passed.
+    let disk_cache = if !args.no_cache {
+        let dc = pipeline::DiskIrCache::load(&workdir);
+        let engine = diffcore_core::query_engine::QueryEngine::new()
+            .map_err(|e| format!("QueryEngine init failed: {}", e))?;
+        let (_ir_files, _ir_errors) =
+            pipeline::parse_all_to_ir(&engine, &file_inputs, Some(dc.memory()));
+        Some(dc)
+    } else {
+        None
+    };
 
     // Build workspace map for monorepo cross-package import resolution
     let workspace_map = diffcore_core::graph::build_workspace_map(&workdir);
@@ -322,8 +593,8 @@ pub fn analyze(
 
     let ranked = rank::rank_groups(&rank_inputs, &weights);
 
-    // Build output
-    let analysis_output = build_analysis_output(
+    // Build initial output
+    let mut analysis_output = build_analysis_output(
         &diff_result,
         diff_source,
         &parsed_files,
@@ -331,175 +602,178 @@ pub fn analyze(
         &ranked,
     );
 
-    // Cache the deterministic analysis result
+    // Cache the deterministic analysis result (before LLM steps)
     cache::store_cached(&workdir, &cache_key, &analysis_output);
 
-    // Store cache key for refinement cache lookups
-    if let Ok(mut key) = state.last_cache_key.lock() {
-        *key = Some(cache_key);
-    }
-
-    // Store for subsequent queries
-    match state.last_analysis.lock() {
-        Ok(mut last) => *last = Some(analysis_output.clone()),
-        Err(e) => warn!(
-            "Failed to update last_analysis state (lock poisoned): {}",
-            e
-        ),
-    }
-
-    Ok(analysis_output)
-}
-
-/// Get the most recent analysis result without re-running.
-#[tauri::command]
-pub fn get_last_analysis(
-    state: tauri::State<'_, AppState>,
-) -> Result<Option<AnalysisOutput>, CommandError> {
-    let last = state
-        .last_analysis
-        .lock()
-        .map_err(|e| CommandError::Analysis(format!("Lock poisoned: {}", e)))?;
-    Ok(last.clone())
-}
-
-/// Generate a Mermaid diagram for a specific group by ID.
-#[tauri::command]
-pub fn get_mermaid(
-    group_id: String,
-    state: tauri::State<'_, AppState>,
-) -> Result<String, CommandError> {
-    let last = state
-        .last_analysis
-        .lock()
-        .map_err(|e| CommandError::Analysis(format!("Lock poisoned: {}", e)))?;
-
-    let analysis = last.as_ref().ok_or_else(|| {
-        CommandError::Analysis("No analysis available. Run analyze first.".into())
-    })?;
-
-    let group = analysis
-        .groups
-        .iter()
-        .find(|g| g.id == group_id)
-        .ok_or_else(|| CommandError::Analysis(format!("Group '{}' not found", group_id)))?;
-
-    Ok(output::generate_mermaid(group))
-}
-
-/// Get the diff content (old + new) for a specific file.
-/// Returns the raw old and new content for the Monaco diff viewer.
-/// Uses the cached DiffResult from the last `analyze()` call when parameters match,
-/// avoiding redundant git diff extraction for every file navigation.
-#[tauri::command]
-pub fn get_file_diff(
-    repo_path: String,
-    file_path: String,
-    base: Option<String>,
-    head: Option<String>,
-    range: Option<String>,
-    staged: bool,
-    unstaged: bool,
-    include_uncommitted: Option<bool>,
-    state: tauri::State<'_, AppState>,
-) -> Result<FileDiffContent, CommandError> {
-    // Try to use cached diff from the last analyze() call
-    let cached_file = {
-        let repo_path_buf = PathBuf::from(&repo_path);
-        let repo_path_buf = std::fs::canonicalize(&repo_path_buf).ok();
-        let cached = state.last_diff.lock().ok();
-        cached.and_then(|guard| {
-            let c = guard.as_ref()?;
-            let rp = repo_path_buf.as_ref()?;
-            if &c.repo_path == rp && c.base == base {
-                c.diff_result
-                    .files
-                    .iter()
-                    .find(|f| f.path() == file_path)
-                    .map(|f| FileDiffContent {
-                        path: file_path.clone(),
-                        old_content: f.old_content.clone().unwrap_or_default(),
-                        new_content: f.new_content.clone().unwrap_or_default(),
-                        language: detect_language(&f.path()),
-                    })
-            } else {
-                None
+    // Apply LLM refinement if enabled
+    if config.llm.refinement.enabled {
+        let rt = tokio::runtime::Runtime::new()?;
+        match rt.block_on(run_refinement(&config, &workdir, &mut analysis_output)) {
+            Ok(()) => {}
+            Err(e) => {
+                warn!("LLM refinement failed, using deterministic groups: {}", e);
             }
-        })
+        }
+    }
+
+    // Apply LLM annotation if requested
+    if args.annotate {
+        let rt = tokio::runtime::Runtime::new()?;
+        match rt.block_on(run_annotation(&config, &workdir, &mut analysis_output)) {
+            Ok(()) => {}
+            Err(e) => {
+                warn!("LLM annotation failed: {}", e);
+            }
+        }
+    }
+
+    // Flush the IR disk cache (writes new entries, evicts if over limit).
+    if let Some(ref dc) = disk_cache {
+        dc.flush();
+    }
+
+    write_output(&analysis_output, args.output.as_deref())
+}
+
+fn extract_diff(
+    repo: &Repository,
+    args: &AnalyzeArgs,
+    include_uncommitted: bool,
+) -> Result<(git::DiffResult, diffcore_core::types::DiffSource), Box<dyn std::error::Error>> {
+    if let Some(ref range) = args.range {
+        let diff = git::diff_range(repo, range)?;
+        let source =
+            output::diff_source_range(range, diff.base_sha.as_deref(), diff.head_sha.as_deref());
+        Ok((diff, source))
+    } else if args.staged {
+        let diff = git::diff_staged(repo)?;
+        let source = output::diff_source_staged();
+        Ok((diff, source))
+    } else if args.unstaged {
+        let diff = git::diff_unstaged(repo)?;
+        let source = output::diff_source_unstaged();
+        Ok((diff, source))
+    } else {
+        // Branch comparison (default) — auto-detect default branch if not specified
+        let detected_default = if args.base.is_none() {
+            git::detect_default_branch(repo).ok()
+        } else {
+            None
+        };
+        let base = args
+            .base
+            .as_deref()
+            .or(detected_default.as_deref())
+            .unwrap_or("main");
+        let head = args.head.as_deref().unwrap_or("HEAD");
+        if include_uncommitted {
+            let diff = git::diff_branch_to_workdir(repo, base)?;
+            let source =
+                output::diff_source_branch_with_worktree(base, diff.base_sha.as_deref());
+            Ok((diff, source))
+        } else {
+            let selected = git::diff_refs_with_worktree_fallback(repo, base, head)?;
+            let source = if selected.used_worktree_fallback {
+                output::diff_source_worktree(
+                    Some(base),
+                    Some(head),
+                    selected.comparison_base_sha.as_deref(),
+                    selected.comparison_head_sha.as_deref(),
+                )
+            } else {
+                output::diff_source_branch(
+                    base,
+                    head,
+                    selected.diff.base_sha.as_deref(),
+                    selected.diff.head_sha.as_deref(),
+                )
+            };
+            Ok((selected.diff, source))
+        }
+    }
+}
+
+async fn run_refinement(
+    config: &DiffcoreConfig,
+    workdir: &std::path::Path,
+    analysis_output: &mut AnalysisOutput,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Build a LlmConfig for the refinement provider
+    let refinement_llm_config = diffcore_core::config::LlmConfig {
+        provider: config
+            .llm
+            .refinement
+            .provider
+            .clone()
+            .or_else(|| config.llm.provider.clone()),
+        model: config
+            .llm
+            .refinement
+            .model
+            .clone()
+            .or_else(|| config.llm.model.clone()),
+        key_cmd: config
+            .llm
+            .refinement
+            .key_cmd
+            .clone()
+            .or_else(|| config.llm.key_cmd.clone()),
+        key: config.llm.key.clone(),
+        ..Default::default()
     };
 
-    if let Some(content) = cached_file {
-        return Ok(content);
+    let provider = llm::create_provider_for_workdir(&refinement_llm_config, Some(workdir))?;
+
+    // Build refinement request
+    let analysis_json = serde_json::to_string_pretty(analysis_output)?;
+    let diff_summary = format!(
+        "{} files changed across {} groups",
+        analysis_output.summary.total_files_changed, analysis_output.summary.total_groups,
+    );
+
+    let request = refinement::build_refinement_request(
+        &analysis_output.groups,
+        analysis_output.infrastructure_group.as_ref(),
+        &analysis_json,
+        &diff_summary,
+    );
+
+    // Call LLM for refinement
+    let response = provider.refine_groups(&request).await?;
+
+    if !refinement::has_refinements(&response) {
+        return Ok(());
     }
 
-    // Cache miss — fall back to extracting from git
-    get_file_diff_uncached(repo_path, file_path, base, head, range, staged, unstaged, include_uncommitted.unwrap_or(true))
-}
+    // Apply refinement leniently — repair LLM-hallucinated IDs via name
+    // matching and drop any ops we can't repair instead of aborting the
+    // entire refinement on a single bad reference.
+    let (refined_groups, refined_infra, warnings) = refinement::apply_refinement_lenient(
+        &analysis_output.groups,
+        analysis_output.infrastructure_group.as_ref(),
+        &response,
+    );
 
-/// Core file diff logic without caching — also callable from integration tests.
-pub fn get_file_diff_uncached(
-    repo_path: String,
-    file_path: String,
-    base: Option<String>,
-    head: Option<String>,
-    range: Option<String>,
-    staged: bool,
-    unstaged: bool,
-    include_uncommitted: bool,
-) -> Result<FileDiffContent, CommandError> {
-    // Security: reject paths with traversal components or absolute paths
-    // to prevent path traversal via IPC from a compromised frontend.
-    let fp = std::path::Path::new(&file_path);
-    if fp.is_absolute()
-        || fp
-            .components()
-            .any(|c| c == std::path::Component::ParentDir)
-    {
-        return Err(CommandError::Io(format!(
-            "Invalid file path (path traversal rejected): {}",
-            file_path
-        )));
+    for w in &warnings {
+        eprintln!("refinement repair: {}", w.message);
     }
 
-    let repo_path_buf = PathBuf::from(&repo_path);
-    let repo_path_buf = std::fs::canonicalize(&repo_path_buf)
-        .map_err(|e| CommandError::Io(format!("Invalid repo path: {}", e)))?;
+    analysis_output.groups = refined_groups;
+    analysis_output.infrastructure_group = refined_infra;
+    analysis_output.summary.total_groups = analysis_output.groups.len() as u32;
 
-    let repo = git2::Repository::discover(&repo_path_buf)
-        .map_err(|e| CommandError::Git(format!("Not a git repository: {}", e)))?;
-
-    let (diff_result, _) = extract_diff(&repo, base, head, range, staged, unstaged, false, include_uncommitted)?;
-
-    let file_diff = diff_result
-        .files
-        .iter()
-        .find(|f| f.path() == file_path)
-        .ok_or_else(|| CommandError::Analysis(format!("File '{}' not found in diff", file_path)))?;
-
-    Ok(FileDiffContent {
-        path: file_path,
-        old_content: file_diff.old_content.clone().unwrap_or_default(),
-        new_content: file_diff.new_content.clone().unwrap_or_default(),
-        language: detect_language(&file_diff.path()),
-    })
+    Ok(())
 }
 
-fn load_cached_analysis(
-    state: &tauri::State<'_, AppState>,
-) -> Result<AnalysisOutput, CommandError> {
-    let last = state
-        .last_analysis
-        .lock()
-        .map_err(|e| CommandError::Analysis(format!("Lock poisoned: {}", e)))?;
-    last.clone()
-        .ok_or_else(|| CommandError::Analysis("No analysis available. Run analyze first.".into()))
-}
+async fn run_annotation(
+    config: &DiffcoreConfig,
+    workdir: &std::path::Path,
+    analysis_output: &mut AnalysisOutput,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let provider = llm::create_provider_for_workdir(&config.llm, Some(workdir))?;
 
-fn build_pass1_request(
-    analysis: &AnalysisOutput,
-    reanalysis_context: Option<&str>,
-) -> llm::schema::Pass1Request {
-    let flow_groups: Vec<llm::schema::Pass1GroupInput> = analysis
+    // Build Pass 1 request
+    let flow_groups: Vec<llm::schema::Pass1GroupInput> = analysis_output
         .groups
         .iter()
         .map(|g| llm::schema::Pass1GroupInput {
@@ -520,2629 +794,442 @@ fn build_pass1_request(
         })
         .collect();
 
-    let mut diff_summary = format!(
+    let request = llm::schema::Pass1Request {
+        diff_summary: format!(
             "{} files changed across {} groups",
-            analysis.summary.total_files_changed, analysis.summary.total_groups,
-        );
-
-    if let Some(context) = reanalysis_context {
-        let trimmed = context.trim();
-        if !trimmed.is_empty() {
-            diff_summary.push_str("\n\n## Reanalysis Context\n");
-            diff_summary.push_str(trimmed);
-        }
-    }
-
-    llm::schema::Pass1Request {
-        diff_summary,
+            analysis_output.summary.total_files_changed, analysis_output.summary.total_groups,
+        ),
         flow_groups,
         graph_summary: format!(
             "{} groups, {} total files",
-            analysis.summary.total_groups, analysis.summary.total_files_changed,
+            analysis_output.summary.total_groups, analysis_output.summary.total_files_changed,
         ),
-    }
+    };
+
+    let response = provider.annotate_overview(&request).await?;
+    analysis_output.annotations = Some(serde_json::to_value(response)?);
+
+    Ok(())
 }
 
-fn build_overview_reanalysis_context(
-    user_feedback: Option<String>,
-    include_previous_output: Option<bool>,
-    previous_output: Option<String>,
-    user_comments: Option<Vec<String>>,
-) -> Option<String> {
-    let mut parts: Vec<String> = Vec::new();
+fn run_launch(args: LaunchArgs) -> Result<(), Box<dyn std::error::Error>> {
+    // Read and parse the analysis JSON
+    let json_content = std::fs::read_to_string(&args.input)
+        .map_err(|e| format!("Failed to read input file {:?}: {}", args.input, e))?;
+    let analysis: AnalysisOutput = serde_json::from_str(&json_content)
+        .map_err(|e| format!("Failed to parse analysis JSON: {}", e))?;
 
-    if let Some(feedback) = user_feedback {
-        let trimmed = feedback.trim();
-        if !trimmed.is_empty() {
-            parts.push(format!("User feedback/question:\n{}", trimmed));
-        }
-    }
-
-    if let Some(comments) = user_comments {
-        let non_empty: Vec<String> = comments
-            .into_iter()
-            .map(|c| c.trim().to_string())
-            .filter(|c| !c.is_empty())
-            .collect();
-        if !non_empty.is_empty() {
-            parts.push(format!("Review comments:\n- {}", non_empty.join("\n- ")));
-        }
-    }
-
-    if include_previous_output.unwrap_or(false) {
-        if let Some(previous) = previous_output {
-            let trimmed = previous.trim();
-            if !trimmed.is_empty() {
-                parts.push(format!("Previous output to consider:\n{}", trimmed));
-            }
-        }
-    }
-
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join("\n\n"))
-    }
-}
-
-fn build_pass2_request(
-    analysis: &AnalysisOutput,
-    group_id: &str,
-    repo_path: &str,
-    base: Option<String>,
-    head: Option<String>,
-    range: Option<String>,
-    staged: bool,
-    unstaged: bool,
-    include_uncommitted: bool,
-) -> Result<llm::schema::Pass2Request, CommandError> {
+    // Find the requested group
     let group = analysis
         .groups
         .iter()
-        .find(|g| g.id == group_id)
-        .ok_or_else(|| CommandError::Analysis(format!("Group '{}' not found", group_id)))?
-        .clone();
+        .find(|g| g.id == args.group)
+        .ok_or_else(|| {
+            let available: Vec<&str> = analysis.groups.iter().map(|g| g.id.as_str()).collect();
+            format!(
+                "Group '{}' not found. Available groups: {}",
+                args.group,
+                available.join(", ")
+            )
+        })?;
 
-    let repo_path_buf = PathBuf::from(repo_path);
-    let repo_path_buf = std::fs::canonicalize(&repo_path_buf)
-        .map_err(|e| CommandError::Io(format!("Invalid repo path: {}", e)))?;
-    let repo = git2::Repository::discover(&repo_path_buf)
-        .map_err(|e| CommandError::Git(format!("Not a git repository: {}", e)))?;
+    if group.files.is_empty() {
+        return Err("Group has no files to compare".into());
+    }
 
-    let (diff_result, _) = extract_diff(&repo, base, head, range, staged, unstaged, false, include_uncommitted)?;
+    // Open the git repo
+    let repo_path = std::fs::canonicalize(&args.repo)?;
+    let repo =
+        Repository::discover(&repo_path).map_err(|e| format!("Not a git repository: {}", e))?;
+    let workdir = repo
+        .workdir()
+        .ok_or("Bare repositories are not supported")?
+        .to_path_buf();
 
-    let files: Vec<llm::schema::Pass2FileInput> = group
-        .files
-        .iter()
-        .map(|f| {
-            let file_diff = diff_result.files.iter().find(|d| d.path() == f.path);
-            let diff_text = file_diff
-                .map(|d| {
-                    let old = d.old_content.as_deref().unwrap_or("");
-                    let new = d.new_content.as_deref().unwrap_or("");
-                    format!(
-                        "--- a/{}\n+++ b/{}\n{}",
-                        f.path,
-                        f.path,
-                        simple_unified_diff(old, new)
-                    )
-                })
-                .unwrap_or_default();
-            let new_content = file_diff.and_then(|d| d.new_content.clone());
+    // Determine base and head refs from the analysis diff_source
+    let base_ref = analysis
+        .diff_source
+        .base_sha
+        .as_deref()
+        .or(analysis.diff_source.base.as_deref());
+    let head_ref = analysis
+        .diff_source
+        .head_sha
+        .as_deref()
+        .or(analysis.diff_source.head.as_deref());
 
-            llm::schema::Pass2FileInput {
-                path: f.path.clone(),
-                diff: diff_text,
-                new_content,
-                role: format!("{:?}", f.role),
+    // Create temp directories for old (base) and new (head) versions
+    let tmp_dir =
+        tempfile::tempdir().map_err(|e| format!("Failed to create temp directory: {}", e))?;
+    let base_dir = tmp_dir.path().join("base");
+    let head_dir = tmp_dir.path().join("head");
+    std::fs::create_dir_all(&base_dir)?;
+    std::fs::create_dir_all(&head_dir)?;
+
+    let file_paths: Vec<&str> = group.files.iter().map(|f| f.path.as_str()).collect();
+
+    for file_path in &file_paths {
+        // Security: reject paths with traversal components or absolute paths
+        // to prevent arbitrary file read/write via crafted analysis JSON.
+        let path = std::path::Path::new(file_path);
+        if path.is_absolute()
+            || path
+                .components()
+                .any(|c| c == std::path::Component::ParentDir)
+        {
+            return Err(format!(
+                "Unsafe file path in analysis JSON (path traversal rejected): {}",
+                file_path
+            )
+            .into());
+        }
+
+        // Get base content from git ref
+        if let Some(ref base) = base_ref {
+            if let Ok(Some(content)) = git::file_content_at_ref(&repo, base, file_path) {
+                let dest = base_dir.join(file_path);
+                if let Some(parent) = dest.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(&dest, content)?;
             }
-        })
-        .collect();
+        }
 
-    let graph_context = group
-        .edges
-        .iter()
-        .map(|e| format!("{} --{:?}--> {}", e.from, e.edge_type, e.to))
-        .collect::<Vec<_>>()
-        .join("\n");
+        // Get head content: from git ref if available, otherwise from working tree
+        if let Some(ref head) = head_ref {
+            if let Ok(Some(content)) = git::file_content_at_ref(&repo, head, file_path) {
+                let dest = head_dir.join(file_path);
+                if let Some(parent) = dest.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(&dest, content)?;
+            }
+        } else {
+            // Read from working tree (path traversal already rejected above)
+            let src = workdir.join(file_path);
+            if src.exists() {
+                let dest = head_dir.join(file_path);
+                if let Some(parent) = dest.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::copy(&src, &dest)?;
+            }
+        }
+    }
 
-    Ok(llm::schema::Pass2Request {
-        group_id: group.id.clone(),
-        group_name: group.name.clone(),
-        files,
-        graph_context,
-    })
+    // Launch the diff tool
+    let exe = args.tool.executable();
+    info!(
+        "Launching {} for group '{}' ({} files)...",
+        args.tool.display_name(),
+        group.name,
+        file_paths.len()
+    );
+
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg(base_dir.as_os_str()).arg(head_dir.as_os_str());
+
+    let status = cmd.status().map_err(|e| {
+        format!(
+            "Failed to launch '{}': {} (is it installed and in PATH?)",
+            exe, e
+        )
+    })?;
+
+    if !status.success() {
+        return Err(format!("{} exited with status {}", exe, status).into());
+    }
+
+    Ok(())
 }
 
-fn make_activity_callback(
-    job: JobHandle,
-) -> Arc<dyn Fn(llm::ActivityUpdate) + Send + Sync + 'static> {
-    Arc::new(move |update| {
-        let job = job.clone();
-        tauri::async_runtime::spawn(async move {
-            job.emit(ActivityEntry {
-                source: update.source,
-                level: update.level,
-                message: update.message,
-                event_type: update.event_type,
-                payload: update.payload,
-                timestamp_ms: update.timestamp_ms,
-            })
-            .await;
-        });
-    })
-}
+fn run_eval_command(args: EvalArgs) {
+    let format = match args.format.as_str() {
+        "json" => eval::EvalFormat::Json,
+        "html" => eval::EvalFormat::Html,
+        _ => eval::EvalFormat::Text,
+    };
 
-async fn emit_diffcore_activity(job: &JobHandle, message: impl Into<String>) {
-    job.emit(ActivityEntry::info("diffcore", message, None))
-        .await;
-}
-
-fn provider_supports_tool_activity(provider: &str) -> bool {
-    matches!(provider, "codex" | "claude")
-}
-
-async fn emit_direct_api_activity_notice(job: &JobHandle, provider: &str) {
-    if provider_supports_tool_activity(provider) {
+    // If --manifest is provided, run repo-based eval
+    if let Some(ref manifest_path) = args.manifest {
+        match eval::repos::run_repo_eval(manifest_path, args.min_score, format) {
+            Ok(result) => {
+                let mut stdout = std::io::stdout().lock();
+                use std::io::Write;
+                if let Err(e) = stdout.write_all(result.report.as_bytes()) {
+                    error!("Failed to write report: {}", e);
+                    process::exit(1);
+                }
+                if !result.passed {
+                    process::exit(1);
+                }
+            }
+            Err(e) => {
+                error!("Repo eval error: {}", e);
+                process::exit(1);
+            }
+        }
         return;
     }
 
-    emit_diffcore_activity(
-        job,
-        "Direct API mode only shows high-level progress. Switch to Codex CLI or Claude Code to stream file reads, greps, and shell activity.",
-    )
-    .await;
+    let config = eval::EvalConfig {
+        fixture_filter: args.fixture,
+        min_score: args.min_score,
+        history_file: args.history_file,
+        format,
+    };
+
+    let result = eval::run_eval(&config);
+
+    // Write the report to stdout
+    let mut stdout = std::io::stdout().lock();
+    use std::io::Write;
+    if let Err(e) = stdout.write_all(result.report.as_bytes()) {
+        error!("Failed to write report: {}", e);
+        process::exit(1);
+    }
+
+    // Print regression warning if any
+    if let Some(ref warning) = result.regression_warning {
+        warn!("{}", warning);
+    }
+
+    if !result.passed {
+        process::exit(1);
+    }
 }
 
-fn refinement_reasoning_excerpt(reasoning: &str) -> Option<String> {
-    let trimmed = reasoning.split_whitespace().collect::<Vec<_>>().join(" ");
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let sentence_end = trimmed.find(". ").map(|index| index + 1);
-    let excerpt = sentence_end
-        .map(|index| trimmed[..index].trim().to_string())
-        .unwrap_or_else(|| trimmed.chars().take(220).collect::<String>());
-
-    if excerpt.is_empty() {
-        None
-    } else if excerpt.chars().count() < trimmed.chars().count() && sentence_end.is_none() {
-        Some(format!("{}...", excerpt))
-    } else {
-        Some(excerpt)
-    }
-}
-
-fn refinement_operations_summary(response: &RefinementResponse) -> String {
-    let mut parts = Vec::new();
-
-    if !response.splits.is_empty() {
-        parts.push(format!(
-            "{} split{}",
-            response.splits.len(),
-            if response.splits.len() == 1 { "" } else { "s" }
-        ));
-    }
-    if !response.merges.is_empty() {
-        parts.push(format!(
-            "{} merge{}",
-            response.merges.len(),
-            if response.merges.len() == 1 { "" } else { "s" }
-        ));
-    }
-    if !response.re_ranks.is_empty() {
-        parts.push(format!(
-            "{} re-rank{}",
-            response.re_ranks.len(),
-            if response.re_ranks.len() == 1 {
-                ""
+#[allow(clippy::print_stdout)]
+fn run_lint_goldens(args: LintGoldensArgs) {
+    let format = eval::EvalFormat::Text;
+    match eval::repos::run_repo_eval(&args.manifest, 0.0, format) {
+        Ok(result) => {
+            let mut has_gaps = false;
+            for repo in &result.repos {
+                let cov = repo.golden.file_coverage;
+                let uncl = &repo.golden.unclassified_paths;
+                if cov < args.min_coverage {
+                    has_gaps = true;
+                    println!(
+                        "FAIL {}: {:.0}% coverage ({}/{} files classified)",
+                        repo.name,
+                        cov * 100.0,
+                        repo.golden.classified_files,
+                        repo.golden.classified_files + repo.golden.unclassified_files,
+                    );
+                    for path in uncl {
+                        println!("  UNCLASSIFIED: {}", path);
+                    }
+                } else {
+                    println!(
+                        "OK   {}: 100% coverage ({} files)",
+                        repo.name, repo.golden.classified_files,
+                    );
+                }
+            }
+            if has_gaps {
+                println!("\nFailed: some repos have unclassified files. Add them to infrastructure or non_infrastructure in eval/repos/<name>.toml");
+                process::exit(1);
             } else {
-                "s"
-            }
-        ));
-    }
-    if !response.reclassifications.is_empty() {
-        parts.push(format!(
-            "{} reclassification{}",
-            response.reclassifications.len(),
-            if response.reclassifications.len() == 1 {
-                ""
-            } else {
-                "s"
-            }
-        ));
-    }
-
-    if parts.is_empty() {
-        "no structural changes".to_string()
-    } else {
-        parts.join(", ")
-    }
-}
-
-async fn run_overview_with_activity(
-    request: llm::schema::Pass1Request,
-    llm_config: diffcore_core::config::LlmConfig,
-    workdir: Option<PathBuf>,
-    job: JobHandle,
-) -> Result<Pass1Response, CommandError> {
-    emit_diffcore_activity(&job, "Preparing overview request").await;
-    let provider = llm::create_provider_for_workdir(&llm_config, workdir.as_deref())
-        .map_err(|e| CommandError::Llm(format!("{}", e)))?;
-    let provider_name = provider.name().to_string();
-    let provider_model = provider.model().to_string();
-    emit_diffcore_activity(
-        &job,
-        format!("Using {} / {}", provider_name, provider_model),
-    )
-    .await;
-    emit_direct_api_activity_notice(&job, &provider_name).await;
-
-    llm::with_activity_callback(make_activity_callback(job), async {
-        provider.annotate_overview(&request).await
-    })
-    .await
-    .map_err(|e| CommandError::Llm(format!("{}", e)))
-}
-
-async fn run_group_with_activity(
-    request: llm::schema::Pass2Request,
-    llm_config: diffcore_core::config::LlmConfig,
-    workdir: Option<PathBuf>,
-    job: JobHandle,
-) -> Result<Pass2Response, CommandError> {
-    emit_diffcore_activity(&job, "Preparing deep analysis request").await;
-    let provider = llm::create_provider_for_workdir(&llm_config, workdir.as_deref())
-        .map_err(|e| CommandError::Llm(format!("{}", e)))?;
-    let provider_name = provider.name().to_string();
-    let provider_model = provider.model().to_string();
-    emit_diffcore_activity(
-        &job,
-        format!("Using {} / {}", provider_name, provider_model),
-    )
-    .await;
-    emit_direct_api_activity_notice(&job, &provider_name).await;
-
-    llm::with_activity_callback(make_activity_callback(job), async {
-        provider.annotate_group(&request).await
-    })
-    .await
-    .map_err(|e| CommandError::Llm(format!("{}", e)))
-}
-
-async fn run_refinement_with_activity(
-    analysis: AnalysisOutput,
-    refinement_llm_config: diffcore_core::config::LlmConfig,
-    workdir: Option<PathBuf>,
-    job: JobHandle,
-) -> Result<RefinementResult, CommandError> {
-    emit_diffcore_activity(&job, "Preparing refinement request").await;
-    let provider = llm::create_provider_for_workdir(&refinement_llm_config, workdir.as_deref())
-        .map_err(|e| CommandError::Llm(format!("{}", e)))?;
-    let provider_name = provider.name().to_string();
-    let provider_model = provider.model().to_string();
-    emit_diffcore_activity(
-        &job,
-        format!("Using {} / {}", provider_name, provider_model),
-    )
-    .await;
-    emit_direct_api_activity_notice(&job, &provider_name).await;
-
-    let analysis_json = serde_json::to_string_pretty(&analysis)
-        .map_err(|e| CommandError::Llm(format!("Failed to serialize analysis: {}", e)))?;
-    let diff_summary = format!(
-        "{} files changed across {} groups",
-        analysis.summary.total_files_changed, analysis.summary.total_groups,
-    );
-    let request = refinement::build_refinement_request(
-        &analysis.groups,
-        analysis.infrastructure_group.as_ref(),
-        &analysis_json,
-        &diff_summary,
-    );
-
-    let response = llm::with_activity_callback(make_activity_callback(job.clone()), async {
-        provider.refine_groups(&request).await
-    })
-    .await
-    .map_err(|e| CommandError::Llm(format!("{}", e)))?;
-
-    if let Some(reasoning) = refinement_reasoning_excerpt(&response.reasoning) {
-        job.emit(ActivityEntry::info(
-            provider_name.clone(),
-            format!("Refinement rationale: {}", reasoning),
-            Some("refinement.reasoning".to_string()),
-        ))
-        .await;
-    }
-
-    let provider_name = refinement_llm_config
-        .provider
-        .clone()
-        .unwrap_or_else(|| "anthropic".to_string());
-    let model_name = refinement_llm_config
-        .model
-        .clone()
-        .unwrap_or_else(|| default_model_for_provider(&provider_name).to_string());
-
-    if !refinement::has_refinements(&response) {
-        emit_diffcore_activity(&job, "Refinement kept the current grouping").await;
-        return Ok(RefinementResult {
-            refined_groups: analysis.groups.clone(),
-            infrastructure_group: analysis.infrastructure_group.clone(),
-            refinement_response: response,
-            provider: provider_name,
-            model: model_name,
-            had_changes: false,
-            warnings: Vec::new(),
-        });
-    }
-
-    let (refined_groups, infra, warnings) = refinement::apply_refinement_lenient(
-        &analysis.groups,
-        analysis.infrastructure_group.as_ref(),
-        &response,
-    );
-
-    for warning in &warnings {
-        job.emit(ActivityEntry::info(
-            provider_name.clone(),
-            format!("Refinement repair: {}", warning.message),
-            Some("refinement.repair".to_string()),
-        ))
-        .await;
-    }
-
-    emit_diffcore_activity(
-        &job,
-        format!(
-            "Refinement proposed {}",
-            refinement_operations_summary(&response)
-        ),
-    )
-    .await;
-
-    Ok(RefinementResult {
-        refined_groups,
-        infrastructure_group: infra,
-        refinement_response: response,
-        provider: provider_name,
-        model: model_name,
-        had_changes: true,
-        warnings,
-    })
-}
-
-#[tauri::command]
-pub fn start_annotate_overview(
-    repo_path: Option<String>,
-    llm_provider: Option<String>,
-    llm_model: Option<String>,
-    user_feedback: Option<String>,
-    include_previous_output: Option<bool>,
-    previous_output: Option<String>,
-    user_comments: Option<Vec<String>>,
-    state: tauri::State<'_, AppState>,
-) -> Result<AsyncLlmJobStart, CommandError> {
-    let analysis = load_cached_analysis(&state)?;
-    let (mut config, workdir) = load_config_from_path(repo_path.as_deref());
-    if let Some(provider) = llm_provider {
-        config.llm.provider = Some(provider);
-    }
-    if let Some(model) = llm_model {
-        config.llm.model = Some(model);
-    }
-
-    let provider_name = config
-        .llm
-        .provider
-        .clone()
-        .unwrap_or_else(|| "anthropic".to_string());
-    let model_name = config
-        .llm
-        .model
-        .clone()
-        .unwrap_or_else(|| default_model_for_provider(&provider_name).to_string());
-    let (job, start) =
-        state.create_llm_job("overview", &provider_name, &model_name, "Summarizing PR")?;
-    let llm_config = config.llm.clone();
-    let reanalysis_context = build_overview_reanalysis_context(
-        user_feedback,
-        include_previous_output,
-        previous_output,
-        user_comments,
-    );
-    let request = build_pass1_request(&analysis, reanalysis_context.as_deref());
-
-    tauri::async_runtime::spawn(async move {
-        match run_overview_with_activity(request, llm_config, workdir, job.clone()).await {
-            Ok(response) => match serde_json::to_value(&response) {
-                Ok(value) => job.complete("overview", value).await,
-                Err(error) => {
-                    job.fail(format!("Failed to serialize overview response: {}", error))
-                        .await
-                }
-            },
-            Err(error) => job.fail(error.to_string()).await,
-        }
-    });
-
-    Ok(start)
-}
-
-#[tauri::command]
-pub fn start_annotate_group(
-    group_id: String,
-    repo_path: String,
-    base: Option<String>,
-    head: Option<String>,
-    range: Option<String>,
-    staged: bool,
-    unstaged: bool,
-    include_uncommitted: Option<bool>,
-    llm_provider: Option<String>,
-    llm_model: Option<String>,
-    state: tauri::State<'_, AppState>,
-) -> Result<AsyncLlmJobStart, CommandError> {
-    let analysis = load_cached_analysis(&state)?;
-    let request = build_pass2_request(
-        &analysis, &group_id, &repo_path, base, head, range, staged, unstaged, include_uncommitted.unwrap_or(true),
-    )?;
-    let (mut config, workdir) = load_config_from_path(Some(&repo_path));
-    if let Some(provider) = llm_provider {
-        config.llm.provider = Some(provider);
-    }
-    if let Some(model) = llm_model {
-        config.llm.model = Some(model);
-    }
-
-    let provider_name = config
-        .llm
-        .provider
-        .clone()
-        .unwrap_or_else(|| "anthropic".to_string());
-    let model_name = config
-        .llm
-        .model
-        .clone()
-        .unwrap_or_else(|| default_model_for_provider(&provider_name).to_string());
-    let (job, start) = state.create_llm_job(
-        "group",
-        &provider_name,
-        &model_name,
-        &format!("Analyzing {}", group_id),
-    )?;
-    let llm_config = config.llm.clone();
-
-    tauri::async_runtime::spawn(async move {
-        match run_group_with_activity(request, llm_config, workdir, job.clone()).await {
-            Ok(response) => match serde_json::to_value(&response) {
-                Ok(value) => job.complete("group", value).await,
-                Err(error) => {
-                    job.fail(format!("Failed to serialize group response: {}", error))
-                        .await
-                }
-            },
-            Err(error) => job.fail(error.to_string()).await,
-        }
-    });
-
-    Ok(start)
-}
-
-#[tauri::command]
-pub fn start_refine_groups(
-    repo_path: Option<String>,
-    llm_provider: Option<String>,
-    llm_model: Option<String>,
-    state: tauri::State<'_, AppState>,
-) -> Result<AsyncLlmJobStart, CommandError> {
-    let analysis = load_cached_analysis(&state)?;
-    let (mut config, workdir) = load_config_from_path(repo_path.as_deref());
-    if let Some(provider) = llm_provider {
-        config.llm.refinement.provider = Some(provider.clone());
-        if config.llm.provider.is_none() {
-            config.llm.provider = Some(provider);
-        }
-    }
-    if let Some(model) = llm_model {
-        config.llm.refinement.model = Some(model.clone());
-        if config.llm.model.is_none() {
-            config.llm.model = Some(model);
-        }
-    }
-
-    let refinement_llm_config = diffcore_core::config::LlmConfig {
-        provider: config
-            .llm
-            .refinement
-            .provider
-            .clone()
-            .or(config.llm.provider.clone()),
-        model: config
-            .llm
-            .refinement
-            .model
-            .clone()
-            .or(config.llm.model.clone()),
-        key_cmd: config
-            .llm
-            .refinement
-            .key_cmd
-            .clone()
-            .or(config.llm.key_cmd.clone()),
-        key: config.llm.key.clone(),
-        annotations_enabled: config.llm.annotations_enabled,
-        refinement: config.llm.refinement.clone(),
-    };
-
-    let provider_name = refinement_llm_config
-        .provider
-        .clone()
-        .unwrap_or_else(|| "anthropic".to_string());
-    let model_name = refinement_llm_config
-        .model
-        .clone()
-        .unwrap_or_else(|| default_model_for_provider(&provider_name).to_string());
-    let (job, start) =
-        state.create_llm_job("refinement", &provider_name, &model_name, "Refining groups")?;
-
-    tauri::async_runtime::spawn(async move {
-        match run_refinement_with_activity(analysis, refinement_llm_config, workdir, job.clone())
-            .await
-        {
-            Ok(response) => match serde_json::to_value(&response) {
-                Ok(value) => job.complete("refinement", value).await,
-                Err(error) => {
-                    job.fail(format!(
-                        "Failed to serialize refinement response: {}",
-                        error
-                    ))
-                    .await
-                }
-            },
-            Err(error) => job.fail(error.to_string()).await,
-        }
-    });
-
-    Ok(start)
-}
-
-/// Run LLM Pass 1 (overview annotation) on the cached analysis.
-///
-/// Returns structured overview with per-group summaries, risk flags,
-/// and suggested review order. The result is also stored in the cached
-/// analysis output's `annotations` field.
-#[tauri::command]
-pub async fn annotate_overview(
-    repo_path: Option<String>,
-    llm_provider: Option<String>,
-    llm_model: Option<String>,
-    user_feedback: Option<String>,
-    include_previous_output: Option<bool>,
-    previous_output: Option<String>,
-    user_comments: Option<Vec<String>>,
-    state: tauri::State<'_, AppState>,
-) -> Result<Pass1Response, CommandError> {
-    // Get the cached analysis to build the request
-    let analysis = {
-        let last = state
-            .last_analysis
-            .lock()
-            .map_err(|e| CommandError::Analysis(format!("Lock poisoned: {}", e)))?;
-        last.clone().ok_or_else(|| {
-            CommandError::Analysis("No analysis available. Run analyze first.".into())
-        })?
-    };
-
-    // Load config from the repo directory (not default)
-    let (mut config, workdir) = load_config_from_path(repo_path.as_deref());
-
-    // Apply frontend overrides if provided
-    if let Some(p) = llm_provider {
-        config.llm.provider = Some(p);
-    }
-    if let Some(m) = llm_model {
-        config.llm.model = Some(m);
-    }
-
-    // Create LLM provider
-    let provider = llm::create_provider_for_workdir(&config.llm, workdir.as_deref())
-        .map_err(|e| CommandError::Llm(format!("{}", e)))?;
-
-    let reanalysis_context = build_overview_reanalysis_context(
-        user_feedback,
-        include_previous_output,
-        previous_output,
-        user_comments,
-    );
-    let request = build_pass1_request(&analysis, reanalysis_context.as_deref());
-
-    let response = provider
-        .annotate_overview(&request)
-        .await
-        .map_err(|e| CommandError::Llm(format!("{}", e)))?;
-
-    // Store the annotations in the cached analysis
-    match state.last_analysis.lock() {
-        Ok(mut last) => {
-            if let Some(ref mut a) = *last {
-                a.annotations = Some(serde_json::to_value(&response).map_err(|e| {
-                    CommandError::Llm(format!("Failed to serialize response: {}", e))
-                })?);
+                println!("\nAll repos have full file classification coverage.");
             }
         }
-        Err(e) => warn!(
-            "Failed to update last_analysis annotations (lock poisoned): {}",
-            e
-        ),
+        Err(e) => {
+            error!("Lint error: {}", e);
+            process::exit(1);
+        }
     }
-
-    Ok(response)
 }
 
-/// Run LLM Pass 2 (deep analysis) on a specific group.
-///
-/// Returns per-file annotations, flow narrative, and cross-cutting concerns.
-#[tauri::command]
-pub async fn annotate_group(
-    group_id: String,
-    repo_path: String,
-    base: Option<String>,
-    head: Option<String>,
-    range: Option<String>,
-    staged: bool,
-    unstaged: bool,
-    include_uncommitted: Option<bool>,
-    llm_provider: Option<String>,
-    llm_model: Option<String>,
-    state: tauri::State<'_, AppState>,
-) -> Result<Pass2Response, CommandError> {
-    // Get the cached analysis to find the group
-    let analysis = {
-        let last = state
-            .last_analysis
-            .lock()
-            .map_err(|e| CommandError::Analysis(format!("Lock poisoned: {}", e)))?;
-        last.clone().ok_or_else(|| {
-            CommandError::Analysis("No analysis available. Run analyze first.".into())
-        })?
+fn run_list_models(args: ListModelsArgs) -> Result<(), Box<dyn std::error::Error>> {
+    use diffcore_core::llm::models::{fetch_provider_models, SUPPORTED_PROVIDERS};
+
+    if !SUPPORTED_PROVIDERS.contains(&args.provider.as_str()) {
+        return Err(format!(
+            "Unknown provider '{}'. Supported: {}",
+            args.provider,
+            SUPPORTED_PROVIDERS.join(", ")
+        )
+        .into());
+    }
+
+    let rt = tokio::runtime::Runtime::new()?;
+    let models = rt.block_on(fetch_provider_models(&args.provider, args.refresh))?;
+
+    let json = serde_json::to_string_pretty(&models)?;
+    // Use write! to stdout instead of println! (clippy::print_stdout is denied)
+    use std::io::Write;
+    std::io::stdout().write_all(json.as_bytes())?;
+    std::io::stdout().write_all(b"\n")?;
+
+    Ok(())
+}
+
+#[cfg(feature = "embeddings")]
+fn run_embed_diff(args: EmbedDiffArgs) -> Result<(), Box<dyn std::error::Error>> {
+    use diffcore_core::embeddings::{
+        cluster_by_similarity, embed_file_diffs, pairwise_similarities,
     };
 
-    let group = analysis
-        .groups
-        .iter()
-        .find(|g| g.id == group_id)
-        .ok_or_else(|| CommandError::Analysis(format!("Group '{}' not found", group_id)))?
-        .clone();
+    let repo = Repository::open(&args.repo)?;
+    let diff = git::diff_range(&repo, &format!("{}..{}", args.base, args.head))?;
 
-    // Get file diffs for Pass 2 context
-    let repo_path_buf = PathBuf::from(&repo_path);
-    let repo_path_buf = std::fs::canonicalize(&repo_path_buf)
-        .map_err(|e| CommandError::Io(format!("Invalid repo path: {}", e)))?;
-    let repo = git2::Repository::discover(&repo_path_buf)
-        .map_err(|e| CommandError::Git(format!("Not a git repository: {}", e)))?;
-
-    let (diff_result, _) = extract_diff(&repo, base, head, range, staged, unstaged, false, include_uncommitted.unwrap_or(true))?;
-
-    // Build Pass 2 file inputs with diffs
-    let files: Vec<llm::schema::Pass2FileInput> = group
+    // Collect per-file diffs — use new_content (post-change) as embedding input
+    let file_diffs: Vec<(String, String)> = diff
         .files
         .iter()
-        .map(|f| {
-            let file_diff = diff_result.files.iter().find(|d| d.path() == f.path);
-            let diff_text = file_diff
-                .map(|d| {
-                    // Build a simple unified diff representation
-                    let old = d.old_content.as_deref().unwrap_or("");
-                    let new = d.new_content.as_deref().unwrap_or("");
-                    format!(
-                        "--- a/{}\n+++ b/{}\n{}",
-                        f.path,
-                        f.path,
-                        simple_unified_diff(old, new)
-                    )
-                })
-                .unwrap_or_default();
-            let new_content = file_diff.and_then(|d| d.new_content.clone());
-
-            llm::schema::Pass2FileInput {
-                path: f.path.clone(),
-                diff: diff_text,
-                new_content,
-                role: format!("{:?}", f.role),
+        .filter_map(|fd| {
+            let path = fd.new_path.as_deref().or(fd.old_path.as_deref())?;
+            // Use new content if available, fall back to old content for deletions
+            let content = fd
+                .new_content
+                .as_deref()
+                .or(fd.old_content.as_deref())
+                .unwrap_or("");
+            if content.is_empty() {
+                None
+            } else {
+                Some((path.to_string(), content.to_string()))
             }
         })
         .collect();
 
-    // Build graph context
-    let graph_context = group
-        .edges
-        .iter()
-        .map(|e| format!("{} --{:?}--> {}", e.from, e.edge_type, e.to))
-        .collect::<Vec<_>>()
-        .join("\n");
+    println!("Embedding {} files...", file_diffs.len());
+    let embeddings = embed_file_diffs(&file_diffs)?;
+    println!(
+        "Embedded {} files ({} dimensions)",
+        embeddings.len(),
+        embeddings.first().map(|e| e.vector.len()).unwrap_or(0)
+    );
 
-    let (mut config, workdir) = load_config_from_path(Some(&repo_path));
-    if let Some(p) = llm_provider {
-        config.llm.provider = Some(p);
+    // Show pairwise similarities
+    let sims = pairwise_similarities(&embeddings);
+    println!("\n--- Pairwise Similarities (top 20) ---");
+    for sim in sims.iter().take(20) {
+        println!("  {:.3}  {} <-> {}", sim.similarity, sim.file_a, sim.file_b);
     }
-    if let Some(m) = llm_model {
-        config.llm.model = Some(m);
-    }
-    let provider = llm::create_provider_for_workdir(&config.llm, workdir.as_deref())
-        .map_err(|e| CommandError::Llm(format!("{}", e)))?;
 
-    let request = llm::schema::Pass2Request {
-        group_id: group.id.clone(),
-        group_name: group.name.clone(),
-        files,
-        graph_context,
-    };
-
-    let response = provider
-        .annotate_group(&request)
-        .await
-        .map_err(|e| CommandError::Llm(format!("{}", e)))?;
-
-    Ok(response)
-}
-
-/// Run LLM refinement pass on the cached analysis groups.
-///
-/// Takes the deterministic groups (v1) and asks an LLM to suggest structural
-/// improvements: splits, merges, re-ranks, and reclassifications. Applies the
-/// refinement operations and returns the result containing both the refined
-/// groups and the raw refinement response (for change indicators in the UI).
-///
-/// Falls back to returning the original groups if refinement produces no changes
-/// or validation fails.
-#[tauri::command]
-pub async fn refine_groups(
-    repo_path: Option<String>,
-    llm_provider: Option<String>,
-    llm_model: Option<String>,
-    state: tauri::State<'_, AppState>,
-) -> Result<RefinementResult, CommandError> {
-    // Get the cached analysis
-    let analysis = {
-        let last = state
-            .last_analysis
-            .lock()
-            .map_err(|e| CommandError::Analysis(format!("Lock poisoned: {}", e)))?;
-        last.clone().ok_or_else(|| {
-            CommandError::Analysis("No analysis available. Run analyze first.".into())
-        })?
-    };
-
-    // Load config, applying frontend overrides
-    let (mut config, workdir) = load_config_from_path(repo_path.as_deref());
-    // Use refinement-specific provider/model if set, otherwise fall back to overrides
-    if let Some(p) = llm_provider {
-        config.llm.refinement.provider = Some(p.clone());
-        if config.llm.provider.is_none() {
-            config.llm.provider = Some(p);
-        }
-    }
-    if let Some(m) = llm_model {
-        config.llm.refinement.model = Some(m.clone());
-        if config.llm.model.is_none() {
-            config.llm.model = Some(m);
+    // Cluster by threshold
+    let clusters = cluster_by_similarity(&embeddings, args.threshold);
+    println!("\n--- Clusters (threshold={:.2}) ---", args.threshold);
+    for (i, cluster) in clusters.iter().enumerate() {
+        println!("  Group {}: {} files", i + 1, cluster.len());
+        for path in cluster {
+            println!("    - {}", path);
         }
     }
 
-    // Build LLM config for the refinement provider
-    let refinement_llm_config = diffcore_core::config::LlmConfig {
-        provider: config
-            .llm
-            .refinement
-            .provider
-            .clone()
-            .or(config.llm.provider.clone()),
-        model: config
-            .llm
-            .refinement
-            .model
-            .clone()
-            .or(config.llm.model.clone()),
-        key_cmd: config
-            .llm
-            .refinement
-            .key_cmd
-            .clone()
-            .or(config.llm.key_cmd.clone()),
-        key: config.llm.key.clone(),
-        annotations_enabled: config.llm.annotations_enabled,
-        refinement: config.llm.refinement.clone(),
-    };
-
-    let provider = llm::create_provider_for_workdir(&refinement_llm_config, workdir.as_deref())
-        .map_err(|e| CommandError::Llm(format!("{}", e)))?;
-
-    // Serialize analysis for the refinement request
-    let analysis_json = serde_json::to_string_pretty(&analysis)
-        .map_err(|e| CommandError::Llm(format!("Failed to serialize analysis: {}", e)))?;
-
-    let diff_summary = format!(
-        "{} files changed across {} groups",
-        analysis.summary.total_files_changed, analysis.summary.total_groups,
-    );
-
-    let request = refinement::build_refinement_request(
-        &analysis.groups,
-        analysis.infrastructure_group.as_ref(),
-        &analysis_json,
-        &diff_summary,
-    );
-
-    let response = provider
-        .refine_groups(&request)
-        .await
-        .map_err(|e| CommandError::Llm(format!("{}", e)))?;
-
-    let provider_name = refinement_llm_config
-        .provider
-        .unwrap_or_else(|| "anthropic".to_string());
-    let model_name = refinement_llm_config
-        .model
-        .unwrap_or_else(|| default_model_for_provider(&provider_name).to_string());
-
-    if !refinement::has_refinements(&response) {
-        return Ok(RefinementResult {
-            refined_groups: analysis.groups.clone(),
-            infrastructure_group: analysis.infrastructure_group.clone(),
-            refinement_response: response,
-            provider: provider_name,
-            model: model_name,
-            had_changes: false,
-            warnings: Vec::new(),
+    if args.format == "json" {
+        let output = serde_json::json!({
+            "files": file_diffs.len(),
+            "dimensions": embeddings.first().map(|e| e.vector.len()).unwrap_or(0),
+            "threshold": args.threshold,
+            "similarities": sims.iter().map(|s| serde_json::json!({
+                "file_a": s.file_a,
+                "file_b": s.file_b,
+                "similarity": s.similarity,
+            })).collect::<Vec<_>>(),
+            "clusters": clusters.iter().enumerate().map(|(i, c)| serde_json::json!({
+                "group": i + 1,
+                "files": c,
+            })).collect::<Vec<_>>(),
         });
-    }
-
-    // Apply the refinement leniently: repair what we can, drop what we can't,
-    // surface warnings instead of erroring on individual hallucinated ops.
-    let (refined_groups, infra, warnings) = refinement::apply_refinement_lenient(
-        &analysis.groups,
-        analysis.infrastructure_group.as_ref(),
-        &response,
-    );
-
-    for w in &warnings {
-        warn!("Refinement repair: {}", w.message);
-    }
-
-    // Update cached analysis with refined groups
-    match state.last_analysis.lock() {
-        Ok(mut last) => {
-            if let Some(ref mut a) = *last {
-                a.groups = refined_groups.clone();
-                a.infrastructure_group = infra.clone();
-            }
-        }
-        Err(e) => warn!(
-            "Failed to update last_analysis with refinement (lock poisoned): {}",
-            e
-        ),
-    }
-
-    Ok(RefinementResult {
-        refined_groups,
-        infrastructure_group: infra,
-        refinement_response: response,
-        provider: provider_name,
-        model: model_name,
-        had_changes: true,
-        warnings,
-    })
-}
-
-/// Result of a refinement pass, including both the refined groups and
-/// the raw refinement operations (for UI change indicators).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct RefinementResult {
-    /// The refined flow groups (v2) — or original groups if no changes.
-    pub refined_groups: Vec<diffcore_core::types::FlowGroup>,
-    /// The refined infrastructure group.
-    pub infrastructure_group: Option<diffcore_core::types::InfrastructureGroup>,
-    /// The raw refinement response with split/merge/re-rank/reclassify operations.
-    pub refinement_response: RefinementResponse,
-    /// Which provider performed the refinement.
-    pub provider: String,
-    /// Which model performed the refinement.
-    pub model: String,
-    /// Whether the refinement actually produced changes.
-    pub had_changes: bool,
-    /// Non-fatal warnings from the lenient apply path: repaired IDs and
-    /// dropped operations. Empty in the common case.
-    #[serde(default)]
-    pub warnings: Vec<diffcore_core::llm::refinement::RefinementWarning>,
-}
-
-/// Load cached refinement result for the current analysis.
-///
-/// Tries two keys: (1) diff-hash key (exact match), (2) branch-based key (same branch
-/// across worktrees, even with different uncommitted changes).
-#[tauri::command]
-pub fn get_cached_refinement(
-    repo_path: Option<String>,
-    state: tauri::State<'_, AppState>,
-) -> Result<Option<RefinementResult>, CommandError> {
-    // Try diff-hash key first (exact content match)
-    let diff_key = state.last_cache_key.lock().ok().and_then(|k| k.clone());
-    if let Some(ref key) = diff_key {
-        if let Some(json) = cache::load_cached_refinement(key) {
-            if let Ok(result) = serde_json::from_str::<RefinementResult>(&json) {
-                return Ok(Some(result));
-            }
-        }
-    }
-
-    // Fallback: try branch-based key (works across worktrees on same branch)
-    if let Some(ref repo) = repo_path {
-        if let Ok(branch_key) = comment_cache_key(repo) {
-            let branch_refine_key = format!("branch_{}", branch_key);
-            if let Some(json) = cache::load_cached_refinement(&branch_refine_key) {
-                if let Ok(result) = serde_json::from_str::<RefinementResult>(&json) {
-                    return Ok(Some(result));
-                }
-            }
-        }
-    }
-
-    Ok(None)
-}
-
-/// Store a refinement result in the global cache (~/.diffcore/cache/refinements/).
-///
-/// Stores under both diff-hash key and branch-based key for cross-worktree access.
-#[tauri::command]
-pub fn store_refinement_cache(
-    result: RefinementResult,
-    repo_path: Option<String>,
-    state: tauri::State<'_, AppState>,
-) -> Result<(), CommandError> {
-    let json = match serde_json::to_string(&result) {
-        Ok(j) => j,
-        Err(e) => {
-            warn!("Failed to serialize refinement for caching: {}", e);
-            return Ok(());
-        }
-    };
-
-    // Store under diff-hash key
-    if let Some(cache_key) = state.last_cache_key.lock().ok().and_then(|k| k.clone()) {
-        cache::store_cached_refinement(&cache_key, &json);
-    }
-
-    // Also store under branch-based key for cross-worktree access
-    if let Some(ref repo) = repo_path {
-        if let Ok(branch_key) = comment_cache_key(repo) {
-            let branch_refine_key = format!("branch_{}", branch_key);
-            cache::store_cached_refinement(&branch_refine_key, &json);
-        }
+        println!("\n{}", serde_json::to_string_pretty(&output)?);
     }
 
     Ok(())
 }
 
-/// Background LLM job registration payload returned before SSE streaming begins.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct AsyncLlmJobStart {
-    pub job_id: String,
-    pub stream_url: String,
-    pub operation: String,
-    pub provider: String,
-    pub model: String,
-    pub title: String,
-}
-
-/// List all local branches in the repository.
-///
-/// Returns branches sorted with current branch first, then alphabetically.
-#[tauri::command]
-pub fn list_branches(repo_path: String) -> Result<Vec<git::BranchInfo>, CommandError> {
-    let repo = open_repo(&repo_path)?;
-    git::list_branches(&repo).map_err(|e| CommandError::Git(format!("{}", e)))
-}
-
-/// List recent commits for commit-level ref selection in the UI.
-#[tauri::command]
-pub fn list_commits(repo_path: String, limit: Option<usize>) -> Result<Vec<git::CommitInfo>, CommandError> {
-    let repo = open_repo(&repo_path)?;
-    let bounded_limit = limit.unwrap_or(50).clamp(1, 200);
-    git::list_recent_commits(&repo, bounded_limit)
-        .map_err(|e| CommandError::Git(format!("{}", e)))
-}
-
-/// List all git worktrees for the repository.
-#[tauri::command]
-pub fn list_worktrees(repo_path: String) -> Result<Vec<git::WorktreeInfo>, CommandError> {
-    let repo = open_repo(&repo_path)?;
-    git::list_worktrees(&repo).map_err(|e| CommandError::Git(format!("{}", e)))
-}
-
-/// Get the current branch's tracking status (ahead/behind upstream).
-#[tauri::command]
-pub fn get_branch_status(repo_path: String) -> Result<git::BranchStatus, CommandError> {
-    let repo = open_repo(&repo_path)?;
-    git::get_branch_status(&repo).map_err(|e| CommandError::Git(format!("{}", e)))
-}
-
-/// Auto-detect the default branch and current branch for a repository.
-///
-/// Returns a summary useful for the UI to set up initial state.
-#[tauri::command]
-pub fn get_repo_info(repo_path: String) -> Result<RepoInfo, CommandError> {
-    let repo = open_repo(&repo_path)?;
-
-    let current = git::current_branch(&repo);
-    let default_branch = git::detect_default_branch(&repo).unwrap_or_else(|_| "main".to_string());
-    let branches = git::list_branches(&repo).map_err(|e| CommandError::Git(format!("{}", e)))?;
-    let worktrees = git::list_worktrees(&repo).map_err(|e| CommandError::Git(format!("{}", e)))?;
-    let status = git::get_branch_status(&repo).ok();
-    let is_worktree = git::is_linked_worktree(&repo);
-
-    Ok(RepoInfo {
-        current_branch: current,
-        default_branch,
-        branches,
-        worktrees,
-        status,
-        is_worktree,
-    })
-}
-
-/// Return the first directory argument passed at app launch, if any.
-#[tauri::command]
-pub fn get_launch_directory() -> Option<String> {
-    std::env::args_os()
-        .skip(1)
-        .map(PathBuf::from)
-        .find(|path| path.is_dir())
-        .and_then(|path| std::fs::canonicalize(path).ok())
-        .map(|path| path.to_string_lossy().to_string())
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct FileShortStatus {
-    pub path: String,
-    pub status: String,
-}
-
-#[tauri::command]
-pub fn get_last_diff_file_statuses(
-    state: tauri::State<'_, AppState>,
-) -> Result<Vec<FileShortStatus>, CommandError> {
-    let guard = state
-        .last_diff
-        .lock()
-        .map_err(|e| CommandError::Analysis(format!("Lock poisoned: {}", e)))?;
-
-    let Some(cached) = guard.as_ref() else {
-        return Ok(vec![]);
-    };
-
-    let mut out = Vec::with_capacity(cached.diff_result.files.len());
-    for file in &cached.diff_result.files {
-        let status = match file.status {
-            diffcore_core::git::FileStatus::Added => "A",
-            diffcore_core::git::FileStatus::Modified => "M",
-            diffcore_core::git::FileStatus::Deleted => "D",
-            diffcore_core::git::FileStatus::Renamed => "R",
-            diffcore_core::git::FileStatus::Copied => "C",
-        };
-        out.push(FileShortStatus {
-            path: file.path().to_string(),
-            status: status.to_string(),
-        });
-    }
-
-    Ok(out)
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct CrossFileSearchMatch {
-    pub line_number: u32,
-    pub line_text: String,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct CrossFileSearchResult {
-    pub file_path: String,
-    pub matches: Vec<CrossFileSearchMatch>,
-}
-
-fn changed_files_from_state(state: &AppState) -> HashSet<String> {
-    let mut files = HashSet::new();
-
-    if let Ok(guard) = state.last_analysis.lock() {
-        if let Some(analysis) = guard.as_ref() {
-            for group in &analysis.groups {
-                for file in &group.files {
-                    files.insert(file.path.clone());
-                }
-            }
-            if let Some(infra) = &analysis.infrastructure_group {
-                for file in &infra.files {
-                    files.insert(file.clone());
-                }
-            }
-        }
-    }
-
-    if files.is_empty() {
-        if let Ok(guard) = state.last_diff.lock() {
-            if let Some(cached) = guard.as_ref() {
-                for file in &cached.diff_result.files {
-                    files.insert(file.path().to_string());
-                }
-            }
-        }
-    }
-
-    files
-}
-
-fn workspace_files(workdir: &std::path::Path) -> Vec<String> {
-    let mut builder = WalkBuilder::new(workdir);
-    builder
-        .hidden(false)
-        .ignore(true)
-        .git_ignore(true)
-        .git_exclude(true)
-        .parents(true);
-
-    builder
-        .build()
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().map(|ft| ft.is_file()).unwrap_or(false))
-        .filter_map(|entry| {
-            let rel = entry.path().strip_prefix(workdir).ok()?;
-            let rel_str = rel.to_string_lossy().replace('\\', "/");
-            if rel_str.starts_with(".git/") {
-                return None;
-            }
-            Some(rel_str)
-        })
-        .collect()
-}
-
-#[tauri::command]
-pub fn cross_file_search(
-    repo_path: String,
-    query: String,
-    show_unchanged_files: bool,
-    max_results: Option<usize>,
-    state: tauri::State<'_, AppState>,
-) -> Result<Vec<CrossFileSearchResult>, CommandError> {
-    let query = query.trim();
-    if query.is_empty() {
-        return Ok(vec![]);
-    }
-
-    let repo = open_repo(&repo_path)?;
-    let workdir = repo
-        .workdir()
-        .ok_or_else(|| CommandError::Git("Bare repositories are not supported".to_string()))?
-        .to_path_buf();
-
-    let mut candidates: Vec<String> = if show_unchanged_files {
-        workspace_files(&workdir)
+fn write_output(
+    output: &AnalysisOutput,
+    file_path: Option<&std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(path) = file_path {
+        let mut file = std::fs::File::create(path)?;
+        output::write_json(output, &mut file)?;
     } else {
-        changed_files_from_state(&state).into_iter().collect()
-    };
-    candidates.sort();
-
-    let matcher = RegexMatcherBuilder::new()
-        .case_insensitive(true)
-        .fixed_strings(true)
-        .build(query)
-        .map_err(|e| CommandError::Analysis(format!("Invalid search query: {}", e)))?;
-
-    let mut searcher = SearcherBuilder::new()
-        .line_number(true)
-        .multi_line(false)
-        .binary_detection(grep_searcher::BinaryDetection::quit(b'\x00'))
-        .build();
-
-    let max_file_results = max_results.unwrap_or(200).max(1);
-    let mut results = Vec::new();
-    let mut total_matches = 0usize;
-
-    for relative_path in candidates {
-        if results.len() >= max_file_results || total_matches >= 1000 {
-            break;
-        }
-
-        let absolute_path = workdir.join(&relative_path);
-        let metadata = match std::fs::metadata(&absolute_path) {
-            Ok(meta) => meta,
-            Err(_) => continue,
-        };
-        if metadata.len() > 2 * 1024 * 1024 {
-            continue;
-        }
-
-        let mut file_matches = Vec::new();
-
-        let sink = sinks::UTF8(|line_number: u64, line: &str| {
-            if total_matches >= 1000 || file_matches.len() >= 50 {
-                return Ok(false);
-            }
-            let clean = line.trim_end_matches(&['\r', '\n'][..]).to_string();
-            file_matches.push(CrossFileSearchMatch {
-                line_number: line_number as u32,
-                line_text: clean,
-            });
-            total_matches += 1;
-            Ok(true)
-        });
-
-        if searcher.search_path(&matcher, &absolute_path, sink).is_err() {
-            continue;
-        }
-
-        if !file_matches.is_empty() {
-            results.push(CrossFileSearchResult {
-                file_path: relative_path,
-                matches: file_matches,
-            });
-        }
+        let mut stdout = std::io::stdout().lock();
+        output::write_json(output, &mut stdout)?;
     }
-
-    Ok(results)
-}
-
-#[tauri::command]
-pub fn get_workspace_file_content(
-    repo_path: String,
-    file_path: String,
-) -> Result<FileDiffContent, CommandError> {
-    let repo = open_repo(&repo_path)?;
-    let workdir = repo
-        .workdir()
-        .ok_or_else(|| CommandError::Git("Bare repositories are not supported".to_string()))?
-        .to_path_buf();
-
-    let absolute = workdir.join(&file_path);
-    if !absolute.exists() || !absolute.is_file() {
-        return Err(CommandError::Io(format!("File not found: {}", file_path)));
-    }
-
-    let content = std::fs::read_to_string(&absolute)
-        .map_err(|e| CommandError::Io(format!("Failed to read file '{}': {}", file_path, e)))?;
-
-    Ok(FileDiffContent {
-        path: file_path.clone(),
-        old_content: content.clone(),
-        new_content: content,
-        language: detect_language(&file_path),
-    })
-}
-
-/// Check whether LLM access is configured and available.
-///
-/// This includes API-key-based providers plus subscription-backed Codex/Claude CLIs.
-#[tauri::command]
-pub fn check_api_key(repo_path: Option<String>) -> Result<bool, CommandError> {
-    Ok(get_llm_settings(repo_path)?.has_api_key)
-}
-
-/// Get LLM settings from the shared global config plus repo-local overrides.
-///
-/// Reads `~/.diffcore/config.toml`, merges in any repo-local `[llm]` overrides, resolves
-/// CLI/API availability, and returns a unified `LlmSettings` struct for the settings panel.
-#[tauri::command]
-pub fn get_llm_settings(repo_path: Option<String>) -> Result<LlmSettings, CommandError> {
-    let (config, workdir) = load_config_from_path(repo_path.as_deref());
-    let codex_status = llm::codex_cli::detect_status();
-    let claude_status = llm::claude_cli::detect_status();
-
-    let configured_provider = config.llm.provider.as_deref();
-    let provider =
-        preferred_provider_for_runtime(configured_provider, &codex_status, &claude_status);
-    let model =
-        preferred_model_for_runtime(config.llm.model.clone(), configured_provider, &provider);
-
-    let has_api_key = match provider.as_str() {
-        "codex" => codex_status.authenticated,
-        "claude" => claude_status.authenticated,
-        _ => llm::resolve_api_key(&config.llm, &provider).is_ok(),
-    };
-
-    let api_key_source = match provider.as_str() {
-        "codex" => match (codex_status.installed, codex_status.authenticated) {
-            (true, true) => "Codex CLI login".to_string(),
-            (true, false) => "Codex CLI installed, not logged in".to_string(),
-            (false, _) => "Codex CLI not installed".to_string(),
-        },
-        "claude" => match (claude_status.installed, claude_status.authenticated) {
-            (true, true) => "Claude Code subscription".to_string(),
-            (true, false) => "Claude Code installed, not logged in".to_string(),
-            (false, _) => "Claude Code not installed".to_string(),
-        },
-        _ if config.llm.key_cmd.is_some() => "key_cmd".to_string(),
-        _ if config.llm.key.as_ref().is_some_and(|k| !k.is_empty()) => {
-            "~/.diffcore/config.toml".to_string()
-        }
-        _ if std::env::var("DIFFCORE_API_KEY").is_ok() => "DIFFCORE_API_KEY".to_string(),
-        _ => {
-            let env_var = match provider.as_str() {
-                "anthropic" => "ANTHROPIC_API_KEY",
-                "openai" => "OPENAI_API_KEY",
-                "gemini" => "GEMINI_API_KEY",
-                "openrouter" => "OPENROUTER_API_KEY",
-                "github_copilot" => "GITHUB_COPILOT_TOKEN",
-                _ => "none",
-            };
-            if std::env::var(env_var).is_ok() {
-                env_var.to_string()
-            } else if workdir.is_some() {
-                "none (configure in ~/.diffcore/config.toml or env)".to_string()
-            } else {
-                "none".to_string()
-            }
-        }
-    };
-
-    let configured_refinement_provider = config
-        .llm
-        .refinement
-        .provider
-        .as_deref()
-        .or(configured_provider);
-    let refinement_provider = preferred_provider_for_runtime(
-        configured_refinement_provider,
-        &codex_status,
-        &claude_status,
-    );
-    let refinement_model = preferred_model_for_runtime(
-        config
-            .llm
-            .refinement
-            .model
-            .clone()
-            .or(config.llm.model.clone()),
-        configured_refinement_provider,
-        &refinement_provider,
-    );
-
-    Ok(LlmSettings {
-        annotations_enabled: config.llm.annotations_enabled,
-        refinement_enabled: config.llm.refinement.enabled,
-        provider,
-        model,
-        api_key_source,
-        has_api_key,
-        refinement_provider,
-        refinement_model,
-        refinement_max_iterations: config.llm.refinement.max_iterations,
-        global_config_path: display_global_config_path(),
-        codex_available: codex_status.installed,
-        codex_authenticated: codex_status.authenticated,
-        claude_available: claude_status.installed,
-        claude_authenticated: claude_status.authenticated,
-        include_uncommitted: config.diff.include_uncommitted,
-    })
-}
-
-/// Save LLM settings to the shared global config.
-///
-/// Loads the existing global config, updates the `[llm]` section with the provided
-/// settings, and writes back to `~/.diffcore/config.toml`.
-#[tauri::command]
-pub fn save_llm_settings(_repo_path: String, settings: LlmSettings) -> Result<(), CommandError> {
-    let mut config =
-        DiffcoreConfig::load_global().map_err(|e| CommandError::Config(format!("{}", e)))?;
-
-    // Update LLM section
-    config.llm.provider = Some(settings.provider);
-    config.llm.model = Some(settings.model);
-    // Don't overwrite key_cmd — that's managed manually
-    config.llm.refinement.enabled = settings.refinement_enabled;
-    config.llm.refinement.provider = Some(settings.refinement_provider);
-    config.llm.refinement.model = Some(settings.refinement_model);
-    config.llm.refinement.max_iterations = settings.refinement_max_iterations;
-    config.llm.annotations_enabled = settings.annotations_enabled;
-
-    // Update diff behavior
-    config.diff.include_uncommitted = settings.include_uncommitted;
-
-    config
-        .save_global()
-        .map_err(|e| CommandError::Config(format!("Failed to save config: {}", e)))?;
-
     Ok(())
 }
 
-/// Save an API key to `~/.diffcore/config.toml` under `[llm] key = "..."`.
-///
-/// The key is stored directly in the config file. Precedence is maintained:
-/// `key_cmd` > `key` (config) > env vars.
-#[tauri::command]
-pub fn save_api_key(_repo_path: String, api_key: String) -> Result<(), CommandError> {
-    let mut config =
-        DiffcoreConfig::load_global().map_err(|e| CommandError::Config(format!("{}", e)))?;
-
-    config.llm.key = Some(api_key);
-
-    config
-        .save_global()
-        .map_err(|e| CommandError::Config(format!("Failed to save config: {}", e)))?;
-
-    Ok(())
-}
-
-/// Remove the stored API key from `~/.diffcore/config.toml`.
-#[tauri::command]
-pub fn clear_api_key(_repo_path: String) -> Result<(), CommandError> {
-    let mut config =
-        DiffcoreConfig::load_global().map_err(|e| CommandError::Config(format!("{}", e)))?;
-
-    config.llm.key = None;
-
-    config
-        .save_global()
-        .map_err(|e| CommandError::Config(format!("Failed to save config: {}", e)))?;
-
-    Ok(())
-}
-
-/// Re-export the shared `ModelInfo` type for the Tauri frontend.
-pub use llm::models::ModelInfo;
-
-/// Fetch available models from a provider's API.
-///
-/// Delegates to the shared `diffcore-core` model listing module, which handles
-/// caching, API key resolution, and provider-specific fetching.
-/// Pass `force_refresh: true` to bypass the 24-hour cache.
-#[tauri::command]
-pub async fn fetch_provider_models(
-    provider: String,
-    force_refresh: bool,
-) -> Result<Vec<ModelInfo>, CommandError> {
-    llm::models::fetch_provider_models(&provider, force_refresh)
-        .await
-        .map_err(|e| match e {
-            llm::models::ModelListError::Network(msg) => CommandError::Network(msg),
-            llm::models::ModelListError::Config(msg) => CommandError::Config(msg),
-            llm::models::ModelListError::UnknownProvider(p) => {
-                CommandError::Config(format!("Unknown provider: {}", p))
-            }
-        })
-}
-
-/// Get the current ignore paths from `.diffcore.toml`.
-#[tauri::command]
-pub fn get_ignore_paths(repo_path: Option<String>) -> Result<Vec<String>, CommandError> {
-    let (config, _workdir) = load_config_from_path(repo_path.as_deref());
-    Ok(config.ignore.paths)
-}
-
-/// Save ignore paths to `.diffcore.toml`.
-///
-/// Loads the existing config (preserving other sections), updates the ignore
-/// paths, and writes back.
-#[tauri::command]
-pub fn save_ignore_paths(repo_path: String, paths: Vec<String>) -> Result<(), CommandError> {
-    let repo_path_buf = PathBuf::from(&repo_path);
-    let repo_path_buf = std::fs::canonicalize(&repo_path_buf)
-        .map_err(|e| CommandError::Io(format!("Invalid repo path: {}", e)))?;
-    let repo = git2::Repository::discover(&repo_path_buf)
-        .map_err(|e| CommandError::Git(format!("Not a git repository: {}", e)))?;
-    let workdir = repo
-        .workdir()
-        .ok_or_else(|| CommandError::Git("Bare repositories are not supported".to_string()))?;
-
-    let mut config = DiffcoreConfig::load_from_dir(workdir)
-        .map_err(|e| CommandError::Config(format!("{}", e)))?;
-
-    config.ignore.paths = paths;
-
-    config
-        .save_to_dir(workdir)
-        .map_err(|e| CommandError::Config(format!("Failed to save config: {}", e)))?;
-
-    Ok(())
-}
-
-/// macOS app bundle name for each editor.
-#[cfg(target_os = "macos")]
-fn macos_app_name(editor: &str) -> Option<&'static str> {
-    match editor {
-        "vscode" => Some("Visual Studio Code"),
-        "cursor" => Some("Cursor"),
-        "zed" => Some("Zed"),
-        _ => None,
-    }
-}
-
-/// Check if a macOS .app bundle exists in /Applications or ~/Applications.
-#[cfg(target_os = "macos")]
-fn macos_app_exists(app_name: &str) -> bool {
-    let global = format!("/Applications/{}.app", app_name);
-    if PathBuf::from(&global).exists() {
-        return true;
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        let user = format!("{}/Applications/{}.app", home, app_name);
-        if PathBuf::from(&user).exists() {
-            return true;
-        }
-    }
-    false
-}
-
-/// Open a file in an external editor.
-///
-/// On macOS, uses `open -a "App Name"` for GUI editors (works without PATH).
-/// Falls back to CLI binary for non-macOS or terminal-based editors.
-#[tauri::command]
-pub fn open_in_editor(editor: String, file_path: String) -> Result<(), CommandError> {
-    let path = PathBuf::from(&file_path);
-    if !path.exists() {
-        return Err(CommandError::Io(format!("File not found: {}", file_path)));
-    }
-
-    let result = match editor.as_str() {
-        "vscode" | "cursor" | "zed" => {
-            #[cfg(target_os = "macos")]
-            {
-                // Use the CLI binary via the app bundle's bin/ path for proper workspace trust.
-                // `open -a` opens files as untrusted; the CLI opens in the existing workspace.
-                let cli_path = match editor.as_str() {
-                    "vscode" => {
-                        "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"
-                    }
-                    "cursor" => "/Applications/Cursor.app/Contents/Resources/app/bin/cursor",
-                    "zed" => "/Applications/Zed.app/Contents/MacOS/cli",
-                    _ => unreachable!(),
-                };
-                if std::path::Path::new(cli_path).exists() {
-                    std::process::Command::new(cli_path)
-                        .args(["--reuse-window", "--goto", &file_path])
-                        .spawn()
-                } else {
-                    // Fallback to `open -a` if CLI path not found
-                    let app_name = macos_app_name(&editor).unwrap();
-                    std::process::Command::new("open")
-                        .args(["-a", app_name, &file_path])
-                        .spawn()
-                }
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                let bin = match editor.as_str() {
-                    "vscode" => "code",
-                    "cursor" => "cursor",
-                    "zed" => "zed",
-                    _ => unreachable!(),
-                };
-                std::process::Command::new(bin)
-                    .args(["--reuse-window", "--goto", &file_path])
-                    .spawn()
-            }
-        }
-        "vim" => {
-            #[cfg(target_os = "macos")]
-            {
-                // Open vim in a NEW Terminal window via AppleScript
-                let escaped = file_path.replace('\\', "\\\\").replace('"', "\\\"");
-                std::process::Command::new("osascript")
-                    .args([
-                        "-e",
-                        &format!(
-                            "tell application \"Terminal\"\n\
-                                activate\n\
-                                do script \"vim \\\"{}\\\"\" \n\
-                            end tell",
-                            escaped
-                        ),
-                    ])
-                    .spawn()
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                std::process::Command::new("vim").arg(&file_path).spawn()
-            }
-        }
-        "terminal" => {
-            let dir = if path.is_dir() {
-                file_path.clone()
-            } else {
-                path.parent()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_else(|| file_path.clone())
-            };
-            #[cfg(target_os = "macos")]
-            {
-                // Use AppleScript to open Terminal and cd to the directory
-                let escaped = dir.replace('\\', "\\\\").replace('"', "\\\"");
-                std::process::Command::new("osascript")
-                    .args([
-                        "-e",
-                        &format!(
-                            "tell application \"Terminal\"\n\
-                                activate\n\
-                                do script \"cd \\\"{}\\\"\" \n\
-                            end tell",
-                            escaped
-                        ),
-                    ])
-                    .spawn()
-            }
-            #[cfg(target_os = "linux")]
-            {
-                std::process::Command::new("xdg-open").arg(&dir).spawn()
-            }
-            #[cfg(target_os = "windows")]
-            {
-                std::process::Command::new("cmd")
-                    .args(["/c", "start", "cmd", "/k", &format!("cd /d {}", dir)])
-                    .spawn()
-            }
-        }
-        other => {
-            return Err(CommandError::Io(format!("Unknown editor: {}", other)));
-        }
-    };
-
-    match result {
-        Ok(_) => Ok(()),
-        Err(e) => {
-            let label = match editor.as_str() {
-                "vscode" => "VS Code",
-                "cursor" => "Cursor",
-                "zed" => "Zed",
-                "vim" => "Vim",
-                "terminal" => "Terminal",
-                _ => &editor,
-            };
-            Err(CommandError::Io(format!(
-                "Failed to open {} — is it installed? ({})",
-                label, e
-            )))
-        }
-    }
-}
-
-/// Check which editors are available on the system.
-///
-/// On macOS, checks for .app bundles in /Applications (works without PATH).
-/// On other platforms, uses `which`/`where` to find CLI binaries.
-#[tauri::command]
-pub fn check_editors_available() -> std::collections::HashMap<String, bool> {
-    let mut result = std::collections::HashMap::new();
-
-    // GUI editors
-    for id in &["vscode", "cursor", "zed"] {
-        let available = {
-            #[cfg(target_os = "macos")]
-            {
-                macos_app_name(id)
-                    .map(|name| macos_app_exists(name))
-                    .unwrap_or(false)
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                let bin = match *id {
-                    "vscode" => "code",
-                    "cursor" => "cursor",
-                    "zed" => "zed",
-                    _ => id,
-                };
-                #[cfg(unix)]
-                {
-                    std::process::Command::new("which")
-                        .arg(bin)
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .status()
-                        .map(|s| s.success())
-                        .unwrap_or(false)
-                }
-                #[cfg(windows)]
-                {
-                    std::process::Command::new("where")
-                        .arg(bin)
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .status()
-                        .map(|s| s.success())
-                        .unwrap_or(false)
-                }
-            }
-        };
-        result.insert(id.to_string(), available);
-    }
-
-    // vim — check binary in PATH (available on most systems)
-    let vim_available = {
-        #[cfg(unix)]
-        {
-            std::process::Command::new("which")
-                .arg("vim")
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false)
-        }
-        #[cfg(windows)]
-        {
-            std::process::Command::new("where")
-                .arg("vim")
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false)
-        }
-    };
-    result.insert("vim".to_string(), vim_available);
-
-    // Terminal is always available
-    result.insert("terminal".to_string(), true);
-
-    result
-}
-
-/// Persist edited file content to disk.
-///
-/// Failure modes:
-/// - Returns IO error when the path does not exist or is a directory.
-/// - Returns IO error when the parent directory is missing.
-/// - Returns IO error when the write fails (permissions, disk full, etc).
-#[tauri::command]
-pub fn save_file_content(file_path: String, content: String) -> Result<(), CommandError> {
-    let path = PathBuf::from(&file_path);
-    if !path.exists() {
-        return Err(CommandError::Io(format!("File not found: {}", file_path)));
-    }
-    if !path.is_file() {
-        return Err(CommandError::Io(format!("Path is not a file: {}", file_path)));
-    }
-    let parent = path.parent().ok_or_else(|| {
-        CommandError::Io(format!("Cannot determine parent directory for: {}", file_path))
-    })?;
-    if !parent.exists() {
-        return Err(CommandError::Io(format!(
-            "Parent directory does not exist: {}",
-            parent.display()
-        )));
-    }
-
-    std::fs::write(&path, content)
-        .map_err(|e| CommandError::Io(format!("Failed to write file '{}': {}", file_path, e)))
-}
-
-/// Load config from a repo path, returning both config and optional workdir.
-fn load_config_from_path(repo_path: Option<&str>) -> (DiffcoreConfig, Option<PathBuf>) {
-    if let Some(path) = repo_path {
-        let repo_path = PathBuf::from(path);
-        if let Ok(canonical) = std::fs::canonicalize(&repo_path) {
-            if let Ok(repo) = git2::Repository::discover(&canonical) {
-                if let Some(workdir) = repo.workdir() {
-                    let config =
-                        DiffcoreConfig::load_with_global_llm_from_dir(workdir).unwrap_or_default();
-                    return (config, Some(workdir.to_path_buf()));
-                }
-            }
-        }
-    }
-    (DiffcoreConfig::load_global().unwrap_or_default(), None)
-}
-
-/// Get the default model for a provider.
-fn default_model_for_provider(provider: &str) -> &str {
-    match provider {
-        "codex" => "default",
-        "claude" => "default",
-        "anthropic" => "claude-sonnet-4-6",
-        "openai" => "gpt-4.1",
-        "gemini" => "gemini-2.5-flash",
-        "openrouter" => "anthropic/claude-sonnet-4-6",
-        "github_copilot" => "gpt-4.1",
-        _ => "default",
-    }
-}
-
-fn default_provider_for_machine(
-    codex_status: &llm::BackendStatus,
-    claude_status: &llm::BackendStatus,
-) -> &'static str {
-    if codex_status.authenticated {
-        "codex"
-    } else if claude_status.authenticated {
-        "claude"
-    } else {
-        "anthropic"
-    }
-}
-
-fn preferred_provider_for_runtime(
-    configured_provider: Option<&str>,
-    codex_status: &llm::BackendStatus,
-    claude_status: &llm::BackendStatus,
-) -> String {
-    match configured_provider {
-        Some("codex") if codex_status.authenticated => "codex".to_string(),
-        Some("claude") if claude_status.authenticated => "claude".to_string(),
-        Some(provider) if provider_supports_tool_activity(provider) => {
-            default_provider_for_machine(codex_status, claude_status).to_string()
-        }
-        Some(provider) => {
-            if codex_status.authenticated || claude_status.authenticated {
-                default_provider_for_machine(codex_status, claude_status).to_string()
-            } else {
-                provider.to_string()
-            }
-        }
-        None => default_provider_for_machine(codex_status, claude_status).to_string(),
-    }
-}
-
-fn preferred_model_for_runtime(
-    configured_model: Option<String>,
-    configured_provider: Option<&str>,
-    resolved_provider: &str,
-) -> String {
-    if configured_provider == Some(resolved_provider) {
-        configured_model
-            .unwrap_or_else(|| default_model_for_provider(resolved_provider).to_string())
-    } else {
-        default_model_for_provider(resolved_provider).to_string()
-    }
-}
-
-fn display_global_config_path() -> String {
-    DiffcoreConfig::global_config_path()
-        .map(|path| path.to_string_lossy().to_string())
-        .unwrap_or_else(|| "~/.diffcore/config.toml".to_string())
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct AppStateSnapshotFile {
-    version: String,
-    saved_at_epoch_ms: u128,
-    snapshot: serde_json::Value,
-}
-
-fn app_logs_dir() -> Result<PathBuf, CommandError> {
-    if let Some(global_config) = DiffcoreConfig::global_config_path() {
-        let config_dir = global_config
-            .parent()
-            .ok_or_else(|| CommandError::Io("Failed to resolve config directory".to_string()))?;
-        return Ok(config_dir.join("logs"));
-    }
-
-    let home = std::env::var_os("HOME")
-        .ok_or_else(|| CommandError::Io("Cannot determine HOME for log directory".to_string()))?;
-    Ok(PathBuf::from(home).join(".diffcore").join("logs"))
-}
-
-fn app_state_snapshot_dir() -> Result<PathBuf, CommandError> {
-    Ok(app_logs_dir()?.join("app-state"))
-}
-
-#[tauri::command]
-pub fn save_app_state(snapshot: serde_json::Value) -> Result<String, CommandError> {
-    let dir = app_state_snapshot_dir()?;
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| CommandError::Io(format!("Failed to create app-state dir: {}", e)))?;
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| CommandError::Io(format!("System clock error: {}", e)))?;
-    let saved_at_epoch_ms = now.as_millis();
-
-    let payload = AppStateSnapshotFile {
-        version: "1".to_string(),
-        saved_at_epoch_ms,
-        snapshot,
-    };
-
-    let latest_path = dir.join("latest.json");
-    let archive_path = dir.join(format!("snapshot-{}.json", saved_at_epoch_ms));
-    let json = serde_json::to_string_pretty(&payload)
-        .map_err(|e| CommandError::Io(format!("Failed to serialize app state: {}", e)))?;
-
-    std::fs::write(&latest_path, &json)
-        .map_err(|e| CommandError::Io(format!("Failed to write latest app state: {}", e)))?;
-    std::fs::write(&archive_path, json)
-        .map_err(|e| CommandError::Io(format!("Failed to write archived app state: {}", e)))?;
-
-    Ok(latest_path.to_string_lossy().to_string())
-}
-
-#[tauri::command]
-pub fn load_last_app_state() -> Result<Option<serde_json::Value>, CommandError> {
-    // TODO reenable when this feature works right
-    return Ok(None);
-    // let latest_path = app_state_snapshot_dir()?.join("latest.json");
-    // if !latest_path.exists() {
-    //     return Ok(None);
-    // }
-
-    // let raw = std::fs::read_to_string(&latest_path)
-    //     .map_err(|e| CommandError::Io(format!("Failed to read latest app state: {}", e)))?;
-    // let payload: AppStateSnapshotFile = serde_json::from_str(&raw)
-    //     .map_err(|e| CommandError::Io(format!("Failed to parse latest app state: {}", e)))?;
-
-    // Ok(Some(payload.snapshot))
-}
-
-/// LLM settings for the UI — surface for the settings panel.
-///
-/// Contains the current provider/model configuration, API key status,
-/// and annotation/refinement toggle states. Returned by `get_llm_settings`
-/// and accepted by `save_llm_settings`.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct LlmSettings {
-    /// Whether LLM annotations are enabled (controls visibility of Summarize PR / Analyze buttons).
-    pub annotations_enabled: bool,
-    /// Whether LLM refinement is enabled.
-    pub refinement_enabled: bool,
-    /// Selected LLM backend: subscription-backed CLI or direct API provider.
-    pub provider: String,
-    /// Selected model identifier.
-    pub model: String,
-    /// How the API key is configured.
-    pub api_key_source: String,
-    /// Whether an API key is actually available (resolvable).
-    pub has_api_key: bool,
-    /// Refinement provider (can differ from annotation provider).
-    pub refinement_provider: String,
-    /// Refinement model.
-    pub refinement_model: String,
-    /// Maximum refinement iterations.
-    pub refinement_max_iterations: u32,
-    /// Where shared LLM settings are stored.
-    pub global_config_path: String,
-    /// Whether Codex CLI is installed.
-    pub codex_available: bool,
-    /// Whether Codex CLI is logged in and ready.
-    pub codex_authenticated: bool,
-    /// Whether Claude Code is installed.
-    pub claude_available: bool,
-    /// Whether Claude Code is logged in and ready.
-    pub claude_authenticated: bool,
-    /// Whether to include uncommitted working tree changes in branch comparisons.
-    pub include_uncommitted: bool,
-}
-
-/// Summary of repository state for the UI.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct RepoInfo {
-    pub current_branch: Option<String>,
-    pub default_branch: String,
-    pub branches: Vec<git::BranchInfo>,
-    pub worktrees: Vec<git::WorktreeInfo>,
-    pub status: Option<git::BranchStatus>,
-    /// Whether the opened path is a linked worktree (not the main worktree).
-    pub is_worktree: bool,
-}
-
-/// Open a repository from a path, with canonicalization and error handling.
-fn open_repo(repo_path: &str) -> Result<git2::Repository, CommandError> {
-    let path = PathBuf::from(repo_path);
-    let path = std::fs::canonicalize(&path)
-        .map_err(|e| CommandError::Io(format!("Invalid repo path: {}", e)))?;
-    git2::Repository::discover(&path)
-        .map_err(|e| CommandError::Git(format!("Not a git repository: {}", e)))
-}
-
-/// Build a simple unified diff from old and new content.
-fn simple_unified_diff(old: &str, new: &str) -> String {
-    let old_lines: Vec<&str> = old.lines().collect();
-    let new_lines: Vec<&str> = new.lines().collect();
-    let mut result = String::new();
-    // Simple approach: show all old lines as removed, all new lines as added
-    // For a real implementation, use a proper diff algorithm
-    for line in &old_lines {
-        result.push_str(&format!("-{}\n", line));
-    }
-    for line in &new_lines {
-        result.push_str(&format!("+{}\n", line));
-    }
-    result
-}
-
-/// File diff content for the Monaco diff viewer.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct FileDiffContent {
-    pub path: String,
-    pub old_content: String,
-    pub new_content: String,
-    pub language: String,
-}
-
-// ── Internal helpers ──
-
-fn extract_diff(
-    repo: &git2::Repository,
-    base: Option<String>,
-    head: Option<String>,
-    range: Option<String>,
-    staged: bool,
-    unstaged: bool,
-    pr_preview: bool,
-    include_uncommitted: bool,
-) -> Result<(git::DiffResult, diffcore_core::types::DiffSource), CommandError> {
-    if let Some(ref range) = range {
-        let diff = git::diff_range(repo, range).map_err(|e| CommandError::Git(format!("{}", e)))?;
-        let source =
-            output::diff_source_range(range, diff.base_sha.as_deref(), diff.head_sha.as_deref());
-        Ok((diff, source))
-    } else if staged {
-        let diff = git::diff_staged(repo).map_err(|e| CommandError::Git(format!("{}", e)))?;
-        let source = output::diff_source_staged();
-        Ok((diff, source))
-    } else if unstaged {
-        let diff = git::diff_unstaged(repo).map_err(|e| CommandError::Git(format!("{}", e)))?;
-        let source = output::diff_source_unstaged();
-        Ok((diff, source))
-    } else if pr_preview {
-        // PR preview mode: use merge-base diff
-        // Auto-detect default branch if no base ref provided
-        let detected_default = if base.is_none() {
-            git::detect_default_branch(repo).ok()
-        } else {
-            None
-        };
-        let base_ref = base
-            .as_deref()
-            .or(detected_default.as_deref())
-            .unwrap_or("main");
-        let head_ref = head.as_deref().unwrap_or("HEAD");
-        if include_uncommitted {
-            let diff =
-                git::diff_merge_base_to_workdir(repo, base_ref, head_ref).map_err(|e| {
-                    CommandError::Git(format!(
-                        "Failed to compute merge-base-to-workdir diff between '{}' and '{}': {}",
-                        base_ref, head_ref, e
-                    ))
-                })?;
-            let source = output::diff_source_branch_with_worktree(
-                base_ref,
-                diff.base_sha.as_deref(),
-            );
-            Ok((diff, source))
-        } else {
-            let selected =
-                git::diff_merge_base_with_worktree_fallback(repo, base_ref, head_ref).map_err(
-                    |e| {
-                        CommandError::Git(format!(
-                            "Failed to compute merge-base diff between '{}' and '{}': {}",
-                            base_ref, head_ref, e
-                        ))
-                    },
-                )?;
-            let source = if selected.used_worktree_fallback {
-                output::diff_source_worktree(
-                    Some(base_ref),
-                    Some(head_ref),
-                    selected.comparison_base_sha.as_deref(),
-                    selected.comparison_head_sha.as_deref(),
-                )
-            } else {
-                output::diff_source_branch(
-                    base_ref,
-                    head_ref,
-                    selected.diff.base_sha.as_deref(),
-                    selected.diff.head_sha.as_deref(),
-                )
-            };
-            Ok((selected.diff, source))
-        }
-    } else {
-        let base_ref = base.as_deref().unwrap_or("main");
-        let head_ref = head.as_deref().unwrap_or("HEAD");
-        if include_uncommitted {
-            let diff = git::diff_branch_to_workdir(repo, base_ref)
-                .map_err(|e| CommandError::Git(format!("{}", e)))?;
-            let source = output::diff_source_branch_with_worktree(
-                base_ref,
-                diff.base_sha.as_deref(),
-            );
-            Ok((diff, source))
-        } else {
-            let selected = git::diff_refs_with_worktree_fallback(repo, base_ref, head_ref)
-                .map_err(|e| CommandError::Git(format!("{}", e)))?;
-            let source = if selected.used_worktree_fallback {
-                output::diff_source_worktree(
-                    Some(base_ref),
-                    Some(head_ref),
-                    selected.comparison_base_sha.as_deref(),
-                    selected.comparison_head_sha.as_deref(),
-                )
-            } else {
-                output::diff_source_branch(
-                    base_ref,
-                    head_ref,
-                    selected.diff.base_sha.as_deref(),
-                    selected.diff.head_sha.as_deref(),
-                )
-            };
-            Ok((selected.diff, source))
-        }
-    }
-}
-
-// ── Review Comments ──────────────────────────────────────────────────
-
-/// A single review comment — can be scoped to a group, file, or code range.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ReviewComment {
-    /// Unique identifier for the comment.
-    pub id: String,
-    /// Comment scope: "code", "file", or "group".
-    #[serde(rename = "type")]
-    pub comment_type: String,
-    /// The flow group this comment belongs to.
-    pub group_id: String,
-    /// File path (null for group-level comments).
-    pub file_path: Option<String>,
-    /// Start line (null for file/group-level comments).
-    pub start_line: Option<u32>,
-    /// End line (null for file/group-level comments).
-    pub end_line: Option<u32>,
-    /// The selected code snippet (for code-level comments).
-    pub selected_code: Option<String>,
-    /// The comment text.
-    pub text: String,
-    /// ISO 8601 timestamp when the comment was created.
-    pub created_at: String,
-}
-
-/// Container for persisted comments, keyed by analysis hash.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct CommentsFile {
-    /// Hash of the analysis run these comments belong to.
-    pub analysis_hash: String,
-    /// All comments for this analysis.
-    pub comments: Vec<ReviewComment>,
-}
-
-/// Get the `.diffcore/comments.json` path for a repo.
-fn comments_file_path(repo_path: &str) -> Result<PathBuf, CommandError> {
-    let repo_path = PathBuf::from(repo_path);
-    let repo_path = std::fs::canonicalize(&repo_path)
-        .map_err(|e| CommandError::Io(format!("Invalid repo path: {}", e)))?;
-    let repo = git2::Repository::discover(&repo_path)
-        .map_err(|e| CommandError::Git(format!("Not a git repository: {}", e)))?;
-    let workdir = repo
-        .workdir()
-        .ok_or_else(|| CommandError::Git("Bare repositories are not supported".to_string()))?;
-    Ok(workdir.join(".diffcore").join("comments.json"))
-}
-
-/// Save a comment to `.diffcore/comments.json`.
-///
-/// Creates the `.diffcore/` directory if it doesn't exist. Appends to existing
-/// comments if the analysis hash matches, otherwise starts fresh.
-#[tauri::command]
-pub fn save_comment(
-    repo_path: String,
-    analysis_hash: String,
-    comment: ReviewComment,
-) -> Result<(), CommandError> {
-    let path = comments_file_path(&repo_path)?;
-
-    // Ensure .diffcore directory exists
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            CommandError::Io(format!("Failed to create .diffcore directory: {}", e))
-        })?;
-    }
-
-    // Load existing comments or start fresh
-    let mut comments_file = load_comments_from_file(&path, &analysis_hash);
-    comments_file.comments.push(comment);
-
-    // Write back
-    let json = serde_json::to_string_pretty(&comments_file)
-        .map_err(|e| CommandError::Io(format!("Failed to serialize comments: {}", e)))?;
-    std::fs::write(&path, json)
-        .map_err(|e| CommandError::Io(format!("Failed to write comments file: {}", e)))?;
-
-    Ok(())
-}
-
-/// Delete a comment by ID from `.diffcore/comments.json`.
-#[tauri::command]
-pub fn delete_comment(
-    repo_path: String,
-    analysis_hash: String,
-    comment_id: String,
-) -> Result<(), CommandError> {
-    let path = comments_file_path(&repo_path)?;
-    let mut comments_file = load_comments_from_file(&path, &analysis_hash);
-    comments_file.comments.retain(|c| c.id != comment_id);
-
-    let json = serde_json::to_string_pretty(&comments_file)
-        .map_err(|e| CommandError::Io(format!("Failed to serialize comments: {}", e)))?;
-    std::fs::write(&path, json)
-        .map_err(|e| CommandError::Io(format!("Failed to write comments file: {}", e)))?;
-
-    Ok(())
-}
-
-/// Load all comments for a given analysis hash from `.diffcore/comments.json`.
-#[tauri::command]
-pub fn load_comments(
-    repo_path: String,
-    analysis_hash: String,
-) -> Result<Vec<ReviewComment>, CommandError> {
-    let path = comments_file_path(&repo_path)?;
-    let comments_file = load_comments_from_file(&path, &analysis_hash);
-    Ok(comments_file.comments)
-}
-
-/// Export all comments as a formatted string ready for pasting to an AI agent.
-///
-/// Includes absolute file paths, code snippets for code-level comments,
-/// and group context.
-#[tauri::command]
-pub fn export_comments(repo_path: String, analysis_hash: String) -> Result<String, CommandError> {
-    let path = comments_file_path(&repo_path)?;
-    let comments_file = load_comments_from_file(&path, &analysis_hash);
-
-    let repo_path_buf = PathBuf::from(&repo_path);
-    let repo_path_buf = std::fs::canonicalize(&repo_path_buf)
-        .map_err(|e| CommandError::Io(format!("Invalid repo path: {}", e)))?;
-    let repo = git2::Repository::discover(&repo_path_buf)
-        .map_err(|e| CommandError::Git(format!("Not a git repository: {}", e)))?;
-    let workdir = repo
-        .workdir()
-        .ok_or_else(|| CommandError::Git("Bare repositories are not supported".to_string()))?
-        .to_string_lossy()
-        .to_string();
-    let workdir = if workdir.ends_with('/') {
-        workdir[..workdir.len() - 1].to_string()
-    } else {
-        workdir
-    };
-
-    let mut output = String::new();
-
-    for comment in &comments_file.comments {
-        match comment.comment_type.as_str() {
-            "code" => {
-                if let Some(ref fp) = comment.file_path {
-                    let abs_path = format!("{}/{}", workdir, fp);
-                    if let (Some(start), Some(end)) = (comment.start_line, comment.end_line) {
-                        output.push_str(&format!("{}:{}-{}\n", abs_path, start, end));
-                    } else {
-                        output.push_str(&format!("{}\n", abs_path));
-                    }
-                    if let Some(ref code) = comment.selected_code {
-                        output.push_str("```\n");
-                        output.push_str(code);
-                        if !code.ends_with('\n') {
-                            output.push('\n');
-                        }
-                        output.push_str("```\n");
-                    }
-                    output.push_str(&format!("> {}\n\n", comment.text));
-                }
-            }
-            "file" => {
-                if let Some(ref fp) = comment.file_path {
-                    let abs_path = format!("{}/{}", workdir, fp);
-                    output.push_str(&format!("{}\n", abs_path));
-                    output.push_str(&format!("> {}\n\n", comment.text));
-                }
-            }
-            "group" => {
-                output.push_str(&format!("Flow: \"{}\"\n", comment.group_id));
-                output.push_str(&format!("> {}\n\n", comment.text));
-            }
-            _ => {}
-        }
-    }
-
-    Ok(output)
-}
-
-/// Load comments from a file, returning empty if file doesn't exist or hash doesn't match.
-fn load_comments_from_file(path: &PathBuf, analysis_hash: &str) -> CommentsFile {
-    if let Ok(data) = std::fs::read_to_string(path) {
-        if let Ok(existing) = serde_json::from_str::<CommentsFile>(&data) {
-            if existing.analysis_hash == analysis_hash {
-                return existing;
-            }
-        }
-    }
-    CommentsFile {
-        analysis_hash: analysis_hash.to_string(),
-        comments: vec![],
-    }
-}
-
-// ══════════════════════════════════════════════════════════════════════
-// Branch-based comment cache (~/.diffcore/cache/comments/)
-// ══════════════════════════════════════════════════════════════════════
-
-/// Resolve the global comment cache directory.
-/// Respects `DIFFCORE_COMMENT_CACHE_DIR` for testing.
-fn comment_cache_dir() -> Option<PathBuf> {
-    std::env::var_os("DIFFCORE_COMMENT_CACHE_DIR")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|home| {
-                PathBuf::from(home)
-                    .join(".diffcore")
-                    .join("cache")
-                    .join("comments")
-            })
-        })
-}
-
-/// Compute a cache key for a repo+branch combo.
-///
-/// Uses the git common dir (shared across worktrees) + current branch name,
-/// so worktrees on the same branch share comments, while different branches
-/// on the same repo are isolated.
-pub fn comment_cache_key(repo_path: &str) -> Result<String, CommandError> {
-    use sha2::{Digest, Sha256};
-
-    let repo_path_buf = PathBuf::from(repo_path);
-    let repo_path_buf = std::fs::canonicalize(&repo_path_buf)
-        .map_err(|e| CommandError::Io(format!("Invalid repo path: {}", e)))?;
-    let repo = git2::Repository::discover(&repo_path_buf)
-        .map_err(|e| CommandError::Git(format!("Not a git repository: {}", e)))?;
-
-    // Use the git dir path for identity. For worktrees, resolve the main
-    // repo's git dir via `commondir()` if available, otherwise use `path()`.
-    // git2 stores the common dir at `.git/commondir` for linked worktrees.
-    let git_dir = repo.path();
-    let common_dir_file = git_dir.join("commondir");
-    let identity_dir = if common_dir_file.exists() {
-        // Linked worktree — read the commondir reference to get the main repo's git dir
-        std::fs::read_to_string(&common_dir_file)
-            .ok()
-            .and_then(|rel| {
-                let trimmed = rel.trim();
-                let resolved = if std::path::Path::new(trimmed).is_absolute() {
-                    PathBuf::from(trimmed)
-                } else {
-                    git_dir.join(trimmed)
-                };
-                std::fs::canonicalize(resolved).ok()
-            })
-            .unwrap_or_else(|| git_dir.to_path_buf())
-    } else {
-        git_dir.to_path_buf()
-    };
-    let common_dir = identity_dir.to_string_lossy().to_string();
-
-    // Get current branch name
-    let branch = match repo.head() {
-        Ok(head) => head
-            .shorthand()
-            .unwrap_or("HEAD")
-            .to_string(),
-        Err(_) => "HEAD".to_string(),
-    };
-
-    let mut hasher = Sha256::new();
-    hasher.update(common_dir.as_bytes());
-    hasher.update(b"\n");
-    hasher.update(branch.as_bytes());
-    Ok(hex::encode(hasher.finalize()))
-}
-
-/// Branch-cached comment file — just a Vec of comments, no analysis hash.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct CachedCommentsFile {
-    pub comments: Vec<ReviewComment>,
-}
-
-/// Load comments for the current repo+branch from the global cache.
-fn load_cached_comments_file(cache_key: &str) -> CachedCommentsFile {
-    let Some(dir) = comment_cache_dir() else {
-        return CachedCommentsFile { comments: vec![] };
-    };
-    let path = dir.join(format!("{}.json", cache_key));
-    match std::fs::read_to_string(&path) {
-        Ok(data) => serde_json::from_str(&data).unwrap_or(CachedCommentsFile { comments: vec![] }),
-        Err(_) => CachedCommentsFile { comments: vec![] },
-    }
-}
-
-/// Write comments for the current repo+branch to the global cache.
-fn write_cached_comments_file(
-    cache_key: &str,
-    file: &CachedCommentsFile,
-) -> Result<(), CommandError> {
-    let dir = comment_cache_dir().ok_or_else(|| {
-        CommandError::Io("Cannot determine comment cache directory".to_string())
-    })?;
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| CommandError::Io(format!("Failed to create comment cache dir: {}", e)))?;
-    let path = dir.join(format!("{}.json", cache_key));
-    let json = serde_json::to_string_pretty(file)
-        .map_err(|e| CommandError::Io(format!("Failed to serialize comments: {}", e)))?;
-    std::fs::write(&path, json)
-        .map_err(|e| CommandError::Io(format!("Failed to write comment cache: {}", e)))?;
-    Ok(())
-}
-
-/// Save a comment to the branch-based cache.
-#[tauri::command]
-pub fn save_comment_cached(
-    repo_path: String,
-    comment: ReviewComment,
-) -> Result<(), CommandError> {
-    let key = comment_cache_key(&repo_path)?;
-    let mut file = load_cached_comments_file(&key);
-    file.comments.push(comment);
-    write_cached_comments_file(&key, &file)
-}
-
-/// Load all comments for the current repo+branch from the cache.
-#[tauri::command]
-pub fn load_comments_cached(repo_path: String) -> Result<Vec<ReviewComment>, CommandError> {
-    let key = comment_cache_key(&repo_path)?;
-    let file = load_cached_comments_file(&key);
-    Ok(file.comments)
-}
-
-/// Delete a comment by ID from the branch-based cache.
-#[tauri::command]
-pub fn delete_comment_cached(
-    repo_path: String,
-    comment_id: String,
-) -> Result<(), CommandError> {
-    let key = comment_cache_key(&repo_path)?;
-    let mut file = load_cached_comments_file(&key);
-    file.comments.retain(|c| c.id != comment_id);
-    write_cached_comments_file(&key, &file)
-}
-
-/// Update a comment's text by ID in the branch-based cache.
-#[tauri::command]
-pub fn update_comment_cached(
-    repo_path: String,
-    comment_id: String,
-    new_text: String,
-) -> Result<(), CommandError> {
-    let key = comment_cache_key(&repo_path)?;
-    let mut file = load_cached_comments_file(&key);
-    if let Some(comment) = file.comments.iter_mut().find(|c| c.id == comment_id) {
-        comment.text = new_text;
-    }
-    write_cached_comments_file(&key, &file)
-}
-
-// ══════════════════════════════════════════════════════════════════════
-// Groups manifest import / file watching
-// ══════════════════════════════════════════════════════════════════════
-
-/// Import a groups manifest JSON and apply it to the current analysis.
-///
-/// Returns the updated `AnalysisOutput` with groups replaced by the manifest.
-#[tauri::command]
-pub fn import_groups_manifest(
-    manifest_path: String,
-    state: tauri::State<'_, AppState>,
-) -> Result<AnalysisOutput, CommandError> {
+/// Export flow groupings as an editable manifest JSON.
+fn run_export_groups(args: ExportGroupsArgs) -> Result<(), Box<dyn std::error::Error>> {
     use diffcore_core::manifest;
 
-    let manifest = manifest::read_manifest(std::path::Path::new(&manifest_path))
-        .map_err(|e| CommandError::Io(e))?;
-
-    let analysis = state
-        .last_analysis
-        .lock()
-        .map_err(|e| CommandError::Analysis(format!("Lock poisoned: {}", e)))?
-        .clone()
-        .ok_or_else(|| CommandError::Analysis("No analysis loaded".to_string()))?;
-
-    let updated = manifest::import_manifest(&analysis, &manifest);
-
-    // Update cached analysis
-    if let Ok(mut last) = state.last_analysis.lock() {
-        *last = Some(updated.clone());
-    }
-
-    Ok(updated)
-}
-
-/// Export the current analysis groups as a manifest JSON file.
-#[tauri::command]
-pub fn export_groups_manifest(
-    output_path: String,
-    state: tauri::State<'_, AppState>,
-) -> Result<(), CommandError> {
-    use diffcore_core::manifest;
-
-    let analysis = state
-        .last_analysis
-        .lock()
-        .map_err(|e| CommandError::Analysis(format!("Lock poisoned: {}", e)))?
-        .clone()
-        .ok_or_else(|| CommandError::Analysis("No analysis loaded".to_string()))?;
+    let analysis = if let Some(ref input) = args.input {
+        // Load from existing analysis JSON
+        let content = std::fs::read_to_string(input)?;
+        serde_json::from_str::<AnalysisOutput>(&content)?
+    } else {
+        // Run a fresh analysis using the standard Analyze path
+        let analyze_args = AnalyzeArgs {
+            base: Some(args.base.clone()),
+            head: None,
+            range: None,
+            staged: false,
+            unstaged: false,
+            include_uncommitted: true,
+            no_include_uncommitted: false,
+            output: None,
+            annotate: false,
+            refine: false,
+            refine_model: None,
+            no_cache: false,
+            repo: args.repo.clone(),
+        };
+        run_analyze_and_return(analyze_args)?
+    };
 
     let groups_manifest = manifest::export_manifest(&analysis);
-    manifest::write_manifest(std::path::Path::new(&output_path), &groups_manifest)
-        .map_err(|e| CommandError::Io(e))?;
 
-    Ok(())
-}
-
-/// Start watching a manifest file for changes. Emits "manifest-changed" events
-/// to the frontend when the file is modified.
-#[tauri::command]
-pub fn watch_manifest(
-    manifest_path: String,
-    app_handle: tauri::AppHandle,
-    state: tauri::State<'_, AppState>,
-) -> Result<(), CommandError> {
-    // Store the path for the watcher
-    if let Ok(mut path) = state.watched_manifest_path.lock() {
-        *path = Some(PathBuf::from(&manifest_path));
-    }
-
-    // Spawn a background thread that polls the file for changes
-    let path = PathBuf::from(manifest_path);
-    std::thread::spawn(move || {
-        let mut last_modified = std::fs::metadata(&path)
-            .and_then(|m| m.modified())
-            .ok();
-
-        loop {
-            std::thread::sleep(std::time::Duration::from_millis(500));
-
-            let current_modified = std::fs::metadata(&path)
-                .and_then(|m| m.modified())
-                .ok();
-
-            if current_modified != last_modified && current_modified.is_some() {
-                last_modified = current_modified;
-                // Emit event to frontend
-                let _ = app_handle.emit("manifest-changed", &path.to_string_lossy().to_string());
-            }
+    if let Some(ref output) = args.output {
+        manifest::write_manifest(output, &groups_manifest)
+            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+        info!("Groups manifest written to {}", output.display());
+    } else {
+        let json = serde_json::to_string_pretty(&groups_manifest)?;
+        #[allow(clippy::print_stdout)]
+        {
+            println!("{}", json);
         }
-    });
-
-    Ok(())
-}
-
-/// Stop watching the manifest file.
-#[tauri::command]
-pub fn unwatch_manifest(
-    state: tauri::State<'_, AppState>,
-) -> Result<(), CommandError> {
-    if let Ok(mut path) = state.watched_manifest_path.lock() {
-        *path = None;
     }
     Ok(())
 }
 
-fn detect_language(path: &str) -> String {
-    match path.rsplit('.').next() {
-        Some("ts" | "tsx") => "typescript".to_string(),
-        Some("js" | "jsx") => "javascript".to_string(),
-        Some("py") => "python".to_string(),
-        Some("rs") => "rust".to_string(),
-        Some("json") => "json".to_string(),
-        Some("toml") => "toml".to_string(),
-        Some("yaml" | "yml") => "yaml".to_string(),
-        Some("md") => "markdown".to_string(),
-        Some("css") => "css".to_string(),
-        Some("html") => "html".to_string(),
-        Some("sql") => "sql".to_string(),
-        Some("sh" | "bash" | "zsh") => "shell".to_string(),
-        Some("go") => "go".to_string(),
-        Some("java") => "java".to_string(),
-        Some("rb") => "ruby".to_string(),
-        Some("prisma") => "prisma".to_string(),
-        _ => "plaintext".to_string(),
-    }
+/// Import flow groupings from a manifest JSON and produce updated analysis.
+fn run_import_groups(args: ImportGroupsArgs) -> Result<(), Box<dyn std::error::Error>> {
+    use diffcore_core::manifest;
+
+    let groups_manifest = manifest::read_manifest(&args.input)
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+
+    // We need the original analysis to preserve file metadata
+    let analyze_args = AnalyzeArgs {
+        base: Some(args.base.clone()),
+        head: None,
+        range: None,
+        staged: false,
+        unstaged: false,
+        include_uncommitted: true,
+        no_include_uncommitted: false,
+        output: None,
+        annotate: false,
+        refine: false,
+        refine_model: None,
+        no_cache: false,
+        repo: args.repo.clone(),
+    };
+    let analysis = run_analyze_and_return(analyze_args)?;
+    let updated = manifest::import_manifest(&analysis, &groups_manifest);
+
+    write_output(&updated, args.output.as_deref())?;
+    info!(
+        "Imported {} groups from manifest",
+        groups_manifest.groups.len()
+    );
+    Ok(())
 }
 
 #[cfg(test)]
@@ -3156,1266 +1243,573 @@ fn detect_language(path: &str) -> String {
 mod tests {
     use super::*;
 
+    // ── CLI Argument Parsing Tests (Analyze) ──
+
     #[test]
-    fn test_detect_language_typescript() {
-        assert_eq!(detect_language("src/app.ts"), "typescript");
-        assert_eq!(detect_language("src/App.tsx"), "typescript");
+    fn test_parse_analyze_base_head() {
+        let cli = Cli::parse_from(["diffcore", "analyze", "--base", "main", "--head", "feature"]);
+        if let Commands::Analyze(args) = cli.command {
+            assert_eq!(args.base, Some("main".to_string()));
+            assert_eq!(args.head, Some("feature".to_string()));
+            assert!(!args.refine);
+            assert!(args.refine_model.is_none());
+        } else {
+            panic!("expected Analyze command");
+        }
     }
 
     #[test]
-    fn test_detect_language_javascript() {
-        assert_eq!(detect_language("index.js"), "javascript");
-        assert_eq!(detect_language("App.jsx"), "javascript");
+    fn test_parse_analyze_range() {
+        let cli = Cli::parse_from(["diffcore", "analyze", "--range", "HEAD~5..HEAD"]);
+        if let Commands::Analyze(args) = cli.command {
+            assert_eq!(args.range, Some("HEAD~5..HEAD".to_string()));
+            assert!(args.base.is_none());
+            assert!(args.head.is_none());
+        } else {
+            panic!("expected Analyze command");
+        }
     }
 
     #[test]
-    fn test_detect_language_python() {
-        assert_eq!(detect_language("main.py"), "python");
+    fn test_parse_analyze_staged() {
+        let cli = Cli::parse_from(["diffcore", "analyze", "--staged"]);
+        if let Commands::Analyze(args) = cli.command {
+            assert!(args.staged);
+            assert!(!args.unstaged);
+        } else {
+            panic!("expected Analyze command");
+        }
     }
 
     #[test]
-    fn test_detect_language_rust() {
-        assert_eq!(detect_language("lib.rs"), "rust");
+    fn test_parse_analyze_unstaged() {
+        let cli = Cli::parse_from(["diffcore", "analyze", "--unstaged"]);
+        if let Commands::Analyze(args) = cli.command {
+            assert!(args.unstaged);
+            assert!(!args.staged);
+        } else {
+            panic!("expected Analyze command");
+        }
     }
 
     #[test]
-    fn test_detect_language_json() {
-        assert_eq!(detect_language("package.json"), "json");
+    fn test_parse_analyze_refine() {
+        let cli = Cli::parse_from(["diffcore", "analyze", "--base", "main", "--refine"]);
+        if let Commands::Analyze(args) = cli.command {
+            assert!(args.refine);
+            assert!(args.refine_model.is_none());
+        } else {
+            panic!("expected Analyze command");
+        }
     }
 
     #[test]
-    fn test_detect_language_unknown() {
-        assert_eq!(detect_language("Makefile"), "plaintext");
-        assert_eq!(detect_language("noext"), "plaintext");
+    fn test_parse_analyze_refine_model() {
+        let cli = Cli::parse_from([
+            "diffcore",
+            "analyze",
+            "--base",
+            "main",
+            "--refine",
+            "--refine-model",
+            "gpt-4.1",
+        ]);
+        if let Commands::Analyze(args) = cli.command {
+            assert!(args.refine);
+            assert_eq!(args.refine_model, Some("gpt-4.1".to_string()));
+        } else {
+            panic!("expected Analyze command");
+        }
     }
 
     #[test]
-    fn test_detect_language_yaml() {
-        assert_eq!(detect_language("config.yaml"), "yaml");
-        assert_eq!(detect_language("ci.yml"), "yaml");
+    fn test_parse_analyze_refine_model_implies_refine() {
+        let cli = Cli::parse_from([
+            "diffcore",
+            "analyze",
+            "--base",
+            "main",
+            "--refine-model",
+            "claude-sonnet-4-6",
+        ]);
+        if let Commands::Analyze(args) = cli.command {
+            assert_eq!(args.refine_model, Some("claude-sonnet-4-6".to_string()));
+        } else {
+            panic!("expected Analyze command");
+        }
     }
 
     #[test]
-    fn test_detect_language_shell() {
-        assert_eq!(detect_language("run.sh"), "shell");
-        assert_eq!(detect_language("init.bash"), "shell");
+    fn test_parse_analyze_output_file() {
+        let cli = Cli::parse_from(["diffcore", "analyze", "--base", "main", "-o", "review.json"]);
+        if let Commands::Analyze(args) = cli.command {
+            assert_eq!(args.output, Some(PathBuf::from("review.json")));
+        } else {
+            panic!("expected Analyze command");
+        }
     }
 
     #[test]
-    fn test_detect_language_various() {
-        assert_eq!(detect_language("main.go"), "go");
-        assert_eq!(detect_language("App.java"), "java");
-        assert_eq!(detect_language("app.rb"), "ruby");
-        assert_eq!(detect_language("schema.prisma"), "prisma");
-        assert_eq!(detect_language("query.sql"), "sql");
-        assert_eq!(detect_language("style.css"), "css");
-        assert_eq!(detect_language("page.html"), "html");
-        assert_eq!(detect_language("README.md"), "markdown");
-        assert_eq!(detect_language("config.toml"), "toml");
+    fn test_parse_analyze_annotate() {
+        let cli = Cli::parse_from(["diffcore", "analyze", "--base", "main", "--annotate"]);
+        if let Commands::Analyze(args) = cli.command {
+            assert!(args.annotate);
+        } else {
+            panic!("expected Analyze command");
+        }
     }
 
     #[test]
-    fn test_app_state_new() {
-        let state = AppState::new();
-        let last = state.last_analysis.lock().unwrap();
-        assert!(last.is_none());
+    fn test_parse_analyze_all_flags() {
+        let cli = Cli::parse_from([
+            "diffcore",
+            "analyze",
+            "--base",
+            "main",
+            "--head",
+            "feature",
+            "--annotate",
+            "--refine",
+            "--refine-model",
+            "gpt-4.1",
+            "-o",
+            "out.json",
+            "--repo",
+            "/tmp/myrepo",
+        ]);
+        if let Commands::Analyze(args) = cli.command {
+            assert_eq!(args.base, Some("main".to_string()));
+            assert_eq!(args.head, Some("feature".to_string()));
+            assert!(args.annotate);
+            assert!(args.refine);
+            assert_eq!(args.refine_model, Some("gpt-4.1".to_string()));
+            assert_eq!(args.output, Some(PathBuf::from("out.json")));
+            assert_eq!(args.repo, PathBuf::from("/tmp/myrepo"));
+        } else {
+            panic!("expected Analyze command");
+        }
     }
 
     #[test]
-    fn test_command_error_display() {
-        let err = CommandError::Git("not found".to_string());
-        assert_eq!(err.to_string(), "Git error: not found");
+    fn test_default_repo_path() {
+        let cli = Cli::parse_from(["diffcore", "analyze", "--staged"]);
+        if let Commands::Analyze(args) = cli.command {
+            assert_eq!(args.repo, PathBuf::from("."));
+        } else {
+            panic!("expected Analyze command");
+        }
+    }
 
-        let err = CommandError::Analysis("no data".to_string());
-        assert_eq!(err.to_string(), "Analysis error: no data");
+    // ── Diff Source Selection Tests ──
 
-        let err = CommandError::Config("invalid".to_string());
-        assert_eq!(err.to_string(), "Config error: invalid");
+    #[test]
+    fn test_extract_diff_selects_range() {
+        let cli = Cli::parse_from(["diffcore", "analyze", "--range", "abc..def"]);
+        if let Commands::Analyze(args) = cli.command {
+            assert!(args.range.is_some());
+            assert!(!args.staged);
+            assert!(!args.unstaged);
+            assert!(args.base.is_none());
+        } else {
+            panic!("expected Analyze command");
+        }
+    }
 
-        let err = CommandError::Io("permission denied".to_string());
-        assert_eq!(err.to_string(), "IO error: permission denied");
+    // ── Config Override Tests ──
 
-        let err = CommandError::Llm("no api key".to_string());
-        assert_eq!(err.to_string(), "LLM error: no api key");
+    #[test]
+    fn test_refine_flag_overrides_config() {
+        let mut config = DiffcoreConfig::default();
+        assert!(config.llm.refinement.enabled);
+
+        // Even when starting from enabled, explicit flag should still work
+        let refine = true;
+        let refine_model: Option<String> = Some("gpt-4.1".to_string());
+
+        if refine {
+            config.llm.refinement.enabled = true;
+        }
+        if let Some(ref model) = refine_model {
+            config.llm.refinement.enabled = true;
+            config.llm.refinement.model = Some(model.clone());
+        }
+
+        assert!(config.llm.refinement.enabled);
+        assert_eq!(config.llm.refinement.model, Some("gpt-4.1".to_string()));
     }
 
     #[test]
-    fn test_command_error_serialize() {
-        let err = CommandError::Git("test error".to_string());
-        let json = serde_json::to_string(&err).unwrap();
-        assert_eq!(json, "\"Git error: test error\"");
+    fn test_refine_model_without_refine_enables_refinement() {
+        let mut config = DiffcoreConfig::default();
+        // Disable first to test that --refine-model alone re-enables
+        config.llm.refinement.enabled = false;
+        assert!(!config.llm.refinement.enabled);
 
-        let err = CommandError::Llm("rate limited".to_string());
-        let json = serde_json::to_string(&err).unwrap();
-        assert_eq!(json, "\"LLM error: rate limited\"");
+        let refine_model: Option<String> = Some("claude-sonnet-4-6".to_string());
+        if let Some(ref model) = refine_model {
+            config.llm.refinement.enabled = true;
+            config.llm.refinement.model = Some(model.clone());
+        }
+
+        assert!(config.llm.refinement.enabled);
+        assert_eq!(
+            config.llm.refinement.model,
+            Some("claude-sonnet-4-6".to_string())
+        );
     }
 
     #[test]
-    fn test_simple_unified_diff_basic() {
-        let diff = simple_unified_diff("old line", "new line");
-        assert!(diff.contains("-old line"));
-        assert!(diff.contains("+new line"));
-    }
-
-    #[test]
-    fn test_simple_unified_diff_empty() {
-        let diff = simple_unified_diff("", "");
-        assert!(diff.is_empty());
-    }
-
-    #[test]
-    fn test_simple_unified_diff_multiline() {
-        let diff = simple_unified_diff("a\nb", "c\nd\ne");
-        assert!(diff.contains("-a\n"));
-        assert!(diff.contains("-b\n"));
-        assert!(diff.contains("+c\n"));
-        assert!(diff.contains("+d\n"));
-        assert!(diff.contains("+e\n"));
-    }
-
-    #[test]
-    fn test_repo_info_serde_roundtrip() {
-        let info = RepoInfo {
-            current_branch: Some("feature-branch".to_string()),
-            default_branch: "main".to_string(),
-            branches: vec![
-                git::BranchInfo {
-                    name: "main".to_string(),
-                    is_current: false,
-                    has_upstream: true,
+    fn test_refinement_llm_config_construction() {
+        let config = DiffcoreConfig {
+            llm: diffcore_core::config::LlmConfig {
+                provider: Some("anthropic".to_string()),
+                model: Some("claude-sonnet-4-6".to_string()),
+                key_cmd: Some("echo main-key".to_string()),
+                key: Some("main-inline-key".to_string()),
+                annotations_enabled: true,
+                refinement: diffcore_core::config::RefinementConfig {
+                    enabled: true,
+                    provider: Some("openai".to_string()),
+                    model: Some("gpt-4.1".to_string()),
+                    key_cmd: Some("echo refinement-key".to_string()),
+                    max_iterations: 2,
                 },
-                git::BranchInfo {
-                    name: "feature-branch".to_string(),
-                    is_current: true,
-                    has_upstream: false,
+            },
+            ..Default::default()
+        };
+
+        let refinement_llm_config = diffcore_core::config::LlmConfig {
+            provider: config
+                .llm
+                .refinement
+                .provider
+                .clone()
+                .or_else(|| config.llm.provider.clone()),
+            model: config
+                .llm
+                .refinement
+                .model
+                .clone()
+                .or_else(|| config.llm.model.clone()),
+            key_cmd: config
+                .llm
+                .refinement
+                .key_cmd
+                .clone()
+                .or_else(|| config.llm.key_cmd.clone()),
+            key: config.llm.key.clone(),
+            ..Default::default()
+        };
+
+        assert_eq!(refinement_llm_config.provider, Some("openai".to_string()));
+        assert_eq!(refinement_llm_config.model, Some("gpt-4.1".to_string()));
+        assert_eq!(
+            refinement_llm_config.key_cmd,
+            Some("echo refinement-key".to_string())
+        );
+        assert_eq!(
+            refinement_llm_config.key,
+            Some("main-inline-key".to_string())
+        );
+    }
+
+    #[test]
+    fn test_refinement_llm_config_falls_back_to_main() {
+        let config = DiffcoreConfig {
+            llm: diffcore_core::config::LlmConfig {
+                provider: Some("anthropic".to_string()),
+                model: Some("claude-sonnet-4-6".to_string()),
+                key_cmd: Some("echo main-key".to_string()),
+                key: Some("main-inline-key".to_string()),
+                annotations_enabled: true,
+                refinement: diffcore_core::config::RefinementConfig {
+                    enabled: true,
+                    provider: None,
+                    model: None,
+                    key_cmd: None,
+                    max_iterations: 1,
                 },
-            ],
-            worktrees: vec![git::WorktreeInfo {
-                path: "/tmp/repo".to_string(),
-                branch: Some("main".to_string()),
-                is_main: true,
-            }],
-            status: Some(git::BranchStatus {
-                branch: "feature-branch".to_string(),
-                upstream: None,
-                ahead: 0,
-                behind: 0,
-            }),
-            is_worktree: false,
+            },
+            ..Default::default()
         };
-        let json = serde_json::to_string(&info).unwrap();
-        let back: RepoInfo = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.current_branch, Some("feature-branch".to_string()));
-        assert_eq!(back.default_branch, "main");
-        assert_eq!(back.branches.len(), 2);
-        assert_eq!(back.worktrees.len(), 1);
-        assert!(back.status.is_some());
-    }
 
-    #[test]
-    fn test_repo_info_no_status() {
-        let info = RepoInfo {
-            current_branch: None,
-            default_branch: "main".to_string(),
-            branches: vec![],
-            worktrees: vec![],
-            status: None,
-            is_worktree: false,
+        let refinement_llm_config = diffcore_core::config::LlmConfig {
+            provider: config
+                .llm
+                .refinement
+                .provider
+                .clone()
+                .or_else(|| config.llm.provider.clone()),
+            model: config
+                .llm
+                .refinement
+                .model
+                .clone()
+                .or_else(|| config.llm.model.clone()),
+            key_cmd: config
+                .llm
+                .refinement
+                .key_cmd
+                .clone()
+                .or_else(|| config.llm.key_cmd.clone()),
+            key: config.llm.key.clone(),
+            ..Default::default()
         };
-        let json = serde_json::to_string(&info).unwrap();
-        let back: RepoInfo = serde_json::from_str(&json).unwrap();
-        assert!(back.current_branch.is_none());
-        assert!(back.status.is_none());
+
+        assert_eq!(
+            refinement_llm_config.provider,
+            Some("anthropic".to_string())
+        );
+        assert_eq!(
+            refinement_llm_config.model,
+            Some("claude-sonnet-4-6".to_string())
+        );
+        assert_eq!(
+            refinement_llm_config.key_cmd,
+            Some("echo main-key".to_string())
+        );
+        assert_eq!(
+            refinement_llm_config.key,
+            Some("main-inline-key".to_string())
+        );
     }
 
-    #[test]
-    fn test_check_api_key_no_repo() {
-        // Without any env vars or config, should return false (no key configured)
-        // Note: this test may pass or fail depending on whether env vars are set,
-        // but it should never panic.
-        let result = check_api_key(None);
-        assert!(result.is_ok());
-    }
+    // ── Write Output Tests ──
 
     #[test]
-    fn test_check_api_key_invalid_path() {
-        // Invalid path should not panic, should return Ok(bool)
-        let result = check_api_key(Some("/nonexistent/path/to/repo".to_string()));
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_llm_settings_serde_roundtrip() {
-        let settings = LlmSettings {
-            annotations_enabled: true,
-            refinement_enabled: false,
-            provider: "codex".to_string(),
-            model: "default".to_string(),
-            api_key_source: "Codex CLI login".to_string(),
-            has_api_key: true,
-            refinement_provider: "claude".to_string(),
-            refinement_model: "default".to_string(),
-            refinement_max_iterations: 2,
-            global_config_path: "~/.diffcore/config.toml".to_string(),
-            codex_available: true,
-            codex_authenticated: true,
-            claude_available: true,
-            claude_authenticated: true,
-            include_uncommitted: true,
+    fn test_write_output_to_buffer() {
+        let output = AnalysisOutput {
+            version: "1.0.0".to_string(),
+            diff_source: diffcore_core::types::DiffSource {
+                diff_type: diffcore_core::types::DiffType::Staged,
+                base: None,
+                head: None,
+                base_sha: None,
+                head_sha: None,
+            },
+            summary: diffcore_core::types::AnalysisSummary {
+                total_files_changed: 0,
+                total_groups: 0,
+                languages_detected: vec![],
+                frameworks_detected: vec![],
+            },
+            groups: vec![],
+            infrastructure_group: None,
+            annotations: None,
         };
-        let json = serde_json::to_string(&settings).unwrap();
-        let back: LlmSettings = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.provider, "codex");
-        assert_eq!(back.model, "default");
-        assert!(back.annotations_enabled);
-        assert!(!back.refinement_enabled);
-        assert!(back.has_api_key);
-        assert_eq!(back.refinement_provider, "claude");
-        assert_eq!(back.refinement_model, "default");
-        assert_eq!(back.refinement_max_iterations, 2);
-        assert!(back.codex_available);
-        assert!(back.claude_authenticated);
+
+        let json = serde_json::to_string_pretty(&output).unwrap();
+        assert!(json.contains("\"version\": \"1.0.0\""));
+    }
+
+    // ── Launch Command Parsing Tests ──
+
+    #[test]
+    fn test_parse_launch_bcompare() {
+        let cli = Cli::parse_from([
+            "diffcore",
+            "launch",
+            "--tool",
+            "bcompare",
+            "--group",
+            "group_1",
+            "--input",
+            "review.json",
+        ]);
+        if let Commands::Launch(args) = cli.command {
+            assert!(matches!(args.tool, DiffTool::Bcompare));
+            assert_eq!(args.group, "group_1");
+            assert_eq!(args.input, PathBuf::from("review.json"));
+            assert_eq!(args.repo, PathBuf::from("."));
+        } else {
+            panic!("expected Launch command");
+        }
     }
 
     #[test]
-    fn test_llm_settings_all_providers() {
-        for provider in &["codex", "claude", "anthropic", "openai", "gemini"] {
-            let expected = default_model_for_provider(provider);
-            assert!(
-                !expected.is_empty(),
-                "Provider '{}' should have a default model",
-                provider
+    fn test_parse_launch_meld() {
+        let cli = Cli::parse_from([
+            "diffcore", "launch", "--tool", "meld", "--group", "group_2", "--input", "out.json",
+        ]);
+        if let Commands::Launch(args) = cli.command {
+            assert!(matches!(args.tool, DiffTool::Meld));
+            assert_eq!(args.group, "group_2");
+        } else {
+            panic!("expected Launch command");
+        }
+    }
+
+    #[test]
+    fn test_parse_launch_kdiff3() {
+        let cli = Cli::parse_from([
+            "diffcore", "launch", "--tool", "kdiff3", "--group", "g1", "--input", "a.json",
+        ]);
+        if let Commands::Launch(args) = cli.command {
+            assert!(matches!(args.tool, DiffTool::Kdiff3));
+        } else {
+            panic!("expected Launch command");
+        }
+    }
+
+    #[test]
+    fn test_parse_launch_code() {
+        let cli = Cli::parse_from([
+            "diffcore", "launch", "--tool", "code", "--group", "g1", "--input", "a.json",
+        ]);
+        if let Commands::Launch(args) = cli.command {
+            assert!(matches!(args.tool, DiffTool::Code));
+        } else {
+            panic!("expected Launch command");
+        }
+    }
+
+    #[test]
+    fn test_parse_launch_opendiff() {
+        let cli = Cli::parse_from([
+            "diffcore", "launch", "--tool", "opendiff", "--group", "g1", "--input", "a.json",
+        ]);
+        if let Commands::Launch(args) = cli.command {
+            assert!(matches!(args.tool, DiffTool::Opendiff));
+        } else {
+            panic!("expected Launch command");
+        }
+    }
+
+    #[test]
+    fn test_parse_launch_with_repo() {
+        let cli = Cli::parse_from([
+            "diffcore",
+            "launch",
+            "--tool",
+            "bcompare",
+            "--group",
+            "group_1",
+            "--input",
+            "review.json",
+            "--repo",
+            "/tmp/myrepo",
+        ]);
+        if let Commands::Launch(args) = cli.command {
+            assert_eq!(args.repo, PathBuf::from("/tmp/myrepo"));
+        } else {
+            panic!("expected Launch command");
+        }
+    }
+
+    // ── Eval Command Parsing Tests ──
+
+    #[test]
+    fn test_parse_eval_no_args() {
+        let cli = Cli::parse_from(["diffcore", "eval"]);
+        if let Commands::Eval(args) = cli.command {
+            assert!(args.fixture.is_none());
+            assert_eq!(args.format, "text");
+            assert!((args.min_score - 0.50).abs() < f64::EPSILON);
+            assert!(args.history_file.is_none());
+        } else {
+            panic!("expected Eval command");
+        }
+    }
+
+    #[test]
+    fn test_parse_eval_fixture() {
+        let cli = Cli::parse_from(["diffcore", "eval", "--fixture", "ts-express"]);
+        if let Commands::Eval(args) = cli.command {
+            assert_eq!(args.fixture, Some("ts-express".to_string()));
+        } else {
+            panic!("expected Eval command");
+        }
+    }
+
+    #[test]
+    fn test_parse_eval_json_format() {
+        let cli = Cli::parse_from(["diffcore", "eval", "--format", "json"]);
+        if let Commands::Eval(args) = cli.command {
+            assert_eq!(args.format, "json");
+        } else {
+            panic!("expected Eval command");
+        }
+    }
+
+    #[test]
+    fn test_parse_eval_html_format() {
+        let cli = Cli::parse_from(["diffcore", "eval", "--format", "html"]);
+        if let Commands::Eval(args) = cli.command {
+            assert_eq!(args.format, "html");
+        } else {
+            panic!("expected Eval command");
+        }
+    }
+
+    #[test]
+    fn test_parse_eval_min_score() {
+        let cli = Cli::parse_from(["diffcore", "eval", "--min-score", "0.75"]);
+        if let Commands::Eval(args) = cli.command {
+            assert!((args.min_score - 0.75).abs() < f64::EPSILON);
+        } else {
+            panic!("expected Eval command");
+        }
+    }
+
+    #[test]
+    fn test_parse_eval_history_file() {
+        let cli = Cli::parse_from([
+            "diffcore",
+            "eval",
+            "--history-file",
+            ".diffcore/eval-history.jsonl",
+        ]);
+        if let Commands::Eval(args) = cli.command {
+            assert_eq!(
+                args.history_file,
+                Some(PathBuf::from(".diffcore/eval-history.jsonl"))
             );
+        } else {
+            panic!("expected Eval command");
         }
     }
 
     #[test]
-    fn test_default_model_for_provider() {
-        assert_eq!(default_model_for_provider("codex"), "default");
-        assert_eq!(default_model_for_provider("claude"), "default");
-        assert_eq!(default_model_for_provider("anthropic"), "claude-sonnet-4-6");
-        assert_eq!(default_model_for_provider("openai"), "gpt-4.1");
-        assert_eq!(default_model_for_provider("gemini"), "gemini-2.5-flash");
-        assert_eq!(default_model_for_provider("unknown"), "default");
-    }
-
-    #[test]
-    fn test_preferred_provider_for_runtime_prefers_authenticated_codex_over_direct_api() {
-        let codex = llm::BackendStatus {
-            installed: true,
-            authenticated: true,
-        };
-        let claude = llm::BackendStatus {
-            installed: true,
-            authenticated: false,
-        };
-
-        assert_eq!(
-            preferred_provider_for_runtime(Some("openai"), &codex, &claude),
-            "codex"
-        );
-        assert_eq!(
-            preferred_provider_for_runtime(Some("anthropic"), &codex, &claude),
-            "codex"
-        );
-    }
-
-    #[test]
-    fn test_preferred_model_for_runtime_resets_to_provider_default_when_backend_changes() {
-        assert_eq!(
-            preferred_model_for_runtime(Some("gpt-5.4".to_string()), Some("openai"), "codex"),
-            "default"
-        );
-        assert_eq!(
-            preferred_model_for_runtime(Some("default".to_string()), Some("codex"), "codex"),
-            "default"
-        );
-    }
-
-    #[test]
-    fn test_get_llm_settings_no_repo() {
-        let result = get_llm_settings(None);
-        assert!(result.is_ok());
-        let settings = result.unwrap();
-        assert!(!settings.provider.is_empty());
-        assert!(!settings.model.is_empty());
-        assert!(!settings.global_config_path.is_empty());
-    }
-
-    #[test]
-    fn test_get_llm_settings_invalid_path() {
-        let result = get_llm_settings(Some("/nonexistent/path".to_string()));
-        assert!(result.is_ok());
-        let settings = result.unwrap();
-        assert!(!settings.provider.is_empty());
-    }
-
-    #[test]
-    fn test_load_config_from_path_none() {
-        let (_config, workdir) = load_config_from_path(None);
-        assert!(workdir.is_none());
-    }
-
-    #[test]
-    fn test_load_config_from_path_invalid() {
-        let (_config, workdir) = load_config_from_path(Some("/nonexistent/path"));
-        assert!(workdir.is_none());
-    }
-
-    #[test]
-    fn test_refinement_result_serde_roundtrip() {
-        use diffcore_core::llm::schema::RefinementResponse;
-
-        let result = RefinementResult {
-            refined_groups: vec![],
-            infrastructure_group: None,
-            refinement_response: RefinementResponse {
-                splits: vec![],
-                merges: vec![],
-                re_ranks: vec![],
-                reclassifications: vec![],
-                reasoning: "No changes needed".to_string(),
-            },
-            provider: "anthropic".to_string(),
-            model: "claude-sonnet-4-6".to_string(),
-            had_changes: false,
-            warnings: Vec::new(),
-        };
-        let json = serde_json::to_string(&result).unwrap();
-        let back: RefinementResult = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.provider, "anthropic");
-        assert_eq!(back.model, "claude-sonnet-4-6");
-        assert!(!back.had_changes);
-        assert!(back.refined_groups.is_empty());
-        assert!(back.infrastructure_group.is_none());
-        assert!(back.warnings.is_empty());
-    }
-
-    #[test]
-    fn test_refinement_result_with_changes() {
-        use diffcore_core::llm::schema::{RefinementNewGroup, RefinementResponse, RefinementSplit};
-        use diffcore_core::types::{ChangeStats, FileChange, FileRole, FlowGroup};
-
-        let result = RefinementResult {
-            refined_groups: vec![FlowGroup {
-                id: "g1".to_string(),
-                name: "Refined group".to_string(),
-                entrypoint: None,
-                files: vec![FileChange {
-                    path: "test.ts".to_string(),
-                    flow_position: 0,
-                    role: FileRole::Entrypoint,
-                    changes: ChangeStats {
-                        additions: 10,
-                        deletions: 5,
-                    },
-                    symbols_changed: vec![],
-                }],
-                edges: vec![],
-                risk_score: 0.5,
-                review_order: 1,
-            }],
-            infrastructure_group: None,
-            refinement_response: RefinementResponse {
-                splits: vec![RefinementSplit {
-                    source_group_id: "g1".to_string(),
-                    new_groups: vec![RefinementNewGroup {
-                        name: "Sub A".to_string(),
-                        files: vec!["test.ts".to_string()],
-                    }],
-                    reason: "test split".to_string(),
-                }],
-                merges: vec![],
-                re_ranks: vec![],
-                reclassifications: vec![],
-                reasoning: "Split for clarity".to_string(),
-            },
-            provider: "openai".to_string(),
-            model: "gpt-4.1".to_string(),
-            had_changes: true,
-            warnings: Vec::new(),
-        };
-        let json = serde_json::to_string(&result).unwrap();
-        let back: RefinementResult = serde_json::from_str(&json).unwrap();
-        assert!(back.had_changes);
-        assert_eq!(back.refined_groups.len(), 1);
-        assert_eq!(back.refinement_response.splits.len(), 1);
-    }
-
-    #[test]
-    fn test_file_diff_content_serde_roundtrip() {
-        let content = FileDiffContent {
-            path: "src/main.ts".to_string(),
-            old_content: "const x = 1;".to_string(),
-            new_content: "const x = 2;".to_string(),
-            language: "typescript".to_string(),
-        };
-        let json = serde_json::to_string(&content).unwrap();
-        let back: FileDiffContent = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.path, "src/main.ts");
-        assert_eq!(back.old_content, "const x = 1;");
-        assert_eq!(back.new_content, "const x = 2;");
-        assert_eq!(back.language, "typescript");
-    }
-
-    // ── Error handling edge case tests ────────────────────────────────
-
-    #[test]
-    fn test_command_error_all_variants_display() {
-        let variants = vec![
-            CommandError::Git("git error".into()),
-            CommandError::Analysis("analysis error".into()),
-            CommandError::Config("config error".into()),
-            CommandError::Io("io error".into()),
-            CommandError::Llm("llm error".into()),
-        ];
-        for err in &variants {
-            let msg = err.to_string();
-            assert!(!msg.is_empty());
-            // Verify serialization works for all variants (sent to frontend)
-            let json = serde_json::to_string(err).unwrap();
-            assert!(!json.is_empty());
+    fn test_parse_eval_all_flags() {
+        let cli = Cli::parse_from([
+            "diffcore",
+            "eval",
+            "--fixture",
+            "python-fastapi",
+            "--format",
+            "json",
+            "--min-score",
+            "0.80",
+            "--history-file",
+            "/tmp/history.jsonl",
+        ]);
+        if let Commands::Eval(args) = cli.command {
+            assert_eq!(args.fixture, Some("python-fastapi".to_string()));
+            assert_eq!(args.format, "json");
+            assert!((args.min_score - 0.80).abs() < f64::EPSILON);
+            assert_eq!(args.history_file, Some(PathBuf::from("/tmp/history.jsonl")));
+        } else {
+            panic!("expected Eval command");
         }
     }
 
+    // ── DiffTool Tests ──
+
     #[test]
-    fn test_detect_language_edge_cases() {
-        // Path with multiple dots
-        assert_eq!(detect_language("my.file.test.ts"), "typescript");
-        // Hidden file
-        assert_eq!(detect_language(".hidden.js"), "javascript");
-        // No extension
-        assert_eq!(detect_language("Makefile"), "plaintext");
-        // Empty string
-        assert_eq!(detect_language(""), "plaintext");
-        // Path with spaces
-        assert_eq!(detect_language("path with spaces/file.ts"), "typescript");
+    fn test_diff_tool_executable() {
+        assert_eq!(DiffTool::Bcompare.executable(), "bcompare");
+        assert_eq!(DiffTool::Meld.executable(), "meld");
+        assert_eq!(DiffTool::Kdiff3.executable(), "kdiff3");
+        assert_eq!(DiffTool::Code.executable(), "code");
+        assert_eq!(DiffTool::Opendiff.executable(), "opendiff");
     }
 
     #[test]
-    fn test_simple_unified_diff_only_additions() {
-        let diff = simple_unified_diff("", "new line 1\nnew line 2");
-        assert!(diff.contains("+new line 1"));
-        assert!(diff.contains("+new line 2"));
-        assert!(!diff.contains("-"));
-    }
-
-    #[test]
-    fn test_simple_unified_diff_only_deletions() {
-        let diff = simple_unified_diff("old line 1\nold line 2", "");
-        assert!(diff.contains("-old line 1"));
-        assert!(diff.contains("-old line 2"));
-        assert!(!diff.contains("+"));
-    }
-
-    #[test]
-    fn test_app_state_mutex_not_poisoned() {
-        let state = AppState::new();
-        // Lock, set, release
-        {
-            let mut last = state.last_analysis.lock().unwrap();
-            *last = None;
-        }
-        // Lock again should succeed
-        let last = state.last_analysis.lock().unwrap();
-        assert!(last.is_none());
-    }
-
-    #[test]
-    fn test_default_model_for_unknown_provider() {
-        // Unknown providers should get a reasonable default
-        let model = default_model_for_provider("nonexistent");
-        assert!(!model.is_empty());
-    }
-
-    #[test]
-    fn test_open_in_editor_nonexistent_file() {
-        let result = open_in_editor(
-            "vscode".to_string(),
-            "/tmp/__nonexistent_file_12345__".to_string(),
-        );
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(
-            err.contains("File not found"),
-            "Expected file-not-found error, got: {}",
-            err
-        );
-    }
-
-    #[test]
-    fn test_open_in_editor_unknown_editor() {
-        // Create a temporary file to pass the file-exists check
-        let tmp = std::env::temp_dir().join("diffcore_test_open_editor");
-        std::fs::write(&tmp, "test").unwrap();
-        let result = open_in_editor(
-            "unknown_editor".to_string(),
-            tmp.to_str().unwrap().to_string(),
-        );
-        std::fs::remove_file(&tmp).ok();
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(
-            err.contains("Unknown editor"),
-            "Expected unknown-editor error, got: {}",
-            err
-        );
-    }
-
-    // ── Review comment tests ────────────────────────────────────────
-
-    #[test]
-    fn test_review_comment_serde_roundtrip() {
-        let comment = ReviewComment {
-            id: "c1".to_string(),
-            comment_type: "code".to_string(),
-            group_id: "group_1".to_string(),
-            file_path: Some("src/auth.ts".to_string()),
-            start_line: Some(42),
-            end_line: Some(58),
-            selected_code: Some("function validate() {}".to_string()),
-            text: "Missing validation".to_string(),
-            created_at: "2026-03-20T14:30:00Z".to_string(),
-        };
-        let json = serde_json::to_string(&comment).unwrap();
-        let back: ReviewComment = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.id, "c1");
-        assert_eq!(back.comment_type, "code");
-        assert_eq!(back.group_id, "group_1");
-        assert_eq!(back.file_path, Some("src/auth.ts".to_string()));
-        assert_eq!(back.start_line, Some(42));
-        assert_eq!(back.end_line, Some(58));
-        assert_eq!(
-            back.selected_code,
-            Some("function validate() {}".to_string())
-        );
-        assert_eq!(back.text, "Missing validation");
-    }
-
-    #[test]
-    fn test_review_comment_file_level() {
-        let comment = ReviewComment {
-            id: "c2".to_string(),
-            comment_type: "file".to_string(),
-            group_id: "group_1".to_string(),
-            file_path: Some("src/auth.ts".to_string()),
-            start_line: None,
-            end_line: None,
-            selected_code: None,
-            text: "Should we add rate limiting?".to_string(),
-            created_at: "2026-03-20T14:30:00Z".to_string(),
-        };
-        let json = serde_json::to_string(&comment).unwrap();
-        let back: ReviewComment = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.comment_type, "file");
-        assert!(back.start_line.is_none());
-        assert!(back.selected_code.is_none());
-    }
-
-    #[test]
-    fn test_review_comment_group_level() {
-        let comment = ReviewComment {
-            id: "c3".to_string(),
-            comment_type: "group".to_string(),
-            group_id: "group_1".to_string(),
-            file_path: None,
-            start_line: None,
-            end_line: None,
-            selected_code: None,
-            text: "Overall looks good".to_string(),
-            created_at: "2026-03-20T14:31:00Z".to_string(),
-        };
-        let json = serde_json::to_string(&comment).unwrap();
-        let back: ReviewComment = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.comment_type, "group");
-        assert!(back.file_path.is_none());
-    }
-
-    #[test]
-    fn test_comments_file_serde_roundtrip() {
-        let comments_file = CommentsFile {
-            analysis_hash: "abc123".to_string(),
-            comments: vec![
-                ReviewComment {
-                    id: "c1".to_string(),
-                    comment_type: "code".to_string(),
-                    group_id: "group_1".to_string(),
-                    file_path: Some("src/auth.ts".to_string()),
-                    start_line: Some(42),
-                    end_line: Some(58),
-                    selected_code: Some("fn validate()".to_string()),
-                    text: "Missing validation".to_string(),
-                    created_at: "2026-03-20T14:30:00Z".to_string(),
-                },
-                ReviewComment {
-                    id: "c2".to_string(),
-                    comment_type: "group".to_string(),
-                    group_id: "group_1".to_string(),
-                    file_path: None,
-                    start_line: None,
-                    end_line: None,
-                    selected_code: None,
-                    text: "Needs review".to_string(),
-                    created_at: "2026-03-20T14:31:00Z".to_string(),
-                },
-            ],
-        };
-        let json = serde_json::to_string_pretty(&comments_file).unwrap();
-        let back: CommentsFile = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.analysis_hash, "abc123");
-        assert_eq!(back.comments.len(), 2);
-        assert_eq!(back.comments[0].comment_type, "code");
-        assert_eq!(back.comments[1].comment_type, "group");
-    }
-
-    #[test]
-    fn test_load_comments_from_file_missing() {
-        let path = std::env::temp_dir().join("diffcore_test_no_such_file.json");
-        let result = load_comments_from_file(&path, "test_hash");
-        assert_eq!(result.analysis_hash, "test_hash");
-        assert!(result.comments.is_empty());
-    }
-
-    #[test]
-    fn test_load_comments_from_file_wrong_hash() {
-        let path = std::env::temp_dir().join("diffcore_test_wrong_hash.json");
-        let data = CommentsFile {
-            analysis_hash: "old_hash".to_string(),
-            comments: vec![ReviewComment {
-                id: "c1".to_string(),
-                comment_type: "group".to_string(),
-                group_id: "g1".to_string(),
-                file_path: None,
-                start_line: None,
-                end_line: None,
-                selected_code: None,
-                text: "old comment".to_string(),
-                created_at: "2026-03-20T14:30:00Z".to_string(),
-            }],
-        };
-        std::fs::write(&path, serde_json::to_string(&data).unwrap()).unwrap();
-        let result = load_comments_from_file(&path, "new_hash");
-        assert_eq!(result.analysis_hash, "new_hash");
-        assert!(result.comments.is_empty());
-        std::fs::remove_file(&path).ok();
-    }
-
-    #[test]
-    fn test_load_comments_from_file_matching_hash() {
-        let path = std::env::temp_dir().join("diffcore_test_matching_hash.json");
-        let data = CommentsFile {
-            analysis_hash: "matching_hash".to_string(),
-            comments: vec![ReviewComment {
-                id: "c1".to_string(),
-                comment_type: "file".to_string(),
-                group_id: "g1".to_string(),
-                file_path: Some("test.ts".to_string()),
-                start_line: None,
-                end_line: None,
-                selected_code: None,
-                text: "test comment".to_string(),
-                created_at: "2026-03-20T14:30:00Z".to_string(),
-            }],
-        };
-        std::fs::write(&path, serde_json::to_string(&data).unwrap()).unwrap();
-        let result = load_comments_from_file(&path, "matching_hash");
-        assert_eq!(result.analysis_hash, "matching_hash");
-        assert_eq!(result.comments.len(), 1);
-        assert_eq!(result.comments[0].text, "test comment");
-        std::fs::remove_file(&path).ok();
-    }
-
-    #[test]
-    fn test_review_comment_json_type_field() {
-        // Verify the "type" field is correctly renamed from comment_type
-        let comment = ReviewComment {
-            id: "c1".to_string(),
-            comment_type: "code".to_string(),
-            group_id: "g1".to_string(),
-            file_path: None,
-            start_line: None,
-            end_line: None,
-            selected_code: None,
-            text: "test".to_string(),
-            created_at: "2026-03-20T14:30:00Z".to_string(),
-        };
-        let json = serde_json::to_string(&comment).unwrap();
-        assert!(
-            json.contains("\"type\":\"code\""),
-            "JSON should use 'type' not 'comment_type': {}",
-            json
-        );
-        // Verify deserialization from "type" field
-        let back: ReviewComment = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.comment_type, "code");
-    }
-
-    // ── Open-in-editor / editor detection tests ─────────────────────
-
-    #[test]
-    fn test_check_editors_available_returns_all_editor_ids() {
-        let result = check_editors_available();
-        // Should always contain all 5 editor IDs
-        for id in &["vscode", "cursor", "zed", "vim", "terminal"] {
-            assert!(result.contains_key(*id), "Missing editor id: {}", id);
-        }
-        // Terminal should always be available
-        assert_eq!(result["terminal"], true);
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn test_macos_app_name_mapping() {
-        assert_eq!(macos_app_name("vscode"), Some("Visual Studio Code"));
-        assert_eq!(macos_app_name("cursor"), Some("Cursor"));
-        assert_eq!(macos_app_name("zed"), Some("Zed"));
-        assert_eq!(macos_app_name("vim"), None);
-        assert_eq!(macos_app_name("terminal"), None);
-        assert_eq!(macos_app_name("unknown"), None);
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn test_macos_app_exists_nonexistent() {
-        // An app that definitely doesn't exist
-        assert!(!macos_app_exists("Diffcore Nonexistent App 12345"));
-    }
-
-    /// Gated behind `DIFFCORE_RUN_EDITOR_TESTS=1` because it actually spawns editor processes.
-    #[test]
-    fn test_open_in_editor_all_known_editors_accept_temp_file() {
-        if std::env::var("DIFFCORE_RUN_EDITOR_TESTS").is_err() {
-            eprintln!("Skipped: set DIFFCORE_RUN_EDITOR_TESTS=1 to run (launches real editors)");
-            return;
-        }
-
-        // All known editor IDs should not return "Unknown editor" for a valid file
-        let tmp = std::env::temp_dir().join("diffcore_test_known_editors");
-        std::fs::write(&tmp, "test").unwrap();
-        let path = tmp.to_str().unwrap().to_string();
-
-        for editor in &["vscode", "cursor", "zed", "vim", "terminal"] {
-            let result = open_in_editor(editor.to_string(), path.clone());
-            // Result may be Ok (if editor is installed) or Err (not installed),
-            // but should never be "Unknown editor"
-            if let Err(e) = &result {
-                let msg = e.to_string();
-                assert!(
-                    !msg.contains("Unknown editor"),
-                    "Editor '{}' treated as unknown: {}",
-                    editor,
-                    msg
-                );
-            }
-        }
-
-        std::fs::remove_file(&tmp).ok();
-    }
-
-    // ── Update Comment Tests ──
-
-    #[test]
-    fn test_update_comment_cached_changes_text() {
-        let dir = tempfile::tempdir().unwrap();
-        let repo_path = init_test_repo(dir.path());
-
-        let comment = ReviewComment {
-            id: "test_update_1".to_string(),
-            comment_type: "code".to_string(),
-            group_id: "g1".to_string(),
-            file_path: Some("src/main.ts".to_string()),
-            start_line: Some(10),
-            end_line: Some(15),
-            selected_code: Some("const x = 1;".to_string()),
-            text: "Original text".to_string(),
-            created_at: "2026-01-01T00:00:00Z".to_string(),
-        };
-
-        // Save then update
-        save_comment_cached(repo_path.clone(), comment).unwrap();
-        update_comment_cached(repo_path.clone(), "test_update_1".to_string(), "Updated text".to_string()).unwrap();
-
-        let loaded = load_comments_cached(repo_path).unwrap();
-        assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded[0].text, "Updated text");
-        assert_eq!(loaded[0].id, "test_update_1");
-    }
-
-    #[test]
-    fn test_update_comment_preserves_other_fields() {
-        let dir = tempfile::tempdir().unwrap();
-        let repo_path = init_test_repo(dir.path());
-
-        let comment = ReviewComment {
-            id: "test_preserve_1".to_string(),
-            comment_type: "code".to_string(),
-            group_id: "group-abc".to_string(),
-            file_path: Some("src/handler.ts".to_string()),
-            start_line: Some(42),
-            end_line: Some(50),
-            selected_code: Some("function handler() {}".to_string()),
-            text: "Before update".to_string(),
-            created_at: "2026-03-15T12:00:00Z".to_string(),
-        };
-
-        save_comment_cached(repo_path.clone(), comment).unwrap();
-        update_comment_cached(repo_path.clone(), "test_preserve_1".to_string(), "After update".to_string()).unwrap();
-
-        let loaded = load_comments_cached(repo_path).unwrap();
-        let c = &loaded[0];
-        assert_eq!(c.text, "After update");
-        assert_eq!(c.comment_type, "code");
-        assert_eq!(c.group_id, "group-abc");
-        assert_eq!(c.file_path, Some("src/handler.ts".to_string()));
-        assert_eq!(c.start_line, Some(42));
-        assert_eq!(c.end_line, Some(50));
-        assert_eq!(c.selected_code, Some("function handler() {}".to_string()));
-        assert_eq!(c.created_at, "2026-03-15T12:00:00Z");
-    }
-
-    #[test]
-    fn test_update_nonexistent_comment_is_noop() {
-        let dir = tempfile::tempdir().unwrap();
-        let repo_path = init_test_repo(dir.path());
-
-        let comment = ReviewComment {
-            id: "existing_1".to_string(),
-            comment_type: "file".to_string(),
-            group_id: "g1".to_string(),
-            file_path: Some("test.ts".to_string()),
-            start_line: None,
-            end_line: None,
-            selected_code: None,
-            text: "Should not change".to_string(),
-            created_at: "2026-01-01T00:00:00Z".to_string(),
-        };
-
-        save_comment_cached(repo_path.clone(), comment).unwrap();
-        // Update a non-existent ID
-        update_comment_cached(repo_path.clone(), "nonexistent_id".to_string(), "New text".to_string()).unwrap();
-
-        let loaded = load_comments_cached(repo_path).unwrap();
-        assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded[0].text, "Should not change");
-    }
-
-    #[test]
-    fn test_update_comment_among_multiple() {
-        let dir = tempfile::tempdir().unwrap();
-        let repo_path = init_test_repo(dir.path());
-
-        for i in 1..=5 {
-            let comment = ReviewComment {
-                id: format!("multi_{}", i),
-                comment_type: "code".to_string(),
-                group_id: "g1".to_string(),
-                file_path: Some("src/main.ts".to_string()),
-                start_line: Some(i * 10),
-                end_line: Some(i * 10 + 5),
-                selected_code: None,
-                text: format!("Comment {}", i),
-                created_at: "2026-01-01T00:00:00Z".to_string(),
-            };
-            save_comment_cached(repo_path.clone(), comment).unwrap();
-        }
-
-        // Update only the 3rd comment
-        update_comment_cached(repo_path.clone(), "multi_3".to_string(), "Updated comment 3".to_string()).unwrap();
-
-        let loaded = load_comments_cached(repo_path).unwrap();
-        assert_eq!(loaded.len(), 5);
-        assert_eq!(loaded[0].text, "Comment 1");
-        assert_eq!(loaded[1].text, "Comment 2");
-        assert_eq!(loaded[2].text, "Updated comment 3");
-        assert_eq!(loaded[3].text, "Comment 4");
-        assert_eq!(loaded[4].text, "Comment 5");
-    }
-
-    #[test]
-    fn test_update_comment_with_empty_text() {
-        let dir = tempfile::tempdir().unwrap();
-        let repo_path = init_test_repo(dir.path());
-
-        let comment = ReviewComment {
-            id: "empty_text_1".to_string(),
-            comment_type: "file".to_string(),
-            group_id: "g1".to_string(),
-            file_path: Some("file.ts".to_string()),
-            start_line: None,
-            end_line: None,
-            selected_code: None,
-            text: "Has text".to_string(),
-            created_at: "2026-01-01T00:00:00Z".to_string(),
-        };
-
-        save_comment_cached(repo_path.clone(), comment).unwrap();
-        update_comment_cached(repo_path.clone(), "empty_text_1".to_string(), "".to_string()).unwrap();
-
-        let loaded = load_comments_cached(repo_path).unwrap();
-        assert_eq!(loaded[0].text, "");
-    }
-
-    #[test]
-    fn test_update_comment_with_special_characters() {
-        let dir = tempfile::tempdir().unwrap();
-        let repo_path = init_test_repo(dir.path());
-
-        let comment = ReviewComment {
-            id: "special_chars_1".to_string(),
-            comment_type: "code".to_string(),
-            group_id: "g1".to_string(),
-            file_path: Some("src/main.ts".to_string()),
-            start_line: Some(1),
-            end_line: Some(5),
-            selected_code: None,
-            text: "Plain text".to_string(),
-            created_at: "2026-01-01T00:00:00Z".to_string(),
-        };
-
-        save_comment_cached(repo_path.clone(), comment).unwrap();
-        let special_text = "Contains \"quotes\", newlines\n\ttabs, unicode: 🦀, and <html> & entities";
-        update_comment_cached(repo_path.clone(), "special_chars_1".to_string(), special_text.to_string()).unwrap();
-
-        let loaded = load_comments_cached(repo_path).unwrap();
-        assert_eq!(loaded[0].text, special_text);
-    }
-
-    #[test]
-    fn test_update_then_delete_comment() {
-        let dir = tempfile::tempdir().unwrap();
-        let repo_path = init_test_repo(dir.path());
-
-        let comment = ReviewComment {
-            id: "update_delete_1".to_string(),
-            comment_type: "file".to_string(),
-            group_id: "g1".to_string(),
-            file_path: Some("test.ts".to_string()),
-            start_line: None,
-            end_line: None,
-            selected_code: None,
-            text: "Will be updated then deleted".to_string(),
-            created_at: "2026-01-01T00:00:00Z".to_string(),
-        };
-
-        save_comment_cached(repo_path.clone(), comment).unwrap();
-        update_comment_cached(repo_path.clone(), "update_delete_1".to_string(), "Updated".to_string()).unwrap();
-        delete_comment_cached(repo_path.clone(), "update_delete_1".to_string()).unwrap();
-
-        let loaded = load_comments_cached(repo_path).unwrap();
-        assert!(loaded.is_empty());
-    }
-
-    #[test]
-    fn test_multiple_updates_to_same_comment() {
-        let dir = tempfile::tempdir().unwrap();
-        let repo_path = init_test_repo(dir.path());
-
-        let comment = ReviewComment {
-            id: "multi_update_1".to_string(),
-            comment_type: "code".to_string(),
-            group_id: "g1".to_string(),
-            file_path: Some("src/main.ts".to_string()),
-            start_line: Some(1),
-            end_line: Some(3),
-            selected_code: None,
-            text: "Version 1".to_string(),
-            created_at: "2026-01-01T00:00:00Z".to_string(),
-        };
-
-        save_comment_cached(repo_path.clone(), comment).unwrap();
-
-        for i in 2..=10 {
-            update_comment_cached(repo_path.clone(), "multi_update_1".to_string(), format!("Version {}", i)).unwrap();
-        }
-
-        let loaded = load_comments_cached(repo_path).unwrap();
-        assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded[0].text, "Version 10");
-    }
-
-    #[test]
-    fn test_update_comment_on_empty_cache() {
-        let dir = tempfile::tempdir().unwrap();
-        let repo_path = init_test_repo(dir.path());
-
-        // Update on empty cache should succeed (no comment found, noop)
-        let result = update_comment_cached(repo_path.clone(), "no_such_id".to_string(), "text".to_string());
-        assert!(result.is_ok());
-
-        let loaded = load_comments_cached(repo_path).unwrap();
-        assert!(loaded.is_empty());
-    }
-
-    #[test]
-    fn test_update_comment_cached_invalid_repo() {
-        let result = update_comment_cached(
-            "/nonexistent/repo/path".to_string(),
-            "id".to_string(),
-            "text".to_string(),
-        );
-        assert!(result.is_err());
-    }
-
-    // ── ReviewComment Serde Tests ──
-
-    #[test]
-    fn test_review_comment_serde_all_fields() {
-        let comment = ReviewComment {
-            id: "c1".to_string(),
-            comment_type: "code".to_string(),
-            group_id: "g1".to_string(),
-            file_path: Some("src/main.ts".to_string()),
-            start_line: Some(10),
-            end_line: Some(20),
-            selected_code: Some("const x = 1;".to_string()),
-            text: "This needs refactoring".to_string(),
-            created_at: "2026-04-06T12:00:00Z".to_string(),
-        };
-
-        let json = serde_json::to_string(&comment).unwrap();
-        let back: ReviewComment = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.id, "c1");
-        assert_eq!(back.comment_type, "code");
-        assert_eq!(back.group_id, "g1");
-        assert_eq!(back.file_path, Some("src/main.ts".to_string()));
-        assert_eq!(back.start_line, Some(10));
-        assert_eq!(back.end_line, Some(20));
-        assert_eq!(back.selected_code, Some("const x = 1;".to_string()));
-        assert_eq!(back.text, "This needs refactoring");
-        assert_eq!(back.created_at, "2026-04-06T12:00:00Z");
-    }
-
-    #[test]
-    fn test_review_comment_serde_minimal_fields() {
-        let comment = ReviewComment {
-            id: "c2".to_string(),
-            comment_type: "group".to_string(),
-            group_id: "g2".to_string(),
-            file_path: None,
-            start_line: None,
-            end_line: None,
-            selected_code: None,
-            text: "Group-level comment".to_string(),
-            created_at: "2026-01-01T00:00:00Z".to_string(),
-        };
-
-        let json = serde_json::to_string(&comment).unwrap();
-        let back: ReviewComment = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.comment_type, "group");
-        assert!(back.file_path.is_none());
-        assert!(back.start_line.is_none());
-        assert!(back.end_line.is_none());
-        assert!(back.selected_code.is_none());
-    }
-
-    #[test]
-    fn test_review_comment_type_rename_in_json() {
-        // The `comment_type` field is serialized as `type` in JSON (via serde rename)
-        let comment = ReviewComment {
-            id: "c3".to_string(),
-            comment_type: "file".to_string(),
-            group_id: "g1".to_string(),
-            file_path: Some("test.ts".to_string()),
-            start_line: None,
-            end_line: None,
-            selected_code: None,
-            text: "File comment".to_string(),
-            created_at: "2026-01-01T00:00:00Z".to_string(),
-        };
-
-        let json = serde_json::to_string(&comment).unwrap();
-        assert!(json.contains(r#""type":"file""#));
-        assert!(!json.contains("comment_type"));
-    }
-
-    // ── LLM Settings Annotations Tests ──
-
-    #[test]
-    fn test_llm_settings_annotations_enabled_roundtrip_true() {
-        let settings = LlmSettings {
-            annotations_enabled: true,
-            refinement_enabled: true,
-            provider: "codex".to_string(),
-            model: "default".to_string(),
-            api_key_source: "test".to_string(),
-            has_api_key: true,
-            refinement_provider: "codex".to_string(),
-            refinement_model: "default".to_string(),
-            refinement_max_iterations: 1,
-            global_config_path: "~/.diffcore/config.toml".to_string(),
-            codex_available: false,
-            codex_authenticated: false,
-            claude_available: false,
-            claude_authenticated: false,
-            include_uncommitted: true,
-        };
-        let json = serde_json::to_string(&settings).unwrap();
-        let back: LlmSettings = serde_json::from_str(&json).unwrap();
-        assert!(back.annotations_enabled);
-        assert!(back.refinement_enabled);
-    }
-
-    #[test]
-    fn test_llm_settings_annotations_enabled_roundtrip_false() {
-        let settings = LlmSettings {
-            annotations_enabled: false,
-            refinement_enabled: false,
-            provider: "anthropic".to_string(),
-            model: "claude-sonnet-4-6".to_string(),
-            api_key_source: "env".to_string(),
-            has_api_key: false,
-            refinement_provider: "anthropic".to_string(),
-            refinement_model: "claude-sonnet-4-6".to_string(),
-            refinement_max_iterations: 3,
-            global_config_path: "/tmp/config.toml".to_string(),
-            codex_available: true,
-            codex_authenticated: true,
-            claude_available: true,
-            claude_authenticated: true,
-            include_uncommitted: false,
-        };
-        let json = serde_json::to_string(&settings).unwrap();
-        let back: LlmSettings = serde_json::from_str(&json).unwrap();
-        assert!(!back.annotations_enabled);
-        assert!(!back.refinement_enabled);
-    }
-
-    #[test]
-    fn test_llm_settings_all_fields_present_in_json() {
-        let settings = LlmSettings {
-            annotations_enabled: true,
-            refinement_enabled: true,
-            provider: "openai".to_string(),
-            model: "gpt-4.1".to_string(),
-            api_key_source: "config".to_string(),
-            has_api_key: true,
-            refinement_provider: "gemini".to_string(),
-            refinement_model: "gemini-2.5-flash".to_string(),
-            refinement_max_iterations: 2,
-            global_config_path: "~/.diffcore/config.toml".to_string(),
-            codex_available: true,
-            codex_authenticated: false,
-            claude_available: true,
-            claude_authenticated: true,
-            include_uncommitted: true,
-        };
-        let json = serde_json::to_string(&settings).unwrap();
-        assert!(json.contains("annotations_enabled"));
-        assert!(json.contains("refinement_enabled"));
-        assert!(json.contains("provider"));
-        assert!(json.contains("model"));
-        assert!(json.contains("has_api_key"));
-        assert!(json.contains("refinement_provider"));
-        assert!(json.contains("refinement_model"));
-        assert!(json.contains("refinement_max_iterations"));
-        assert!(json.contains("global_config_path"));
-        assert!(json.contains("include_uncommitted"));
-    }
-
-    // ── Comment CRUD Integration Tests ──
-
-    #[test]
-    fn test_full_comment_lifecycle_save_load_update_delete() {
-        let dir = tempfile::tempdir().unwrap();
-        let repo_path = init_test_repo(dir.path());
-
-        // 1. Start empty
-        let loaded = load_comments_cached(repo_path.clone()).unwrap();
-        assert!(loaded.is_empty());
-
-        // 2. Save two comments
-        let c1 = ReviewComment {
-            id: "lifecycle_1".to_string(),
-            comment_type: "code".to_string(),
-            group_id: "g1".to_string(),
-            file_path: Some("src/a.ts".to_string()),
-            start_line: Some(5),
-            end_line: Some(10),
-            selected_code: Some("let a = 1;".to_string()),
-            text: "First comment".to_string(),
-            created_at: "2026-01-01T00:00:00Z".to_string(),
-        };
-        let c2 = ReviewComment {
-            id: "lifecycle_2".to_string(),
-            comment_type: "file".to_string(),
-            group_id: "g1".to_string(),
-            file_path: Some("src/b.ts".to_string()),
-            start_line: None,
-            end_line: None,
-            selected_code: None,
-            text: "Second comment".to_string(),
-            created_at: "2026-01-01T01:00:00Z".to_string(),
-        };
-        save_comment_cached(repo_path.clone(), c1).unwrap();
-        save_comment_cached(repo_path.clone(), c2).unwrap();
-
-        let loaded = load_comments_cached(repo_path.clone()).unwrap();
-        assert_eq!(loaded.len(), 2);
-
-        // 3. Update first comment
-        update_comment_cached(repo_path.clone(), "lifecycle_1".to_string(), "Edited first".to_string()).unwrap();
-        let loaded = load_comments_cached(repo_path.clone()).unwrap();
-        assert_eq!(loaded[0].text, "Edited first");
-        assert_eq!(loaded[1].text, "Second comment");
-
-        // 4. Delete second comment
-        delete_comment_cached(repo_path.clone(), "lifecycle_2".to_string()).unwrap();
-        let loaded = load_comments_cached(repo_path.clone()).unwrap();
-        assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded[0].id, "lifecycle_1");
-
-        // 5. Update the remaining comment again
-        update_comment_cached(repo_path.clone(), "lifecycle_1".to_string(), "Final edit".to_string()).unwrap();
-        let loaded = load_comments_cached(repo_path.clone()).unwrap();
-        assert_eq!(loaded[0].text, "Final edit");
-
-        // 6. Delete last comment
-        delete_comment_cached(repo_path.clone(), "lifecycle_1".to_string()).unwrap();
-        let loaded = load_comments_cached(repo_path).unwrap();
-        assert!(loaded.is_empty());
-    }
-
-    #[test]
-    fn test_comment_types_code_file_group() {
-        let dir = tempfile::tempdir().unwrap();
-        let repo_path = init_test_repo(dir.path());
-
-        let types = vec!["code", "file", "group"];
-        for (i, t) in types.iter().enumerate() {
-            let comment = ReviewComment {
-                id: format!("type_test_{}", i),
-                comment_type: t.to_string(),
-                group_id: "g1".to_string(),
-                file_path: if *t != "group" { Some("test.ts".to_string()) } else { None },
-                start_line: if *t == "code" { Some(1) } else { None },
-                end_line: if *t == "code" { Some(5) } else { None },
-                selected_code: if *t == "code" { Some("code".to_string()) } else { None },
-                text: format!("{} comment", t),
-                created_at: "2026-01-01T00:00:00Z".to_string(),
-            };
-            save_comment_cached(repo_path.clone(), comment).unwrap();
-        }
-
-        let loaded = load_comments_cached(repo_path).unwrap();
-        assert_eq!(loaded.len(), 3);
-        assert_eq!(loaded[0].comment_type, "code");
-        assert_eq!(loaded[1].comment_type, "file");
-        assert_eq!(loaded[2].comment_type, "group");
-    }
-
-    /// Helper to create a minimal git repo for comment cache tests.
-    fn init_test_repo(dir: &std::path::Path) -> String {
-        use std::process::Command;
-        Command::new("git")
-            .args(["init"])
-            .current_dir(dir)
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["commit", "--allow-empty", "-m", "init"])
-            .current_dir(dir)
-            .output()
-            .unwrap();
-        dir.to_str().unwrap().to_string()
+    fn test_diff_tool_display_name() {
+        assert_eq!(DiffTool::Bcompare.display_name(), "Beyond Compare");
+        assert_eq!(DiffTool::Meld.display_name(), "Meld");
+        assert_eq!(DiffTool::Kdiff3.display_name(), "KDiff3");
+        assert_eq!(DiffTool::Code.display_name(), "VS Code");
+        assert_eq!(DiffTool::Opendiff.display_name(), "FileMerge");
     }
 }
