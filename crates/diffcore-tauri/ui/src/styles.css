@@ -1176,6 +1176,11 @@ body {
 .panel-body {
   flex: 1;
   overflow-y: auto;
+  /* Hide accidental horizontal overflow from long single-line content (e.g.
+     model names in dropdown triggers, file paths in info rows). All inner
+     children that need to ellipsize are constrained via `min-width: 0`. */
+  overflow-x: hidden;
+  min-width: 0;
   background: var(--bg-primary);
 }
 
@@ -1272,6 +1277,26 @@ body {
   margin-left: auto;
   flex-shrink: 0;
   position: relative;
+}
+
+/* When the editor toolbar also hosts replay controls, allow horizontal
+   wrapping space and add a small consistent gap between controls. The Open
+   With group keeps its 0-gap "segmented" look via its own selectors. We do
+   NOT set `overflow: hidden` on the toolbar itself because that would clip
+   the absolutely-positioned `.open-with-dropdown` popover. */
+.editor-toolbar.diff-toolbar {
+  gap: 6px;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.diff-toolbar-divider {
+  display: inline-block;
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+  margin: 0 4px;
+  flex-shrink: 0;
 }
 
 .editor-btn {
@@ -1549,8 +1574,12 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
+  /* min-width keeps single-letter role badges (`I`, `E`, `H`) at the same
+     visual size as before, while letting longer badges (`CALLS`, `IMPORTS`,
+     `WRITES` from the edges list) expand to fit their text. */
+  min-width: 18px;
   height: 18px;
+  padding: 0 4px;
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
@@ -1725,6 +1754,11 @@ body {
 .annotation-section {
   padding: 12px;
   border-bottom: 1px solid var(--border);
+  /* Cap to the panel-body width so long inline content (model dropdown
+     values, code paths, etc.) ellipsizes rather than pushing the panel. */
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .annotation-section h3 {
@@ -1756,7 +1790,39 @@ body {
   list-style: none;
 }
 
-.edge-item {
+/* Phase 5 of ui-polish: edges list now shares the file-item flex/padding
+   layout so each row visually aligns with the file rows in the left pane.
+   The legacy `.edge-item` class is kept on the same `<li>` for backward
+   compatibility, but the live styling comes from `.file-item` plus the
+   `.edge-item-row` modifier below. */
+.edge-item.file-item.edge-item-row {
+  margin: 0;
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: default;
+}
+
+.edge-item-row .edge-target {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.edge-item-row .edge-from-symbol {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 120px;
+}
+
+/* Legacy .edge-* styles kept for any callers still using the old layout. */
+.edge-item:not(.edge-item-row) {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -3667,6 +3733,75 @@ body {
   background: rgba(203, 166, 247, 0.12);
 }
 
+/* ── Two-line FileDisplay variant (Phase 7 of ui-polish) ── */
+
+/* The two-line variant replaces the row's flex content entirely with a
+   stacked block. Disable the parent row's centered flex layout so the two
+   `.file-display-line` rows can sit one above the other. */
+.file-item.file-item-two-line {
+  align-items: stretch;
+  padding: 6px 10px 6px 12px;
+}
+
+.file-display.file-display-two-line {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  min-width: 0;
+}
+
+.file-display-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.file-display-line-secondary {
+  font-size: 10px;
+  color: var(--text-muted);
+  padding-left: 2px;
+}
+
+/* Push the diff stats / chips on line 2 to the right edge so the layout
+   reads `[role label]  …  [+N -N]`. */
+.file-display-line-secondary .file-display-changes {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+}
+
+.file-display-additions {
+  color: #a6e3a1;
+}
+
+.file-display-deletions {
+  color: #f38ba8;
+}
+
+.file-display-role-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.file-display-moved-from {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(203, 166, 247, 0.12);
+  color: #cba6f7;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 60%;
+}
+
 /* ── Risk Heatmap (Treemap) ── */
 
 .heatmap-container {
@@ -3703,38 +3838,10 @@ body {
 
 /* ── Flow Replay Mode ── */
 
-/* Replay bar at top of center panel */
-.replay-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  height: 36px;
-  padding: 0 12px;
-  background: rgba(137, 180, 250, 0.1);
-  border-bottom: 1px solid var(--accent);
-  flex-shrink: 0;
-  gap: 12px;
-}
-
-.replay-bar-left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-}
-
-.replay-bar-center {
-  flex: 1;
-  display: flex;
-  justify-content: center;
-}
-
-.replay-bar-right {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-}
+/* The standalone `.replay-bar` was removed in Phase 4 of ui-polish; replay
+   controls now live inline in the center-pane editor toolbar
+   (`.editor-toolbar.diff-toolbar`). The `.replay-*` button/badge classes
+   below are still used from there. */
 
 .replay-badge {
   font-size: 9px;
@@ -3769,6 +3876,17 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
+  /* Cap width inside the toolbar; if a group has many files, the dot pager
+     scrolls horizontally rather than pushing the toolbar wider. */
+  max-width: 220px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+.replay-progress[data-disabled] {
+  opacity: 0.45;
 }
 
 .replay-dot {
@@ -3779,10 +3897,15 @@ body {
   background: transparent;
   cursor: pointer;
   padding: 0;
+  flex-shrink: 0;
   transition: all 0.15s ease;
 }
 
-.replay-dot:hover {
+.replay-dot:disabled {
+  cursor: not-allowed;
+}
+
+.replay-dot:hover:not(:disabled) {
   border-color: var(--text-secondary);
   transform: scale(1.3);
 }
@@ -3808,6 +3931,12 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
+}
+
+.replay-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .replay-hunk-btn,
@@ -4921,6 +5050,49 @@ body {
   color: var(--text-secondary);
 }
 
+/* "Only changed" toggle (Phase 6 of ui-polish). Sits in the source-outline
+   header just below the meta pills and filters every section to symbols
+   whose body overlaps a changed hunk or whose name is in `symbols_changed`. */
+.source-outline-controls {
+  display: flex;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.source-outline-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.source-outline-toggle input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
+.source-outline-toggle input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+}
+
+.source-outline-toggle:has(input:disabled) {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.source-outline-toggle-count {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(137, 180, 250, 0.15);
+  color: var(--accent);
+}
+
 .source-outline-sections {
   flex: 1;
   overflow-y: auto;
@@ -5131,6 +5303,12 @@ body {
   align-items: center;
   gap: 6px;
   width: 100%;
+  /* min-width: 0 so the trigger can shrink inside flex layouts (right pane).
+     Without this, the implicit min-content sizing of the inner value text
+     would push the parent panel wide enough to introduce a horizontal
+     scrollbar when long model names like 'anthropic/claude-haiku-4-5' are
+     selected. */
+  min-width: 0;
   background: var(--bg-primary);
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -5160,7 +5338,11 @@ body {
 }
 
 .dropdown-trigger .dropdown-value {
-  flex: 1;
+  flex: 1 1 0;
+  /* min-width: 0 lets text-overflow: ellipsis actually clip inside a flex
+     parent. Default flex item min-width is `auto`, which equals the content
+     intrinsic size and would prevent shrinking. */
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

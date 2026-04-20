@@ -81,6 +81,26 @@ export default function SourceExplorer({
     [outline.sections],
   );
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  /** Filters every outline section to only items whose `changed` flag is set.
+   *  Resets to off whenever the file changes (intentional — when the user
+   *  navigates to a new file they should see the whole outline by default). */
+  const [onlyChanged, setOnlyChanged] = useState(false);
+
+  useEffect(() => {
+    setOnlyChanged(false);
+  }, [fileDiff?.path]);
+
+  const visibleSections = useMemo(() => {
+    if (!onlyChanged) return outline.sections;
+    return outline.sections.map((section) => ({
+      ...section,
+      items: section.items.filter((item) => item.changed),
+    }));
+  }, [outline.sections, onlyChanged]);
+  const totalChangedCount = useMemo(
+    () => allItems.filter((item) => item.changed).length,
+    [allItems],
+  );
 
   useEffect(() => {
     if (!fileDiff) {
@@ -140,10 +160,28 @@ export default function SourceExplorer({
             <span className="source-meta-pill">{selectedGroup.name}</span>
           )}
         </div>
+        {/* "Only changed" toggle filters every outline section (operations,
+            interfaces, classes, constants, dependencies) to symbols whose
+            source overlaps a changed line in this file or whose name is in
+            `symbols_changed`. Off by default; resets per file. */}
+        <div className="source-outline-controls">
+          <label className="source-outline-toggle">
+            <input
+              type="checkbox"
+              checked={onlyChanged}
+              onChange={(event) => setOnlyChanged(event.target.checked)}
+              disabled={totalChangedCount === 0}
+            />
+            <span>Only changed</span>
+            <span className="source-outline-toggle-count">
+              {totalChangedCount}
+            </span>
+          </label>
+        </div>
       </div>
 
       <div className="source-outline-sections">
-        {outline.sections.map((section) => (
+        {visibleSections.map((section) => (
           <section key={section.key} className="source-outline-section">
             <div className="source-outline-section-header">
               <span>{section.label}</span>
@@ -173,7 +211,9 @@ export default function SourceExplorer({
                 ))}
               </div>
             ) : (
-              <div className="source-outline-empty">None in this file.</div>
+              <div className="source-outline-empty">
+                {onlyChanged ? "No changes in this file." : "None in this file."}
+              </div>
             )}
           </section>
         ))}
@@ -202,6 +242,10 @@ function buildOutline(
   const changedSymbols = new Set(
     (selectedFileChange?.symbols_changed ?? []).map((symbol) => normalizeSymbol(symbol)),
   );
+  /** New-content line numbers (1-indexed) that differ from old_content.
+   *  Used so a symbol counts as "changed" when its body overlaps any
+   *  added/removed line, even when its name isn't in `symbols_changed`. */
+  const changedLines = computeChangedNewLines(fileDiff.old_content, fileDiff.new_content);
   const buckets: Record<OutlineSectionKey, OutlineItem[]> = {
     operations: [],
     interfaces: [],
@@ -228,7 +272,9 @@ function buildOutline(
       detail: `L${definition.startLine}${definition.endLine !== definition.startLine ? `-${definition.endLine}` : ""}`,
       startLine: definition.startLine,
       endLine: definition.endLine,
-      changed: changedSymbols.has(normalizeSymbol(definition.name)),
+      changed:
+        changedSymbols.has(normalizeSymbol(definition.name)) ||
+        rangeOverlapsChangedLines(definition.startLine, definition.endLine, changedLines),
     };
     buckets[section].push(item);
     seenIds.add(item.id);
@@ -726,4 +772,63 @@ function kindLabel(kind: OutlineKind): string {
 function shortPath(path: string): string {
   const parts = path.split("/");
   return parts.length <= 2 ? path : parts.slice(-2).join("/");
+}
+
+/**
+ * Returns the set of new-content line numbers (1-indexed) that differ from
+ * the old content. Used by the "Only changed" toggle so a symbol counts as
+ * changed when its line range overlaps any added or modified line, even if
+ * the symbol's name was not surfaced in `symbols_changed`.
+ *
+ * Implementation is a lightweight prefix/suffix trim — exact-match lines at
+ * the head and tail are skipped, and everything in the middle is marked as
+ * changed. This intentionally over-approximates (treating an unchanged
+ * island in the middle as changed) to keep the toggle predictable: if the
+ * user opens "Only changed" and a symbol body sits inside the modified
+ * region, they'll see it. The cost of an occasional false positive is
+ * acceptable compared to running a full LCS for every render.
+ */
+function computeChangedNewLines(oldContent: string, newContent: string): Set<number> {
+  const changed = new Set<number>();
+  if (oldContent === newContent) return changed;
+
+  const oldLines = oldContent.split("\n");
+  const newLines = newContent.split("\n");
+
+  let prefix = 0;
+  const minLen = Math.min(oldLines.length, newLines.length);
+  while (prefix < minLen && oldLines[prefix] === newLines[prefix]) prefix++;
+
+  let suffix = 0;
+  while (
+    suffix < minLen - prefix &&
+    oldLines[oldLines.length - 1 - suffix] === newLines[newLines.length - 1 - suffix]
+  ) {
+    suffix++;
+  }
+
+  // Mark every new-content line in [prefix .. newLines.length - suffix) as
+  // changed. Convert to 1-indexed line numbers to match the values the
+  // outline definitions use.
+  const start = prefix + 1;
+  const end = newLines.length - suffix;
+  for (let line = start; line <= end; line++) {
+    changed.add(line);
+  }
+  return changed;
+}
+
+/** True when any line in `[startLine, endLine]` is present in `changedLines`. */
+function rangeOverlapsChangedLines(
+  startLine: number | undefined,
+  endLine: number | undefined,
+  changedLines: Set<number>,
+): boolean {
+  if (startLine == null || changedLines.size === 0) return false;
+  const lo = startLine;
+  const hi = endLine ?? startLine;
+  for (let line = lo; line <= hi; line++) {
+    if (changedLines.has(line)) return true;
+  }
+  return false;
 }

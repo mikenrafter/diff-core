@@ -27,6 +27,7 @@ import DiffViewer, { type DiffViewerHandle, type EditedHunk } from "./components
 import FlowGraph from "./components/FlowGraph";
 import SourceExplorer, { type SourceFocusRequest } from "./components/SourceExplorer";
 import Dropdown from "./components/Dropdown";
+import FileDisplay from "./components/FileDisplay";
 // RiskHeatmap hidden (Phase 9.4) — component kept for future re-enablement
 // import RiskHeatmap from "./components/RiskHeatmap";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -3445,14 +3446,36 @@ export default function App() {
       {annotationSubTab === "edges" && selectedGroup.edges.length > 0 && (
         <div className="annotation-section edges-section">
           <ul className="edge-list">
-            {selectedGroup.edges.map((edge, i) => (
-              <li key={i} className="edge-item">
-                <span className="edge-type">{edge.edge_type}</span>
-                <button className="edge-endpoint edge-from" onClick={() => handleEdgeEndpointClick(edge.from)} title={edge.from}>{shortSymbol(edge.from)}</button>
-                <span className="edge-arrow">&rarr;</span>
-                <button className="edge-endpoint edge-to" onClick={() => handleEdgeEndpointClick(edge.to)} title={edge.to}>{shortSymbol(edge.to)}</button>
-              </li>
-            ))}
+            {selectedGroup.edges.map((edge, i) => {
+              const fromFile = symbolFilePath(edge.from);
+              const fromSymbol = shortSymbol(edge.from);
+              const toLabel = shortSymbol(edge.to);
+              return (
+                <li key={i} className="edge-item file-item edge-item-row">
+                  <FileDisplay
+                    path={fromFile}
+                    roleBadge={edge.edge_type.toUpperCase()}
+                    roleLabel={edge.edge_type}
+                    hideChanges
+                    suffix={(
+                      <span className="edge-target">
+                        <span className="edge-from-symbol" title={edge.from}>
+                          {fromSymbol}
+                        </span>
+                        <span className="edge-arrow" aria-hidden="true">&rarr;</span>
+                        <button
+                          className="edge-endpoint edge-to"
+                          onClick={() => handleEdgeEndpointClick(edge.to)}
+                          title={edge.to}
+                        >
+                          {toLabel}
+                        </button>
+                      </span>
+                    )}
+                  />
+                </li>
+              );
+            })}
           </ul>
         </div>
       )}
@@ -4889,64 +4912,54 @@ export default function App() {
                             ? getFileMovedIndicator(file.path, refinementResponse)
                             : null;
                           const fileCommentCount = commentsForFile(file.path).length;
-                          const compact = compactFileLabel(file.path);
                           const status = resolveFileShortStatus(file.path, fileStatusByPath, file.changes.additions, file.changes.deletions);
 
                           return (
                             <li
                               key={file.path}
-                              className={`file-item ${selectedFile === file.path ? "selected" : ""} ${fileMoved ? "file-moved" : ""}`}
+                              className={`file-item file-item-two-line ${selectedFile === file.path ? "selected" : ""} ${fileMoved ? "file-moved" : ""}`}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 openFileInTab(file.path, group.id);
                               }}
                               onContextMenu={(e) => handleFileContextMenu(e, file.path)}
                             >
-                              {replayActive && replayVisited.has(file.path) && (
-                                <span className="replay-visited-check" title="Visited">&#10003;</span>
-                              )}
-                              <span className={`file-status-token file-status-${status}`}>{status}</span>
-                              <span className="file-role" title={file.role}>{roleInitial(file.role)}</span>
-                              <span className="file-ext-token">{compact.extension || "-"}</span>
-                              <span className="file-path" title={file.path}>
-                                <span className="file-base-name">{compact.baseName}</span>
-                                <span className="file-folder-sep">:</span>
-                                {compact.dirPrefix && <span className="file-dir-prefix">{compact.dirPrefix}</span>}
-                              </span>
-                              <span className="file-changes">
-                                +{file.changes.additions} -{file.changes.deletions}
-                              </span>
-                              {fileCommentCount > 0 && (
-                                <button
-                                  className="file-comment-btn"
-                                  title={`${fileCommentCount} comment${fileCommentCount === 1 ? "" : "s"} — click to view`}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    openFileInTab(file.path, group.id);
-                                    setRightPanelTab("comments");
-                                    if (rightPanelCollapsed) setRightPanelCollapsed(false);
-                                    // Queue scroll to first code-level comment after diff loads
-                                    const fc = commentsForFile(file.path);
-                                    const first = fc.find((c) => c.start_line != null);
-                                    if (first) {
-                                      pendingScrollToCommentRef.current = {
-                                        startLine: first.start_line!,
-                                        endLine: first.end_line ?? undefined,
-                                        commentId: first.id,
-                                      };
-                                      setActiveCommentId(first.id);
-                                    }
-                                  }}
-                                >
-                                  <span className="file-comment-icon">&#128172;</span>
-                                  <span className="file-comment-count">{fileCommentCount}</span>
-                                </button>
-                              )}
-                              {fileMoved && (
-                                <span className="file-moved-tag" title={fileMoved.reason}>
-                                  moved from {fileMoved.from}
-                                </span>
-                              )}
+                              <FileDisplay
+                                path={file.path}
+                                gitStatus={status}
+                                roleBadge={roleInitial(file.role)}
+                                roleLabel={file.role}
+                                additions={file.changes.additions}
+                                deletions={file.changes.deletions}
+                                reviewedInReplay={replayActive && replayVisited.has(file.path)}
+                                variant="two-line"
+                                movedFrom={fileMoved?.from}
+                                suffix={fileCommentCount > 0 ? (
+                                  <button
+                                    className="file-comment-btn"
+                                    title={`${fileCommentCount} comment${fileCommentCount === 1 ? "" : "s"} — click to view`}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      openFileInTab(file.path, group.id);
+                                      setRightPanelTab("comments");
+                                      if (rightPanelCollapsed) setRightPanelCollapsed(false);
+                                      const fc = commentsForFile(file.path);
+                                      const first = fc.find((c) => c.start_line != null);
+                                      if (first) {
+                                        pendingScrollToCommentRef.current = {
+                                          startLine: first.start_line!,
+                                          endLine: first.end_line ?? undefined,
+                                          commentId: first.id,
+                                        };
+                                        setActiveCommentId(first.id);
+                                      }
+                                    }}
+                                  >
+                                    <span className="file-comment-icon">&#128172;</span>
+                                    <span className="file-comment-count">{fileCommentCount}</span>
+                                  </button>
+                                ) : null}
+                              />
                             </li>
                           );
                         })}
@@ -5006,7 +5019,7 @@ export default function App() {
                               {isSubExpanded && (
                                 <ul className="file-list">
                                   {sg.files.map((f) => {
-                                    const compact = compactFileLabel(f);
+                                    const status = resolveFileShortStatus(f, fileStatusByPath, 1, 1);
                                     return (
                                     <li
                                       key={f}
@@ -5016,13 +5029,7 @@ export default function App() {
                                         openFileInTab(f, "infra");
                                       }}
                                     >
-                                      <span className={`file-status-token file-status-${resolveFileShortStatus(f, fileStatusByPath, 1, 1)}`}>{resolveFileShortStatus(f, fileStatusByPath, 1, 1)}</span>
-                                      <span className="file-ext-token">{compact.extension || "-"}</span>
-                                      <span className="file-path">
-                                        <span className="file-base-name">{compact.baseName}</span>
-                                        <span className="file-folder-sep">:</span>
-                                        {compact.dirPrefix && <span className="file-dir-prefix">{compact.dirPrefix}</span>}
-                                      </span>
+                                      <FileDisplay path={f} gitStatus={status} hideChanges />
                                     </li>
                                     );
                                   })}
@@ -5037,7 +5044,7 @@ export default function App() {
                             ? analysis.infrastructure_group.files
                             : analysis.infrastructure_group.files.slice(0, 50)
                           ).map((f) => {
-                            const compact = compactFileLabel(f);
+                            const status = resolveFileShortStatus(f, fileStatusByPath, 1, 1);
                             return (
                             <li
                               key={f}
@@ -5047,13 +5054,7 @@ export default function App() {
                                 openFileInTab(f, "infra");
                               }}
                             >
-                              <span className={`file-status-token file-status-${resolveFileShortStatus(f, fileStatusByPath, 1, 1)}`}>{resolveFileShortStatus(f, fileStatusByPath, 1, 1)}</span>
-                              <span className="file-ext-token">{compact.extension || "-"}</span>
-                              <span className="file-path">
-                                <span className="file-base-name">{compact.baseName}</span>
-                                <span className="file-folder-sep">:</span>
-                                {compact.dirPrefix && <span className="file-dir-prefix">{compact.dirPrefix}</span>}
-                              </span>
+                              <FileDisplay path={f} gitStatus={status} hideChanges />
                             </li>
                             );
                           })}
@@ -5106,7 +5107,7 @@ export default function App() {
           <div className="panel-header">
             <span className={fileDiff ? "panel-header-filepath" : "panel-header-title"} title={fileDiff?.path}>{fileDiff ? fileDiff.path : "Diff Viewer"}</span>
             {fileDiff && (
-              <div className="editor-toolbar" ref={openWithRef}>
+              <div className="editor-toolbar diff-toolbar" ref={openWithRef}>
                 <button
                   className="editor-btn open-with-btn"
                   onClick={() => openInEditor(lastEditor)}
@@ -5138,6 +5139,103 @@ export default function App() {
                     ))}
                   </div>
                 )}
+
+                {/* Replay + hunk controls. Always rendered to keep the toolbar
+                    layout stable; replay-only controls are disabled when
+                    replay is inactive. Hunk navigation and "+ Hunk Comment"
+                    work any time a diff is open because `currentReplayHunks`
+                    is populated by `onDiffHunksChange` regardless of replay
+                    state. */}
+                <span className="diff-toolbar-divider" aria-hidden="true" />
+
+                {replayActive && selectedGroup && (
+                  <span className="replay-badge">REPLAY</span>
+                )}
+                {replayActive && selectedGroup && (
+                  <span className="replay-step-label">
+                    Step {replayStep + 1} of {selectedGroup.files.length}
+                  </span>
+                )}
+                {replayActive && selectedGroup && selectedGroup.files[replayStep] && (
+                  <span className="replay-file-role">
+                    {selectedGroup.files[replayStep].role}
+                  </span>
+                )}
+
+                {selectedGroup && selectedGroup.files.length > 0 && (
+                  <div className="replay-progress" data-disabled={!replayActive || undefined}>
+                    {selectedGroup.files.map((f, i) => (
+                      <button
+                        key={f.path}
+                        type="button"
+                        className={`replay-dot ${i === replayStep && replayActive ? "active" : ""} ${replayVisited.has(f.path) ? "visited" : ""}`}
+                        onClick={() => goToReplayStep(i)}
+                        disabled={!replayActive}
+                        title={replayActive ? shortPath(f.path) : "Replay-only navigation"}
+                      />
+                    ))}
+                  </div>
+                )}
+
+                <span className="replay-hunk-status">
+                  Hunk {replayHunks.length === 0 ? 0 : Math.min(replayHunkIndex + 1, replayHunks.length)}/{replayHunks.length}
+                  {replayActive && replayHunks[replayHunkIndex] && replayViewedHunkIds.has(replayHunks[replayHunkIndex].id) ? " viewed" : ""}
+                </span>
+
+                <button
+                  type="button"
+                  className="btn replay-btn replay-comment-btn"
+                  onClick={commentOnCurrentReplayHunk}
+                  disabled={replayHunks.length === 0}
+                  title={replayHunks.length === 0 ? "No hunks in this file" : "Comment on current hunk"}
+                >
+                  + Hunk Comment
+                </button>
+                <button
+                  type="button"
+                  className="btn replay-btn replay-hunk-btn"
+                  onClick={() => navigateReplayHunk(-1)}
+                  disabled={!hasPrevReplayHunk}
+                  title="Jump to previous hunk"
+                >
+                  &#9664;&nbsp;Hunk
+                </button>
+                <button
+                  type="button"
+                  className="btn replay-btn replay-hunk-btn"
+                  onClick={() => navigateReplayHunk(1)}
+                  disabled={!hasNextReplayHunk}
+                  title="Jump to next hunk"
+                >
+                  Hunk&nbsp;&#9654;
+                </button>
+                <button
+                  type="button"
+                  className="btn replay-btn"
+                  onClick={() => goToReplayStep(replayStep - 1)}
+                  disabled={!replayActive || replayStep === 0}
+                  title={replayActive ? "Previous file (p / Left Arrow)" : "Replay-only navigation"}
+                >
+                  &#9664;&nbsp;File
+                </button>
+                <button
+                  type="button"
+                  className="btn replay-btn"
+                  onClick={() => goToReplayStep(replayStep + 1)}
+                  disabled={!replayActive || !selectedGroup || replayStep >= selectedGroup.files.length - 1}
+                  title={replayActive ? "Next file (n / Right Arrow / Space)" : "Replay-only navigation"}
+                >
+                  File&nbsp;&#9654;
+                </button>
+                <button
+                  type="button"
+                  className="btn replay-btn replay-exit"
+                  onClick={exitReplay}
+                  disabled={!replayActive}
+                  title={replayActive ? "Exit replay (Esc)" : "Replay-only"}
+                >
+                  &#10005;
+                </button>
               </div>
             )}
           </div>
@@ -5175,90 +5273,9 @@ export default function App() {
               })}
             </div>
           )}
-          {/* Replay bar — shown when replay mode is active */}
-          {replayActive && selectedGroup && (
-            <div className="replay-bar">
-              <div className="replay-bar-left">
-                <span className="replay-badge">REPLAY</span>
-                <span className="replay-step-label">
-                  Step {replayStep + 1} of {selectedGroup.files.length}
-                </span>
-                {selectedGroup.files[replayStep] && (
-                  <span className="replay-file-role">
-                    {selectedGroup.files[replayStep].role}
-                  </span>
-                )}
-              </div>
-              <div className="replay-bar-center">
-                <div className="replay-progress">
-                  {selectedGroup.files.map((f, i) => (
-                    <button
-                      key={f.path}
-                      className={`replay-dot ${i === replayStep ? "active" : ""} ${replayVisited.has(f.path) ? "visited" : ""}`}
-                      onClick={() => goToReplayStep(i)}
-                      title={shortPath(f.path)}
-                    />
-                  ))}
-                </div>
-              </div>
-              <div className="replay-bar-right">
-                {
-                  <>
-                    <span className="replay-hunk-status">
-                      Hunk {replayHunks.length === 0 ? 0 : Math.min(replayHunkIndex + 1, replayHunks.length)}/{replayHunks.length}
-                      {replayHunks[replayHunkIndex] && replayViewedHunkIds.has(replayHunks[replayHunkIndex].id) ? " viewed" : ""}
-                    </span>
-                    <button
-                      className="btn replay-btn replay-comment-btn"
-                      onClick={commentOnCurrentReplayHunk}
-                      title="Comment on current hunk"
-                    >
-                      + Hunk Comment
-                    </button>
-                    <button
-                      className="btn replay-btn replay-hunk-btn"
-                      onClick={() => navigateReplayHunk(-1)}
-                      disabled={!hasPrevReplayHunk}
-                      title="Jump to previous hunk"
-                    >
-                      &#9664;&nbsp;Hunk
-                    </button>
-                    <button
-                      className="btn replay-btn replay-hunk-btn"
-                      onClick={() => navigateReplayHunk(1)}
-                      disabled={!hasNextReplayHunk}
-                      title="Jump to next hunk"
-                    >
-                      Hunk&nbsp;&#9654;
-                    </button>
-                  </>
-                }
-                <button
-                  className="btn replay-btn"
-                  onClick={() => goToReplayStep(replayStep - 1)}
-                  disabled={replayStep === 0}
-                  title="Previous (p / Left Arrow)"
-                >
-                  &#9664;&nbsp;File
-                </button>
-                <button
-                  className="btn replay-btn"
-                  onClick={() => goToReplayStep(replayStep + 1)}
-                  disabled={replayStep >= selectedGroup.files.length - 1}
-                  title="Next (n / Right Arrow / Space)"
-                >
-                  File&nbsp;&#9654;
-                </button>
-                <button
-                  className="btn replay-btn replay-exit"
-                  onClick={exitReplay}
-                  title="Exit replay (Esc)"
-                >
-                  &#10005;
-                </button>
-              </div>
-            </div>
-          )}
+          {/* Replay bar — controls were merged into the diff toolbar above
+              (`.editor-toolbar.diff-toolbar`) so they remain visible (and
+              partially enabled) at all times, not just during replay. */}
           <div className="panel-body diff-viewer">
             <ErrorBoundary panelName="Diff Viewer">
               <CrashTest panel="Diff Viewer" />
@@ -6379,38 +6396,10 @@ function resolveFileShortStatus(
   return deriveGitShortStatus(additions, deletions);
 }
 
-function compactFileLabel(path: string): { dirPrefix: string; baseName: string; extension: string } {
-  const normalized = path.replace(/\\/g, "/");
-  const parts = normalized.split("/").filter(Boolean);
-  const filename = parts.pop() ?? normalized;
-  const dirs = parts;
-
-  const dotIndex = filename.lastIndexOf(".");
-  const baseName = dotIndex > 0 ? filename.slice(0, dotIndex) : filename;
-  const extension = dotIndex > 0 ? filename.slice(dotIndex + 1).toUpperCase() : "";
-
-  const abbreviatedDirs = dirs.map((dir, i) => (i === 0 ? abbreviateLeadingSegment(dir) : dir));
-  const dirPrefix = abbreviatedDirs.join("/");
-
-  return { dirPrefix, baseName, extension };
-}
-
-function abbreviateLeadingSegment(segment: string): string {
-  if (segment.includes("-")) {
-    return segment
-      .split("-")
-      .filter(Boolean)
-      .map((part) => part.charAt(0).toLowerCase())
-      .join("-");
-  }
-
-  const uppercase = segment.slice(1).match(/[A-Z]/g) ?? [];
-  if (uppercase.length > 0) {
-    return `~${segment.charAt(0)}${uppercase.join("")}`;
-  }
-
-  return segment;
-}
+// Phase 5 of ui-polish moved `compactFileLabel` and `abbreviateLeadingSegment`
+// into `components/FileDisplay.tsx`, which is now the only consumer. The
+// duplicate top-level definitions were removed from App.tsx along with the
+// inline file-row JSX they served.
 
 function truncateSearchResultLine(line: string): string {
   if (line.length <= 200) return line;
@@ -6437,6 +6426,14 @@ function shortSymbol(symbol: string): string {
   const parts = symbol.split("::");
   if (parts.length <= 1) return symbol;
   return parts[parts.length - 1];
+}
+
+/** Inverse of `shortSymbol` — returns just the file/module portion of a
+ *  qualified symbol like `crates/foo/src/bar.ts::myFn`. Falls back to the
+ *  raw symbol when no `::` separator is present (e.g. external symbols). */
+function symbolFilePath(symbol: string): string {
+  const idx = symbol.indexOf("::");
+  return idx >= 0 ? symbol.slice(0, idx) : symbol;
 }
 
 function computeToolEditHunks(baselineContent: string, currentContent: string): EditedHunk[] {
