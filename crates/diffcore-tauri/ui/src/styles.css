@@ -246,11 +246,107 @@ select:focus-visible {
 }
 
 .activity-tab-shell {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
+  /*
+   * Two independently scrollable regions: the hero/verdict cards on top and
+   * the events readout on the bottom. Both rows use minmax(0, 1fr) so neither
+   * can grow past its share and steal the other's vertical space; a thin
+   * divider in between gives a visible boundary.
+   */
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto minmax(0, 1.3fr);
   min-height: 0;
   flex: 1;
+}
+
+.activity-tab-region {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.activity-tab-region-hero {
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.activity-tab-region-events {
+  /* The inner .activity-section already manages its own scrolling, so this
+     wrapper just needs to clip and forward height to the child. */
+  overflow: hidden;
+}
+
+.activity-tab-divider {
+  height: 1px;
+  margin: 6px 12px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(137, 180, 250, 0.32) 12%,
+    rgba(137, 180, 250, 0.32) 88%,
+    transparent 100%
+  );
+}
+
+.activity-stats-events-only {
+  /*
+   * In direct-API mode only the EVENTS tile is rendered. Drop the two-column
+   * grid so the lone tile doesn't visually float against an empty cell.
+   */
+  grid-template-columns: minmax(0, 240px);
+}
+
+.activity-events-banner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(250, 179, 135, 0.28);
+  border-radius: 10px;
+  background: rgba(250, 179, 135, 0.08);
+}
+
+.activity-events-banner-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.activity-events-banner-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.activity-events-banner-text {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+  font-size: 12px;
+}
+
+.activity-events-banner-action {
+  margin-top: 8px;
+}
+
+.activity-events-banner-dismiss {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.activity-events-banner-dismiss:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
 }
 
 .activity-hero-section {

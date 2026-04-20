@@ -239,9 +239,10 @@ function buildOutline(
 
   const sourceText = fileDiff.new_content || fileDiff.old_content || "";
   const definitions = parseDefinitions(fileDiff.language, sourceText);
-  const changedSymbols = new Set(
-    (selectedFileChange?.symbols_changed ?? []).map((symbol) => normalizeSymbol(symbol)),
-  );
+  // TODO fix
+  // const changedSymbols = new Set(
+  //   (selectedFileChange?.symbols_changed ?? []).map((symbol) => normalizeSymbol(symbol)),
+  // );
   /** New-content line numbers (1-indexed) that differ from old_content.
    *  Used so a symbol counts as "changed" when its body overlaps any
    *  added/removed line, even when its name isn't in `symbols_changed`. */
@@ -273,7 +274,8 @@ function buildOutline(
       startLine: definition.startLine,
       endLine: definition.endLine,
       changed:
-        changedSymbols.has(normalizeSymbol(definition.name)) ||
+        // TODO reenable when this is functional again
+        // changedSymbols.has(normalizeSymbol(definition.name)) ||
         rangeOverlapsChangedLines(definition.startLine, definition.endLine, changedLines),
     };
     buckets[section].push(item);
@@ -294,7 +296,10 @@ function buildOutline(
         detail: `Entrypoint • L${routeLine}`,
         startLine: routeLine,
         endLine: routeLine,
-        changed: true,
+        // Same rule as ordinary outline items: "changed" tracks whether the
+        // entrypoint's line sits inside a real hunk, not whether it merely
+        // exists as an entrypoint.
+        changed: rangeOverlapsChangedLines(routeLine, routeLine, changedLines),
       });
       seenNormalized.add(normalizedEntrypoint);
     }
@@ -312,7 +317,9 @@ function buildOutline(
       detail: `Changed symbol • L${line}`,
       startLine: line,
       endLine: line,
-      changed: true,
+      // `symbols_changed` is currently unreliable, so don't trust it as a
+      // source of truth for the toggle — fall back to hunk overlap.
+      changed: rangeOverlapsChangedLines(line, line, changedLines),
     });
     seenNormalized.add(normalized);
   }
@@ -775,18 +782,17 @@ function shortPath(path: string): string {
 }
 
 /**
- * Returns the set of new-content line numbers (1-indexed) that differ from
- * the old content. Used by the "Only changed" toggle so a symbol counts as
- * changed when its line range overlaps any added or modified line, even if
- * the symbol's name was not surfaced in `symbols_changed`.
+ * Returns the set of new-content line numbers (1-indexed) that belong to a
+ * real change hunk between `oldContent` and `newContent`.
  *
- * Implementation is a lightweight prefix/suffix trim — exact-match lines at
- * the head and tail are skipped, and everything in the middle is marked as
- * changed. This intentionally over-approximates (treating an unchanged
- * island in the middle as changed) to keep the toggle predictable: if the
- * user opens "Only changed" and a symbol body sits inside the modified
- * region, they'll see it. The cost of an occasional false positive is
- * acceptable compared to running a full LCS for every render.
+ * Uses a line-level Longest Common Subsequence (LCS) — every line in
+ * `newContent` that is *not* part of the LCS is an added or modified line
+ * and is reported as changed. Unmodified lines that happen to sit between
+ * two hunks are *not* marked, which matches what a reviewer would see in
+ * a side-by-side diff and what `git diff` would emit as `+` lines.
+ *
+ * Complexity is O(N*M) in lines; for the sub-10k-line files diffcore loads
+ * into the panel this is well under a millisecond and runs once per file.
  */
 function computeChangedNewLines(oldContent: string, newContent: string): Set<number> {
   const changed = new Set<number>();
@@ -795,6 +801,9 @@ function computeChangedNewLines(oldContent: string, newContent: string): Set<num
   const oldLines = oldContent.split("\n");
   const newLines = newContent.split("\n");
 
+  // Trim a common prefix and suffix first. This keeps the LCS table small
+  // for typical edits where most of the file is untouched, and produces the
+  // exact same change set as running LCS on the full inputs.
   let prefix = 0;
   const minLen = Math.min(oldLines.length, newLines.length);
   while (prefix < minLen && oldLines[prefix] === newLines[prefix]) prefix++;
@@ -807,15 +816,69 @@ function computeChangedNewLines(oldContent: string, newContent: string): Set<num
     suffix++;
   }
 
-  // Mark every new-content line in [prefix .. newLines.length - suffix) as
-  // changed. Convert to 1-indexed line numbers to match the values the
-  // outline definitions use.
-  const start = prefix + 1;
-  const end = newLines.length - suffix;
-  for (let line = start; line <= end; line++) {
-    changed.add(line);
+  const oldMid = oldLines.slice(prefix, oldLines.length - suffix);
+  const newMid = newLines.slice(prefix, newLines.length - suffix);
+
+  // Any new line not present in the LCS of the trimmed window is an added
+  // or modified line. `lcsMatched` returns a boolean array aligned with
+  // `newMid` indicating which lines participate in the LCS (i.e. exist
+  // unchanged on both sides in the same relative order).
+  const matched = lcsMatched(oldMid, newMid);
+  for (let i = 0; i < newMid.length; i++) {
+    if (!matched[i]) {
+      // Convert mid-window index back to a 1-indexed new-content line number.
+      changed.add(prefix + i + 1);
+    }
   }
+
   return changed;
+}
+
+/**
+ * Standard dynamic-programming LCS that returns, for each line in `b`,
+ * whether that line is part of the longest common subsequence with `a`.
+ *
+ * The DP table is reconstructed by walking back from `(a.length, b.length)`
+ * and marking matched positions in `b`. Lines not marked are the ones that
+ * were inserted or replaced.
+ */
+function lcsMatched(a: string[], b: string[]): boolean[] {
+  const matched = new Array<boolean>(b.length).fill(false);
+  if (a.length === 0 || b.length === 0) return matched;
+
+  // dp[i][j] = LCS length of a[0..i] and b[0..j]. Using flat Int32Array
+  // for both speed and memory locality on larger files.
+  const cols = b.length + 1;
+  const dp = new Int32Array((a.length + 1) * cols);
+  for (let i = 1; i <= a.length; i++) {
+    const ai = a[i - 1];
+    const rowBase = i * cols;
+    const prevRowBase = (i - 1) * cols;
+    for (let j = 1; j <= b.length; j++) {
+      if (ai === b[j - 1]) {
+        dp[rowBase + j] = dp[prevRowBase + (j - 1)] + 1;
+      } else {
+        const up = dp[prevRowBase + j];
+        const left = dp[rowBase + (j - 1)];
+        dp[rowBase + j] = up >= left ? up : left;
+      }
+    }
+  }
+
+  let i = a.length;
+  let j = b.length;
+  while (i > 0 && j > 0) {
+    if (a[i - 1] === b[j - 1]) {
+      matched[j - 1] = true;
+      i--;
+      j--;
+    } else if (dp[(i - 1) * cols + j] >= dp[i * cols + (j - 1)]) {
+      i--;
+    } else {
+      j--;
+    }
+  }
+  return matched;
 }
 
 /** True when any line in `[startLine, endLine]` is present in `changedLines`. */

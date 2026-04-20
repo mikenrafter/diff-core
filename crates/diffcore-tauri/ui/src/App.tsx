@@ -204,6 +204,11 @@ export default function App() {
   // Diff view mode: side-by-side, inline, or dynamic (per-file density)
   const [diffViewMode, setDiffViewMode] = useState<DiffViewMode>("side-by-side");
 
+  // Whether the "Direct API mode" banner in the Activity tab has been
+  // dismissed. Persisted globally (a single dismissal applies to every
+  // direct-API provider) under "diffcore.directApiNotice.dismissed".
+  const [directApiNoticeDismissed, setDirectApiNoticeDismissed] = useState(false);
+
   // Dynamic model lists (fetched from provider APIs, cached 24h)
   const [providerModels, setProviderModels] = useState<Record<string, string[]>>({});
   const [modelsLoading, setModelsLoading] = useState<string | null>(null);
@@ -736,6 +741,22 @@ export default function App() {
   useEffect(() => {
     window.localStorage.setItem("diffcore.diffViewMode", diffViewMode);
   }, [diffViewMode]);
+
+  useEffect(() => {
+    const dismissed = window.localStorage.getItem("diffcore.directApiNotice.dismissed");
+    if (dismissed === "1") {
+      setDirectApiNoticeDismissed(true);
+    }
+  }, []);
+
+  const dismissDirectApiNotice = useCallback(() => {
+    setDirectApiNoticeDismissed(true);
+    try {
+      window.localStorage.setItem("diffcore.directApiNotice.dismissed", "1");
+    } catch {
+      // ignore quota / privacy-mode failures; in-memory dismissal still applies
+    }
+  }, []);
 
   useEffect(() => {
     const recentRaw = window.localStorage.getItem("diffcore.recentRepos");
@@ -2058,6 +2079,12 @@ export default function App() {
     return resolvedRefinementProvider ?? resolvedPrimaryProvider ?? null;
   }, [activityJob?.provider, activityTimeline, resolvedPrimaryProvider, resolvedRefinementProvider]);
   const activitySupportsToolStreaming = providerSupportsToolActivity(activityEventProvider);
+  // Direct-API mode: a hosted-API provider (OpenAI / Anthropic / Gemini) is the
+  // active activity source. These providers only emit high-level progress, so
+  // the search/reads/commands tiles are always 0 and the banner explaining
+  // that is worth surfacing once.
+  const activityIsDirectApi = activityEventProvider != null && isApiProvider(activityEventProvider);
+  const showDirectApiBanner = activityIsDirectApi && !directApiNoticeDismissed;
   const refinementVerdict = useMemo(() => {
     if (!refinementResponse || !refinementProvider) return null;
     return {
@@ -3488,6 +3515,7 @@ export default function App() {
 
   const activityTabContent = (
     <div className="activity-tab-shell">
+      <div className="activity-tab-region activity-tab-region-hero">
       <div className="annotation-section activity-hero-section" data-testid="activity-panel">
         <div className="activity-hero">
           <div>
@@ -3517,37 +3545,34 @@ export default function App() {
         </div>
 
         {(activityJob || activityTimeline.length > 0) && (
-          <div className="activity-stats" data-testid="activity-stats">
+          <div
+            className={`activity-stats ${activityIsDirectApi ? "activity-stats-events-only" : ""}`}
+            data-testid="activity-stats"
+          >
             <div className="activity-stat">
               <span className="activity-stat-value">{activityStats.total}</span>
               <span className="activity-stat-label">events</span>
             </div>
-            <div className="activity-stat">
-              <span className="activity-stat-value">{activityStats.search}</span>
-              <span className="activity-stat-label">search</span>
-            </div>
-            <div className="activity-stat">
-              <span className="activity-stat-value">{activityStats.read}</span>
-              <span className="activity-stat-label">reads</span>
-            </div>
-            <div className="activity-stat">
-              <span className="activity-stat-value">{activityStats.command}</span>
-              <span className="activity-stat-label">commands</span>
-            </div>
-          </div>
-        )}
-
-        {!activitySupportsToolStreaming && (
-          <div className="activity-callout" data-testid="activity-direct-api-note">
-            <p className="activity-callout-title">Direct API mode</p>
-            <p className="activity-callout-body">
-              OpenAI, Anthropic, and Gemini only emit high-level progress. File reads, grep searches,
-              and shell steps appear when Diffcore routes the job through Codex CLI or Claude Code.
-            </p>
-            {recommendedSubscriptionProvider && (
-              <button className="btn" onClick={activatePreferredActivityProvider}>
-                Use {PROVIDER_LABELS[recommendedSubscriptionProvider]}
-              </button>
+            {/*
+              Search / reads / commands tiles are hidden in direct-API mode
+              because hosted APIs (OpenAI / Anthropic / Gemini) don't emit
+              tool events — leaving them visible just shows three stale 0s.
+            */}
+            {!activityIsDirectApi && (
+              <>
+                <div className="activity-stat">
+                  <span className="activity-stat-value">{activityStats.search}</span>
+                  <span className="activity-stat-label">search</span>
+                </div>
+                <div className="activity-stat">
+                  <span className="activity-stat-value">{activityStats.read}</span>
+                  <span className="activity-stat-label">reads</span>
+                </div>
+                <div className="activity-stat">
+                  <span className="activity-stat-value">{activityStats.command}</span>
+                  <span className="activity-stat-label">commands</span>
+                </div>
+              </>
             )}
           </div>
         )}
@@ -3574,8 +3599,41 @@ export default function App() {
           </div>
         )}
       </div>
+      </div>
 
+      <div className="activity-tab-divider" role="presentation" aria-hidden="true" />
+
+      <div className="activity-tab-region activity-tab-region-events">
       <div className="annotation-section activity-section" data-testid="activity-log-panel">
+        {showDirectApiBanner && (
+          <div className="activity-events-banner" data-testid="activity-direct-api-note" role="status">
+            <div className="activity-events-banner-body">
+              <p className="activity-events-banner-title">Direct API mode</p>
+              <p className="activity-events-banner-text">
+                OpenAI, Anthropic, and Gemini only emit high-level progress.
+                File reads, grep searches, and shell steps appear when Diffcore routes
+                the job through Codex CLI or Claude Code.
+              </p>
+              {recommendedSubscriptionProvider && (
+                <button
+                  className="btn btn-sm activity-events-banner-action"
+                  onClick={activatePreferredActivityProvider}
+                >
+                  Use {PROVIDER_LABELS[recommendedSubscriptionProvider]}
+                </button>
+              )}
+            </div>
+            <button
+              type="button"
+              className="activity-events-banner-dismiss"
+              onClick={dismissDirectApiNotice}
+              aria-label="Dismiss direct API mode notice"
+              title="Dismiss"
+            >
+              &times;
+            </button>
+          </div>
+        )}
         <div className="activity-log-header">
           <div>
             <h3>{activityViewMode === "stream" ? "Live Stream" : "All Events"}</h3>
@@ -3680,6 +3738,7 @@ export default function App() {
           </div>
 
         </div>
+      </div>
       </div>
     </div>
   );

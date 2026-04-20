@@ -39,7 +39,7 @@ export interface FileDisplayProps {
  * can wrap it in whatever element they need (`<li>` for lists, `<div>` for
  * the edges section) and own the click/context handlers.
  *
- * The visual contract is `[✓?] [status?] [role?] [ext] name : dir +adds -dels [suffix]`.
+ * The visual contract is `[✓ / status] [role?] [ext] name : dir +adds -dels [suffix]`.
  * Padding, flex layout, and hover/selection states live on the parent
  * `.file-item` (or `.edge-item-row`) class.
  */
@@ -69,11 +69,8 @@ export default function FileDisplay({
     return (
       <div className="file-display file-display-two-line">
         <div className="file-display-line file-display-line-primary">
-          {reviewedInReplay && (
-            <span className="replay-visited-check" title="Visited">&#10003;</span>
-          )}
           {gitStatus && (
-            <span className={`file-status-token file-status-${gitStatus}`}>{gitStatus}</span>
+            <span className={`file-status-token file-status-${gitStatus}`}>{reviewedInReplay ? "✓" : gitStatus}</span>
           )}
           <span className="file-ext-token">{compact.extension || "-"}</span>
           <span className="file-path" title={path}>
@@ -109,11 +106,8 @@ export default function FileDisplay({
 
   return (
     <>
-      {reviewedInReplay && (
-        <span className="replay-visited-check" title="Visited">&#10003;</span>
-      )}
       {gitStatus && (
-        <span className={`file-status-token file-status-${gitStatus}`}>{gitStatus}</span>
+        <span className={`file-status-token file-status-${gitStatus}`}>{reviewedInReplay ? "✓" : gitStatus}</span>
       )}
       {roleBadge && (
         <span className="file-role" title={roleLabel ?? roleBadge}>
