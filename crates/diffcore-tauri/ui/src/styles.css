@@ -1,15 +1,15 @@
 /* diffcore — Dark theme, three-panel layout */
 
 :root {
-  --bg-primary: #1e1e2e;
-  --bg-secondary: #181825;
-  --bg-surface: #313244;
-  --bg-hover: #45475a;
-  --text-primary: #cdd6f4;
-  --text-secondary: #a6adc8;
-  --text-muted: #6c7086;
-  --border: #45475a;
-  --accent: #89b4fa;
+  --bg-primary: #1b1d2a;
+  --bg-secondary: #141621;
+  --bg-surface: #2b2f45;
+  --bg-hover: #3a3f59;
+  --text-primary: #eef1ff;
+  --text-secondary: #c5cce8;
+  --text-muted: #8e96ba;
+  --border: #5b6285;
+  --accent: #9cc4ff;
   --accent-hover: #74c7ec;
   --risk-high: #f38ba8;
   --risk-medium: #fab387;
@@ -1609,7 +1609,6 @@ body {
 }
 
 .file-ext-token {
-  margin-left: 6px;
   font-family: var(--font-mono);
   font-size: 10px;
   padding: 1px 5px;
@@ -1617,6 +1616,7 @@ body {
   color: #89dceb;
   background: rgba(137, 220, 235, 0.16);
   font-weight: 700;
+  flex-shrink: 0;
 }
 
 .file-path {
@@ -3284,6 +3284,13 @@ body {
   outline: none; /* overridden by :focus-visible */
   cursor: pointer;
   appearance: auto;
+  background: #414867;
+  color: #eef1ff;
+}
+
+.settings-select option {
+  background: #161926;
+  color: #eef1ff;
 }
 
 .settings-select:focus {
@@ -3304,8 +3311,10 @@ body {
   flex-shrink: 0;
 }
 
-.settings-row .settings-select {
+.settings-row .settings-select,
+.settings-row .dropdown-wrapper {
   flex: 1;
+  min-width: 0;
 }
 
 .settings-number {
@@ -3636,7 +3645,9 @@ body {
   }
 }
 
-/* File moved indicator */
+/* File moved indicator. We tint the row background instead of adding a left
+   border so the row layout stays identical to non-moved rows (no padding
+   shift, no width change). The accent matches `.file-moved-tag`. */
 .file-moved-tag {
   font-size: 8px;
   font-family: var(--font-mono);
@@ -3649,8 +3660,11 @@ body {
 }
 
 .file-item.file-moved {
-  border-left: 2px solid #cba6f7;
-  padding-left: 18px;
+  background: rgba(203, 166, 247, 0.06);
+}
+
+.file-item.file-moved:hover {
+  background: rgba(203, 166, 247, 0.12);
 }
 
 /* ── Risk Heatmap (Treemap) ── */
@@ -5102,4 +5116,150 @@ body {
   background: var(--accent);
   width: 3px !important;
   margin-left: 3px;
+}
+
+/* ── Generic Dropdown (model/provider/etc., styled to match branch dropdown) ── */
+
+.dropdown-wrapper {
+  position: relative;
+  display: inline-block;
+  width: 100%;
+}
+
+.dropdown-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  padding: 0 10px;
+  cursor: pointer;
+  font-size: 12.5px;
+  font-family: var(--font-mono);
+  height: 30px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+  text-align: left;
+}
+
+.dropdown-trigger:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--text-muted);
+}
+
+.dropdown-trigger:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.dropdown-trigger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.dropdown-trigger .dropdown-value {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.dropdown-trigger .dropdown-arrow {
+  font-size: 9px;
+  opacity: 0.45;
+  flex-shrink: 0;
+}
+
+.dropdown-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  min-width: 100%;
+  max-height: 320px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin: 4px 0 0;
+  padding: 4px;
+  z-index: 200;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4), 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+
+.dropdown-search {
+  width: 100%;
+  height: 26px;
+  padding: 0 8px;
+  margin-bottom: 4px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  outline: none;
+  flex-shrink: 0;
+}
+
+.dropdown-search:focus {
+  border-color: var(--accent);
+}
+
+.dropdown-options {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.dropdown-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 10px;
+  cursor: pointer;
+  font-size: 12.5px;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  border-radius: 5px;
+  transition: background 0.1s ease;
+}
+
+.dropdown-option:hover,
+.dropdown-option.active {
+  background: var(--bg-hover);
+}
+
+.dropdown-option.selected {
+  background: rgba(137, 180, 250, 0.1);
+  color: var(--accent);
+}
+
+.dropdown-option.selected.active {
+  background: rgba(137, 180, 250, 0.18);
+}
+
+.dropdown-option.disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.dropdown-option-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dropdown-option-description {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  font-family: var(--font-sans, inherit);
 }

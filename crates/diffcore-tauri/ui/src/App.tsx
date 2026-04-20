@@ -26,6 +26,7 @@ import type { ModelInfo } from "./types";
 import DiffViewer, { type DiffViewerHandle, type EditedHunk } from "./components/DiffViewer";
 import FlowGraph from "./components/FlowGraph";
 import SourceExplorer, { type SourceFocusRequest } from "./components/SourceExplorer";
+import Dropdown from "./components/Dropdown";
 // RiskHeatmap hidden (Phase 9.4) — component kept for future re-enablement
 // import RiskHeatmap from "./components/RiskHeatmap";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -336,7 +337,7 @@ export default function App() {
   const [commentsCollapsed, setCommentsCollapsed] = useState(false);
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
   const pendingScrollToCommentRef = useRef<{ startLine: number; endLine?: number; commentId: string } | null>(null);
-  const pendingReplayHunkScrollRef = useRef<{ filePath: string; targetHunkIndex: number; attempts: number } | null>(null);
+  const pendingReplayHunkScrollRef = useRef<{ filePath: string; targetHunkIndex: number; attempts: number; stepIndex: number; direction?: 1 | -1 } | null>(null);
   const pendingReplayResolveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingSymbolScrollRef = useRef<{ symbol: string } | null>(null);
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
@@ -1037,10 +1038,12 @@ export default function App() {
       }
 
       if (selectedFileRef.current !== hunk.filePath) {
+        const fileStepIndex = group.files.findIndex((f) => f.path === hunk.filePath);
         pendingReplayHunkScrollRef.current = {
           filePath: hunk.filePath,
           targetHunkIndex: clamped,
           attempts: 0,
+          stepIndex: Math.max(0, fileStepIndex),
         };
         openFileInTab(hunk.filePath, group.id);
       } else {
@@ -1110,6 +1113,30 @@ export default function App() {
           return;
         }
         if (pending.attempts >= 8) {
+          const group = selectedGroupRef.current;
+          if (group && pending.direction != null) {
+            const nextStep = pending.stepIndex + pending.direction;
+            if (nextStep >= 0 && nextStep < group.files.length) {
+              const nextFilePath = group.files[nextStep].path;
+              setReplayStep(nextStep);
+              setReplayVisited((prev) => {
+                const next = new Set(prev);
+                next.add(nextFilePath);
+                return next;
+              });
+              setCurrentReplayHunks([]);
+              setReplayHunkIndex(0);
+              pendingReplayHunkScrollRef.current = {
+                filePath: nextFilePath,
+                targetHunkIndex: pending.direction > 0 ? 0 : -1,
+                attempts: 0,
+                stepIndex: nextStep,
+                direction: pending.direction,
+              };
+              openFileInTab(nextFilePath, group.id);
+              return;
+            }
+          }
           pendingReplayHunkScrollRef.current = null;
           return;
         }
@@ -1143,7 +1170,7 @@ export default function App() {
         clearTimeout(pendingReplayResolveTimerRef.current);
       }
     };
-  }, [fileDiff, collectVisibleReplayHunks]);
+  }, [fileDiff, collectVisibleReplayHunks, openFileInTab]);
 
   useEffect(() => {
     if (!fileDiff || !pendingSymbolScrollRef.current) return;
@@ -2873,7 +2900,7 @@ export default function App() {
       const clamped = Math.max(0, Math.min(step, group.files.length - 1));
       setReplayStep(clamped);
       const filePath = group.files[clamped].path;
-      pendingReplayHunkScrollRef.current = { filePath, targetHunkIndex: 0, attempts: 0 };
+      pendingReplayHunkScrollRef.current = { filePath, targetHunkIndex: 0, attempts: 0, stepIndex: clamped };
       setReplayHunkIndex(0);
       setCurrentReplayHunks([]);
       setReplayVisited((prev) => {
@@ -2917,7 +2944,7 @@ export default function App() {
           });
           setCurrentReplayHunks([]);
           setReplayHunkIndex(0);
-          pendingReplayHunkScrollRef.current = { filePath: nextFilePath, targetHunkIndex: 0, attempts: 0 };
+          pendingReplayHunkScrollRef.current = { filePath: nextFilePath, targetHunkIndex: 0, attempts: 0, stepIndex: nextStep, direction: 1 };
           openFileInTab(nextFilePath, group.id);
         }
         return;
@@ -2938,7 +2965,7 @@ export default function App() {
         });
         setCurrentReplayHunks([]);
         setReplayHunkIndex(0); 
-        pendingReplayHunkScrollRef.current = { filePath: prevFilePath, targetHunkIndex: -1, attempts: 0 };
+        pendingReplayHunkScrollRef.current = { filePath: prevFilePath, targetHunkIndex: -1, attempts: 0, stepIndex: prevStep, direction: -1 };
         openFileInTab(prevFilePath, group.id);
       }
     },
@@ -3238,18 +3265,14 @@ export default function App() {
                   <label style={{ fontSize: 12, color: "var(--text-secondary)" }}>
                     Model ({PROVIDER_LABELS[llmSettings.provider as LlmProvider]})
                   </label>
-                  <select
-                    className="settings-select"
-                    value={llmSettings.model}
-                    onChange={(e) => updateSetting("model", e.target.value)}
-                    style={{ maxWidth: 260, marginLeft: "auto" }}
-                  >
-                    {modelsForProvider(llmSettings.provider).map((m) => (
-                      <option key={m} value={m}>
-                        {m}
-                      </option>
-                    ))}
-                  </select>
+                  <div style={{ marginLeft: "auto", maxWidth: 260, flex: "0 1 260px" }}>
+                    <Dropdown
+                      value={llmSettings.model}
+                      onChange={(value) => updateSetting("model", value)}
+                      options={modelsForProvider(llmSettings.provider).map((m) => ({ value: m, label: m }))}
+                      placeholder="Select model"
+                    />
+                  </div>
                 </div>
                 <button
                   className="btn"
@@ -3390,15 +3413,16 @@ export default function App() {
         <div className="annotation-section flow-graph-section flow-graph-full">
           <div className="settings-row" style={{ marginBottom: 8, alignItems: "center" }}>
             <label style={{ fontSize: 12, color: "var(--text-secondary)" }}>Granularity</label>
-            <select
-              className="settings-select"
-              value={graphGranularity}
-              onChange={(e) => setGraphGranularity(e.target.value as "file" | "module_class_method")}
-              style={{ maxWidth: 220, marginLeft: "auto" }}
-            >
-              <option value="file">file</option>
-              <option value="module_class_method">module/class/method (preview)</option>
-            </select>
+            <div style={{ marginLeft: "auto", maxWidth: 220, flex: "0 1 220px" }}>
+              <Dropdown<"file" | "module_class_method">
+                value={graphGranularity}
+                onChange={(value) => setGraphGranularity(value)}
+                options={[
+                  { value: "file", label: "file" },
+                  { value: "module_class_method", label: "module/class/method", description: "preview" },
+                ]}
+              />
+            </div>
           </div>
           {graphGranularity === "module_class_method" && (
             <p className="settings-hint" style={{ marginBottom: 8 }}>
@@ -4249,18 +4273,15 @@ export default function App() {
                     <div className="settings-row" style={{ marginTop: 0 }}>
                       <label>Provider</label>
                     </div>
-                    <select
-                      className="settings-select"
+                    <Dropdown<LlmProvider>
                       value={apiProviderDraft}
-                      onChange={(e) => setApiProviderDraft(e.target.value as LlmProvider)}
-                      data-testid="api-provider-select"
-                    >
-                      {API_PROVIDER_OPTIONS.map((provider) => (
-                        <option key={provider} value={provider}>
-                          {PROVIDER_LABELS[provider]}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(value) => setApiProviderDraft(value)}
+                      options={API_PROVIDER_OPTIONS.map((provider) => ({
+                        value: provider,
+                        label: PROVIDER_LABELS[provider],
+                      }))}
+                      testId="api-provider-select"
+                    />
                     <div className="api-key-input-row">
                       <input
                         type="password"
@@ -4337,15 +4358,17 @@ export default function App() {
                 </p>
                 <label className="settings-toggle" style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12 }}>
                   <span>Diff view mode</span>
-                  <select
-                    value={diffViewMode}
-                    onChange={(e) => setDiffViewMode(e.target.value as DiffViewMode)}
-                    style={{ marginLeft: "auto" }}
-                  >
-                    <option value="side-by-side">Side-by-side</option>
-                    <option value="inline">Inline</option>
-                    <option value="dynamic">Dynamic</option>
-                  </select>
+                  <div style={{ marginLeft: "auto", maxWidth: 200, flex: "0 1 200px" }}>
+                    <Dropdown<DiffViewMode>
+                      value={diffViewMode}
+                      onChange={(value) => setDiffViewMode(value)}
+                      options={[
+                        { value: "side-by-side", label: "Side-by-side" },
+                        { value: "inline", label: "Inline" },
+                        { value: "dynamic", label: "Dynamic" },
+                      ]}
+                    />
+                  </div>
                 </label>
                 <p className="settings-hint">
                   Side-by-side shows old/new in two columns. Inline shows a unified view.
@@ -4400,33 +4423,20 @@ export default function App() {
                 <div className="settings-row">
                   <label>Primary backend</label>
                 </div>
-                <select
-                  className="settings-select"
-                  value={llmSettings.provider}
-                  onChange={(e) => updateSetting("provider", e.target.value)}
-                >
-                  {LLM_PROVIDERS.map((p) => (
-                    <option key={p} value={p}>
-                      {PROVIDER_LABELS[p]}
-                    </option>
-                  ))}
-                </select>
+                <Dropdown<LlmProvider>
+                  value={llmSettings.provider as LlmProvider}
+                  onChange={(value) => updateSetting("provider", value)}
+                  options={LLM_PROVIDERS.map((p) => ({ value: p, label: PROVIDER_LABELS[p] }))}
+                />
                 <div className="settings-row" style={{ marginTop: 12 }}>
                   <label>Model</label>
                 </div>
-                <select
-                  className="settings-select"
+                <Dropdown
                   value={llmSettings.model}
-                  onChange={(e) => updateSetting("model", e.target.value)}
-                >
-                  {modelsForProvider(llmSettings.provider).map(
-                    (m) => (
-                      <option key={m} value={m}>
-                        {m}
-                      </option>
-                    ),
-                  )}
-                </select>
+                  onChange={(value) => updateSetting("model", value)}
+                  options={modelsForProvider(llmSettings.provider).map((m) => ({ value: m, label: m }))}
+                  placeholder="Select model"
+                />
                 <button
                   className="btn btn-small"
                   style={{ marginTop: 4 }}
@@ -4526,33 +4536,20 @@ export default function App() {
                   <>
                     <div className="settings-row">
                       <label>Provider</label>
-                      <select
-                        className="settings-select"
-                        value={llmSettings.refinement_provider}
-                        onChange={(e) => updateSetting("refinement_provider", e.target.value)}
-                      >
-                        {LLM_PROVIDERS.map((p) => (
-                          <option key={p} value={p}>
-                            {PROVIDER_LABELS[p]}
-                          </option>
-                        ))}
-                      </select>
+                      <Dropdown<LlmProvider>
+                        value={llmSettings.refinement_provider as LlmProvider}
+                        onChange={(value) => updateSetting("refinement_provider", value)}
+                        options={LLM_PROVIDERS.map((p) => ({ value: p, label: PROVIDER_LABELS[p] }))}
+                      />
                     </div>
                     <div className="settings-row">
                       <label>Model</label>
-                      <select
-                        className="settings-select"
+                      <Dropdown
                         value={llmSettings.refinement_model}
-                        onChange={(e) => updateSetting("refinement_model", e.target.value)}
-                      >
-                        {modelsForProvider(llmSettings.refinement_provider).map(
-                          (m) => (
-                            <option key={m} value={m}>
-                              {m}
-                            </option>
-                          ),
-                        )}
-                      </select>
+                        onChange={(value) => updateSetting("refinement_model", value)}
+                        options={modelsForProvider(llmSettings.refinement_provider).map((m) => ({ value: m, label: m }))}
+                        placeholder="Select model"
+                      />
                     </div>
                     <div className="settings-row">
                       <label>Max iterations</label>

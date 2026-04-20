@@ -2456,17 +2456,19 @@ pub fn save_app_state(snapshot: serde_json::Value) -> Result<String, CommandErro
 
 #[tauri::command]
 pub fn load_last_app_state() -> Result<Option<serde_json::Value>, CommandError> {
-    let latest_path = app_state_snapshot_dir()?.join("latest.json");
-    if !latest_path.exists() {
-        return Ok(None);
-    }
+    // TODO reenable when this feature works right
+    return Ok(None);
+    // let latest_path = app_state_snapshot_dir()?.join("latest.json");
+    // if !latest_path.exists() {
+    //     return Ok(None);
+    // }
 
-    let raw = std::fs::read_to_string(&latest_path)
-        .map_err(|e| CommandError::Io(format!("Failed to read latest app state: {}", e)))?;
-    let payload: AppStateSnapshotFile = serde_json::from_str(&raw)
-        .map_err(|e| CommandError::Io(format!("Failed to parse latest app state: {}", e)))?;
+    // let raw = std::fs::read_to_string(&latest_path)
+    //     .map_err(|e| CommandError::Io(format!("Failed to read latest app state: {}", e)))?;
+    // let payload: AppStateSnapshotFile = serde_json::from_str(&raw)
+    //     .map_err(|e| CommandError::Io(format!("Failed to parse latest app state: {}", e)))?;
 
-    Ok(Some(payload.snapshot))
+    // Ok(Some(payload.snapshot))
 }
 
 /// LLM settings for the UI — surface for the settings panel.
