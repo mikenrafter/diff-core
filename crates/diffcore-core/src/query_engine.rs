@@ -2836,6 +2836,15 @@ impl QueryEngine {
                 } // close `else` opened above for the standard-convention fallback
             }
             Language::Go => {
+                if extract_definitions_standard(
+                    &matches,
+                    source,
+                    qwc,
+                    &mut definitions,
+                    &mut seen_nodes,
+                ) {
+                    // Standard path took over: bespoke fallback skipped.
+                } else {
                 let fn_name_idx = qwc.capture_index("fn_name");
                 let fn_node_idx = qwc.capture_index("fn_node");
                 let method_name_idx = qwc.capture_index("method_name");
@@ -2885,8 +2894,18 @@ impl QueryEngine {
                         }
                     }
                 }
+                } // close `else` opened above for the standard-convention fallback
             }
             Language::Java => {
+                if extract_definitions_standard(
+                    &matches,
+                    source,
+                    qwc,
+                    &mut definitions,
+                    &mut seen_nodes,
+                ) {
+                    // Standard path took over.
+                } else {
                 let method_name_idx = qwc.capture_index("method_name");
                 let method_node_idx = qwc.capture_index("method_node");
                 let ctor_name_idx = qwc.capture_index("ctor_name");
@@ -2940,8 +2959,18 @@ impl QueryEngine {
                         }
                     }
                 }
+                } // close `else` opened above for the standard-convention fallback
             }
             Language::Rust => {
+                if extract_definitions_standard(
+                    &matches,
+                    source,
+                    qwc,
+                    &mut definitions,
+                    &mut seen_nodes,
+                ) {
+                    // Standard path took over.
+                } else {
                 let fn_name_idx = qwc.capture_index("fn_name");
                 let fn_node_idx = qwc.capture_index("fn_node");
                 let struct_name_idx = qwc.capture_index("struct_name");
@@ -2997,8 +3026,18 @@ impl QueryEngine {
                         }
                     }
                 }
+                } // close `else` opened above for the standard-convention fallback
             }
             Language::CSharp => {
+                if extract_definitions_standard(
+                    &matches,
+                    source,
+                    qwc,
+                    &mut definitions,
+                    &mut seen_nodes,
+                ) {
+                    // Standard path took over.
+                } else {
                 let method_name_idx = qwc.capture_index("method_name");
                 let method_node_idx = qwc.capture_index("method_node");
                 let ctor_name_idx = qwc.capture_index("ctor_name");
@@ -3057,6 +3096,7 @@ impl QueryEngine {
                         }
                     }
                 }
+                } // close `else` opened above for the standard-convention fallback
             }
             Language::Php => {
                 let method_name_idx = qwc.capture_index("method_name");
@@ -3687,8 +3727,14 @@ fn standard_kind_to_symbol_kind(suffix: &str) -> Option<SymbolKind> {
     Some(match suffix {
         // Universal-ctags / nvim-treesitter "tags" vocabulary.
         "function" | "method" | "macro" | "operator" => SymbolKind::Function,
-        "class" | "struct" | "enum" | "union" | "type" => SymbolKind::Class,
-        "interface" | "trait" | "protocol" => SymbolKind::Interface,
+        // C# `record` and Java `enum` map to Class because our IR doesn't
+        // distinguish "value-type wrapper" from a plain class. Both still
+        // expose fields/methods that downstream consumers reason about.
+        "class" | "struct" | "enum" | "union" | "type" | "record" => SymbolKind::Class,
+        // Java `@interface` and C# `delegate` are both contract types — they
+        // declare a callable shape rather than a concrete implementation, so
+        // they slot in alongside interfaces / traits / protocols.
+        "interface" | "trait" | "protocol" | "annotation" | "delegate" => SymbolKind::Interface,
         // We collapse "type" aliases to TypeAlias when the grammar makes the
         // distinction explicit; otherwise the "type" arm above wins.
         "type_alias" | "typealias" | "alias" => SymbolKind::TypeAlias,

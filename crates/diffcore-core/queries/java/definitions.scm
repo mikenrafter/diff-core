@@ -1,33 +1,32 @@
-; Java definition patterns
+; Java — standard tree-sitter "tags" convention.
+;
+; See `queries/typescript/definitions.scm` for the convention writeup.
 
 ; Method declaration — public void foo() {}
 (method_declaration
-  name: (identifier) @method_name) @method_node
+  name: (identifier) @name) @definition.method
 
 ; Constructor declaration — public Foo() {}
 (constructor_declaration
-  name: (identifier) @ctor_name) @ctor_node
+  name: (identifier) @name) @definition.method
 
 ; Class declaration — public class Foo {}
 (class_declaration
-  name: (identifier) @class_name) @class_node
+  name: (identifier) @name) @definition.class
 
 ; Interface declaration — public interface Foo {}
 (interface_declaration
-  name: (identifier) @iface_name) @iface_node
+  name: (identifier) @name) @definition.interface
 
 ; Enum declaration — public enum Foo {}
 (enum_declaration
-  name: (identifier) @enum_name) @enum_node
+  name: (identifier) @name) @definition.enum
 
 ; Annotation type declaration — public @interface Foo {}
 (annotation_type_declaration
-  name: (identifier) @annotation_name) @annotation_node
+  name: (identifier) @name) @definition.annotation
 
-; Field declaration with variable declarator — private int foo;
+; Field declaration — private int foo;
 (field_declaration
   declarator: (variable_declarator
-    name: (identifier) @field_name)) @field_node
-
-; Constant (static final field) — public static final int FOO = 42;
-; Captured via field_declaration above, distinguished in Rust code by modifiers
+    name: (identifier) @name)) @definition.field
