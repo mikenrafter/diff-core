@@ -1,33 +1,35 @@
-; C definition patterns
+; C — standard tree-sitter "tags" convention.
+;
+; See `queries/typescript/definitions.scm` for the convention writeup.
 
 ; Function definition — int foo(int x) { ... }
 (function_definition
   declarator: (function_declarator
-    declarator: (identifier) @func_name)) @func_node
+    declarator: (identifier) @name)) @definition.function
 
 ; Function definition with pointer return — int *foo() { ... }
 (function_definition
   declarator: (pointer_declarator
     declarator: (function_declarator
-      declarator: (identifier) @func_name))) @func_node
+      declarator: (identifier) @name))) @definition.function
 
 ; Struct specifier — struct Foo { ... };
 (struct_specifier
-  name: (type_identifier) @struct_name) @struct_node
+  name: (type_identifier) @name) @definition.struct
 
 ; Enum specifier — enum Color { RED, GREEN, BLUE };
 (enum_specifier
-  name: (type_identifier) @enum_name) @enum_node
+  name: (type_identifier) @name) @definition.enum
 
 ; Union specifier — union Data { ... };
 (union_specifier
-  name: (type_identifier) @union_name) @union_node
+  name: (type_identifier) @name) @definition.union
 
 ; Type definition — typedef int MyInt;
 (type_definition
-  declarator: (type_identifier) @typedef_name) @typedef_node
+  declarator: (type_identifier) @name) @definition.type_alias
 
 ; Global variable declaration — int global_var = 42;
 (declaration
   declarator: (init_declarator
-    declarator: (identifier) @global_name)) @global_node
+    declarator: (identifier) @name)) @definition.variable

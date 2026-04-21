@@ -1,8 +1,10 @@
-; Scala definition patterns
+; Scala — standard tree-sitter "tags" convention.
 ;
-; AST node types:
+; See `queries/typescript/definitions.scm` for the convention writeup.
+;
+; AST node types in tree-sitter-scala:
 ;   function_definition  — def foo() = ...
-;   function_declaration — def foo(): Type (abstract, no body)
+;   function_declaration — def foo(): Type   (abstract; no body)
 ;   class_definition     — class Foo { ... } / case class Foo(...)
 ;   trait_definition     — trait Foo { ... }
 ;   object_definition    — object Foo { ... }
@@ -12,32 +14,32 @@
 
 ; Function definition — def foo() = expr
 (function_definition
-  (identifier) @func_name) @func_node
+  (identifier) @name) @definition.function
 
 ; Function declaration (abstract) — def foo(): Type
 (function_declaration
-  (identifier) @func_name) @func_node
+  (identifier) @name) @definition.function
 
-; Class definition — class Foo { ... } / case class Foo(...)
+; Class definition — class Foo / case class Foo(...)
 (class_definition
-  (identifier) @class_name) @class_node
+  (identifier) @name) @definition.class
 
-; Trait definition — trait Foo { ... } / sealed trait Foo
+; Trait definition — trait Foo / sealed trait Foo
 (trait_definition
-  (identifier) @trait_name) @trait_node
+  (identifier) @name) @definition.trait
 
 ; Object definition — object Foo { ... }
 (object_definition
-  (identifier) @object_name) @object_node
+  (identifier) @name) @definition.class
 
-; Val definition (top-level or member) — val x = 42
+; Val definition — val x = 42
 (val_definition
-  (identifier) @prop_name) @prop_node
+  (identifier) @name) @definition.constant
 
-; Var definition (top-level or member) — var x = 42
+; Var definition — var x = 42
 (var_definition
-  (identifier) @prop_name) @prop_node
+  (identifier) @name) @definition.variable
 
 ; Type alias — type Foo = Bar
 (type_definition
-  (type_identifier) @typealias_name) @typealias_node
+  (type_identifier) @name) @definition.type_alias

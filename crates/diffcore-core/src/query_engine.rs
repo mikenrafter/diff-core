@@ -3348,6 +3348,15 @@ impl QueryEngine {
                 } // close `else` opened above for the standard-convention fallback
             }
             Language::C => {
+                if extract_definitions_standard(
+                    &matches,
+                    source,
+                    qwc,
+                    &mut definitions,
+                    &mut seen_nodes,
+                ) {
+                    // Standard path took over.
+                } else {
                 let func_name_idx = qwc.capture_index("func_name");
                 let func_node_idx = qwc.capture_index("func_node");
                 let struct_name_idx = qwc.capture_index("struct_name");
@@ -3395,8 +3404,18 @@ impl QueryEngine {
                         }
                     }
                 }
+                } // close `else` opened above for the standard-convention fallback
             }
             Language::Cpp => {
+                if extract_definitions_standard(
+                    &matches,
+                    source,
+                    qwc,
+                    &mut definitions,
+                    &mut seen_nodes,
+                ) {
+                    // Standard path took over.
+                } else {
                 let func_name_idx = qwc.capture_index("func_name");
                 let func_node_idx = qwc.capture_index("func_node");
                 let method_name_idx = qwc.capture_index("method_name");
@@ -3461,8 +3480,18 @@ impl QueryEngine {
                         }
                     }
                 }
+                } // close `else` opened above for the standard-convention fallback
             }
             Language::Scala => {
+                if extract_definitions_standard(
+                    &matches,
+                    source,
+                    qwc,
+                    &mut definitions,
+                    &mut seen_nodes,
+                ) {
+                    // Standard path took over.
+                } else {
                 let func_name_idx = qwc.capture_index("func_name");
                 let func_node_idx = qwc.capture_index("func_node");
                 let class_name_idx = qwc.capture_index("class_name");
@@ -3514,6 +3543,7 @@ impl QueryEngine {
                         }
                     }
                 }
+                } // close `else` opened above for the standard-convention fallback
             }
             _ => {}
         }
@@ -3780,16 +3810,17 @@ fn standard_kind_to_symbol_kind(suffix: &str) -> Option<SymbolKind> {
         "type_alias" | "typealias" | "alias" => SymbolKind::TypeAlias,
         "constant" | "const" | "static" | "variable" | "field" | "property"
         | "enum_member" | "enumerator" => SymbolKind::Constant,
-        // Ruby `module Foo … end` and similar standalone module/namespace
-        // definitions are first-class symbols in our IR (Symbol::Module).
-        // Note that `tags.scm` files often use these names for *containers*
-        // — patterns whose only purpose is scoping nested definitions —
-        // which would over-emit. Languages whose .scm declares
-        // \`@definition.module\` should mean "this IS a module definition".
-        "module" => SymbolKind::Module,
-        // Namespace / package containers are skipped — we don't model them
-        // as standalone symbols.
-        "namespace" | "package" => return None,
+        // Ruby `module Foo … end` and C++ `namespace foo { … }` are
+        // first-class symbols in our IR (Symbol::Module). Note that
+        // upstream `tags.scm` files sometimes use these for *scoping
+        // containers* (patterns whose only purpose is hosting nested
+        // definitions) which would over-emit. Languages whose .scm
+        // declares \`@definition.module\` / \`@definition.namespace\`
+        // should mean "this IS a module/namespace definition".
+        "module" | "namespace" => SymbolKind::Module,
+        // Package containers are skipped — Java/Go etc. don't model them
+        // as standalone symbols in our IR.
+        "package" => return None,
         _ => return None,
     })
 }
