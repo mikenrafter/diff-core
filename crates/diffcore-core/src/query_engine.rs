@@ -1129,8 +1129,84 @@ impl QueryEngine {
             Language::Swift => self.extract_swift_imports(root, source, qwc),
             Language::C | Language::Cpp => self.extract_c_imports(root, source, qwc),
             Language::Scala => self.extract_scala_imports(root, source, qwc),
-            _ => Ok(vec![]),
+            _ => self.extract_minimal_imports(root, source, qwc),
         }
+    }
+
+    /// Generic fallback used by languages that do not (yet) have a bespoke
+    /// per-language import extractor. Walks every match in the query, looks
+    /// for a `@source` capture (the import path) and an optional `@stmt`
+    /// capture (the surrounding statement node, used only for line numbers),
+    /// and emits a minimal `ImportInfo` carrying just the source string and
+    /// line.
+    ///
+    /// This is intentionally low-fidelity — `names`, `is_default`, and
+    /// `is_namespace` are all left empty/false. Downstream consumers that
+    /// only resolve cross-file edges by source path (graph.rs, framework
+    /// detection) work correctly; consumers that need named-import detail
+    /// will see the language as having no named imports until a bespoke
+    /// extractor is wired in.
+    ///
+    /// Quoting / bracketing is stripped from `@source`: leading/trailing
+    /// `"` `'` `` ` `` `<` `>` characters are removed so the resulting
+    /// string is a comparable path (e.g. `<stdio.h>` → `stdio.h`,
+    /// `"react"` → `react`).
+    fn extract_minimal_imports(
+        &self,
+        root: &Node,
+        source: &[u8],
+        qwc: &QueryWithCaptures,
+    ) -> Result<Vec<ImportInfo>, QueryEngineError> {
+        let source_idx = qwc.capture_index("source");
+        if source_idx.is_none() {
+            return Ok(vec![]);
+        }
+        let stmt_idx = qwc.capture_index("stmt");
+
+        let mut cursor = QueryCursor::new();
+        let matches = collect_matches(&mut cursor, &qwc.query, *root, source);
+
+        // Dedup by (source-string, line) so that languages whose .scm has
+        // multiple overlapping patterns for the same import statement (e.g.
+        // a "side-effect" pattern and a "named-imports" pattern that both
+        // match `import 'x'`) don't double-emit.
+        let mut seen: Vec<(String, usize)> = Vec::new();
+        let mut imports: Vec<ImportInfo> = Vec::new();
+
+        for m in &matches {
+            let mut source_text = String::new();
+            let mut line = 0usize;
+            for &(idx, node) in &m.captures {
+                if Some(idx) == source_idx {
+                    source_text = node_text(&node, source).to_string();
+                    if line == 0 {
+                        line = node.start_position().row + 1;
+                    }
+                }
+                if Some(idx) == stmt_idx {
+                    line = node.start_position().row + 1;
+                }
+            }
+            let trimmed = source_text
+                .trim_matches(|c: char| matches!(c, '"' | '\'' | '`' | '<' | '>'))
+                .to_string();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let key = (trimmed.clone(), line);
+            if seen.contains(&key) {
+                continue;
+            }
+            seen.push(key);
+            imports.push(ImportInfo {
+                source: trimmed,
+                names: Vec::new(),
+                is_default: false,
+                is_namespace: false,
+                line,
+            });
+        }
+        Ok(imports)
     }
 
     fn extract_ts_imports(
@@ -3545,7 +3621,21 @@ impl QueryEngine {
                 }
                 } // close `else` opened above for the standard-convention fallback
             }
-            _ => {}
+            // Catch-all for languages without a bespoke per-kind dispatch
+            // arm (the 23 newly-added grammars, plus data/markup formats
+            // like JSON, Markdown, YAML, TOML — though the latter typically
+            // produce no definitions and are no-ops here). Languages whose
+            // definitions.scm follows the standard `@name` +
+            // `@definition.<kind>` convention are extracted automatically.
+            _ => {
+                extract_definitions_standard(
+                    &matches,
+                    source,
+                    qwc,
+                    &mut definitions,
+                    &mut seen_nodes,
+                );
+            }
         }
 
         Ok(definitions)
