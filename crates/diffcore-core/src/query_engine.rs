@@ -3099,6 +3099,15 @@ impl QueryEngine {
                 } // close `else` opened above for the standard-convention fallback
             }
             Language::Php => {
+                if extract_definitions_standard(
+                    &matches,
+                    source,
+                    qwc,
+                    &mut definitions,
+                    &mut seen_nodes,
+                ) {
+                    // Standard path took over.
+                } else {
                 let method_name_idx = qwc.capture_index("method_name");
                 let method_node_idx = qwc.capture_index("method_node");
                 let func_name_idx = qwc.capture_index("func_name");
@@ -3149,8 +3158,18 @@ impl QueryEngine {
                         }
                     }
                 }
+                } // close `else` opened above for the standard-convention fallback
             }
             Language::Ruby => {
+                if extract_definitions_standard(
+                    &matches,
+                    source,
+                    qwc,
+                    &mut definitions,
+                    &mut seen_nodes,
+                ) {
+                    // Standard path took over.
+                } else {
                 let method_name_idx = qwc.capture_index("method_name");
                 let method_node_idx = qwc.capture_index("method_node");
                 let singleton_method_name_idx = qwc.capture_index("singleton_method_name");
@@ -3199,8 +3218,18 @@ impl QueryEngine {
                         }
                     }
                 }
+                } // close `else` opened above for the standard-convention fallback
             }
             Language::Kotlin => {
+                if extract_definitions_standard(
+                    &matches,
+                    source,
+                    qwc,
+                    &mut definitions,
+                    &mut seen_nodes,
+                ) {
+                    // Standard path took over.
+                } else {
                 let func_name_idx = qwc.capture_index("func_name");
                 let func_node_idx = qwc.capture_index("func_node");
                 let class_name_idx = qwc.capture_index("class_name");
@@ -3249,8 +3278,18 @@ impl QueryEngine {
                         }
                     }
                 }
+                } // close `else` opened above for the standard-convention fallback
             }
             Language::Swift => {
+                if extract_definitions_standard(
+                    &matches,
+                    source,
+                    qwc,
+                    &mut definitions,
+                    &mut seen_nodes,
+                ) {
+                    // Standard path took over.
+                } else {
                 let func_name_idx = qwc.capture_index("func_name");
                 let func_node_idx = qwc.capture_index("func_node");
                 let class_name_idx = qwc.capture_index("class_name");
@@ -3306,6 +3345,7 @@ impl QueryEngine {
                         }
                     }
                 }
+                } // close `else` opened above for the standard-convention fallback
             }
             Language::C => {
                 let func_name_idx = qwc.capture_index("func_name");
@@ -3740,9 +3780,16 @@ fn standard_kind_to_symbol_kind(suffix: &str) -> Option<SymbolKind> {
         "type_alias" | "typealias" | "alias" => SymbolKind::TypeAlias,
         "constant" | "const" | "static" | "variable" | "field" | "property"
         | "enum_member" | "enumerator" => SymbolKind::Constant,
-        // Module / namespace / package definitions are skipped — they appear
-        // in tags.scm as containers, not standalone symbols our IR tracks.
-        "module" | "namespace" | "package" => return None,
+        // Ruby `module Foo … end` and similar standalone module/namespace
+        // definitions are first-class symbols in our IR (Symbol::Module).
+        // Note that `tags.scm` files often use these names for *containers*
+        // — patterns whose only purpose is scoping nested definitions —
+        // which would over-emit. Languages whose .scm declares
+        // \`@definition.module\` should mean "this IS a module definition".
+        "module" => SymbolKind::Module,
+        // Namespace / package containers are skipped — we don't model them
+        // as standalone symbols.
+        "namespace" | "package" => return None,
         _ => return None,
     })
 }

@@ -1,24 +1,27 @@
-; Kotlin definition patterns
+; Kotlin — standard tree-sitter "tags" convention.
 ;
-; AST structure uses `identifier` (not `simple_identifier` or `type_identifier`)
+; See `queries/typescript/definitions.scm` for the convention writeup.
+;
+; Note: the tree-sitter-kotlin AST uses bare `identifier` (not
+; `simple_identifier` / `type_identifier`) for declaration names.
 
 ; Function declaration — fun foo() { ... }
 (function_declaration
-  (identifier) @func_name) @func_node
+  (identifier) @name) @definition.function
 
-; Class declaration — class Foo { ... } / data class Foo(...) / sealed class Foo
+; Class declaration — class Foo, data class Foo, sealed class Foo, ...
 (class_declaration
-  (identifier) @class_name) @class_node
+  (identifier) @name) @definition.class
 
 ; Object declaration — object Foo { ... }
 (object_declaration
-  (identifier) @object_name) @object_node
+  (identifier) @name) @definition.class
 
-; Property declaration (top-level val/var) — val FOO = 42
+; Property declaration — val FOO = 42
 (property_declaration
   (variable_declaration
-    (identifier) @prop_name)) @prop_node
+    (identifier) @name)) @definition.property
 
 ; Type alias — typealias Foo = Bar
 (type_alias
-  (identifier) @typealias_name) @typealias_node
+  (identifier) @name) @definition.typealias
