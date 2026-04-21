@@ -2645,6 +2645,20 @@ impl QueryEngine {
 
         match language {
             Language::TypeScript | Language::JavaScript => {
+                // Try standard-convention extractor first. When `definitions.scm`
+                // has been migrated to use `@definition.<kind>` + `@name`, this
+                // takes over and the legacy per-kind dispatch below is skipped.
+                if extract_definitions_standard(
+                    &matches,
+                    source,
+                    qwc,
+                    &mut definitions,
+                    &mut seen_nodes,
+                ) {
+                    // Standard path emitted at least one definition: bespoke
+                    // dispatch would only re-discover the same nodes (and our
+                    // dedup would drop them) so we skip it for clarity.
+                } else {
                 // TS/JS: each definition kind has a distinct capture name pair
                 let fn_name_idx = qwc.capture_index("fn_name");
                 let fn_node_idx = qwc.capture_index("fn_node");
@@ -2743,6 +2757,7 @@ impl QueryEngine {
                         }
                     }
                 }
+                } // close `else` opened above for the standard-convention fallback
             }
             Language::Python => {
                 // Python: each definition kind has a distinct capture name pair
@@ -3626,6 +3641,173 @@ fn node_span(m: &CollectedMatch, node_cap: Option<u32>) -> (usize, usize, usize)
             )
         })
         .unwrap_or((0, 0, 0))
+}
+
+// ---------------------------------------------------------------------------
+// Standard tree-sitter "tags" capture-name convention
+// ---------------------------------------------------------------------------
+//
+// The community standard for code-navigation queries (used by GitHub's
+// universal-ctags adapter, nvim-treesitter, helix, zed, …) tags every
+// definition or reference with a structured capture name:
+//
+//     (function_declaration name: (identifier) @name) @definition.function
+//     (class_declaration    name: (identifier) @name) @definition.class
+//     (call_expression      function: (_)      @name) @reference.call
+//
+// Every match contains a single `@name` capture and exactly one
+// `@definition.<kind>` (or `@reference.call`) capture that names the
+// node and encodes its kind in one place. The kind suffix maps directly
+// onto our [`SymbolKind`] enum.
+//
+// Adopting this convention for `definitions.scm` and `calls.scm` lets us
+// drop in upstream `queries/tags.scm` files almost verbatim across the ~25
+// new languages we now support — there's no need to invent a unique
+// per-kind capture name (`fn_name`, `class_name`, …) for each grammar.
+//
+// `imports.scm` and `assignments.scm` deliberately keep their bespoke
+// per-language capture vocabulary because our IR (`ImportInfo`, `IrPattern`)
+// carries strictly more structure than the standard "tags" set provides.
+
+/// Map a `definition.<kind>` suffix onto our [`SymbolKind`].
+///
+/// Returns `None` for definition kinds we do not currently model (we choose
+/// to skip them rather than collapse onto a wrong kind).
+fn standard_kind_to_symbol_kind(suffix: &str) -> Option<SymbolKind> {
+    Some(match suffix {
+        // Universal-ctags / nvim-treesitter "tags" vocabulary.
+        "function" | "method" | "macro" | "operator" => SymbolKind::Function,
+        "class" | "struct" | "enum" | "union" | "type" => SymbolKind::Class,
+        "interface" | "trait" | "protocol" => SymbolKind::Interface,
+        // We collapse "type" aliases to TypeAlias when the grammar makes the
+        // distinction explicit; otherwise the "type" arm above wins.
+        "type_alias" | "typealias" | "alias" => SymbolKind::TypeAlias,
+        "constant" | "const" | "static" | "variable" | "field" | "property"
+        | "enum_member" | "enumerator" => SymbolKind::Constant,
+        // Module / namespace / package definitions are skipped — they appear
+        // in tags.scm as containers, not standalone symbols our IR tracks.
+        "module" | "namespace" | "package" => return None,
+        _ => return None,
+    })
+}
+
+/// Run the standard-convention extractor on a set of matches.
+///
+/// Walks each match looking for a `@definition.<kind>` capture together
+/// with the conventional `@name` capture, deduplicating by `(node_start, name)`
+/// the same way the bespoke per-language extractors do.
+///
+/// Returns `Ok(true)` if at least one definition was emitted — callers use
+/// this as a signal that the standard path "took" and bespoke fallback can
+/// be skipped.
+fn extract_definitions_standard(
+    matches: &[CollectedMatch<'_>],
+    source: &[u8],
+    qwc: &QueryWithCaptures,
+    out_definitions: &mut Vec<Definition>,
+    seen_nodes: &mut Vec<(usize, usize)>,
+) -> bool {
+    let name_idx = qwc.capture_index("name");
+    if name_idx.is_none() {
+        // No `@name` capture in this query → it is not a standard-style query.
+        return false;
+    }
+
+    // Pre-resolve the indexes for every `definition.<suffix>` capture the
+    // query declared, so we can recognise them in O(captures-per-match).
+    let definition_captures: Vec<(u32, SymbolKind)> = qwc
+        .capture_names
+        .iter()
+        .filter_map(|(name, &idx)| {
+            name.strip_prefix("definition.")
+                .and_then(standard_kind_to_symbol_kind)
+                .map(|kind| (idx, kind))
+        })
+        .collect();
+    if definition_captures.is_empty() {
+        return false;
+    }
+
+    let mut emitted_any = false;
+    for m in matches {
+        let Some(name_node) = m.get_capture(name_idx) else {
+            continue;
+        };
+        // Find which definition.* capture this match carried.
+        let Some(&(def_idx, kind)) = definition_captures
+            .iter()
+            .find(|(idx, _)| m.has_capture(Some(*idx)))
+        else {
+            continue;
+        };
+        let name_text = node_text(&name_node, source).to_string();
+        if name_text.is_empty() {
+            continue;
+        }
+        let (start_line, end_line, node_start) = node_span(m, Some(def_idx));
+        let key = (node_start, hash_str(&name_text));
+        if !seen_nodes.contains(&key) {
+            seen_nodes.push(key);
+            out_definitions.push(Definition {
+                name: name_text,
+                kind,
+                start_line,
+                end_line,
+            });
+            emitted_any = true;
+        }
+    }
+    emitted_any
+}
+
+/// Standard-convention extractor for call sites.
+///
+/// Recognises `(call_expression function: (_) @name) @reference.call` and
+/// the closely related `@reference.call.method` / `@reference.call.constructor`
+/// variants used by some upstream `tags.scm` files.
+///
+/// Returns `Ok(true)` if at least one call was emitted.
+#[allow(dead_code)] // wired in once a language opts in via its calls.scm
+fn extract_calls_standard(
+    matches: &[CollectedMatch<'_>],
+    source: &[u8],
+    qwc: &QueryWithCaptures,
+    out_calls: &mut Vec<CallSite>,
+) -> bool {
+    let name_idx = qwc.capture_index("name");
+    if name_idx.is_none() {
+        return false;
+    }
+    // Any capture whose name starts with `reference.call` counts.
+    let ref_indexes: Vec<u32> = qwc
+        .capture_names
+        .iter()
+        .filter_map(|(n, &i)| n.starts_with("reference.call").then_some(i))
+        .collect();
+    if ref_indexes.is_empty() {
+        return false;
+    }
+
+    let mut emitted = false;
+    for m in matches {
+        let Some(name_node) = m.get_capture(name_idx) else {
+            continue;
+        };
+        if !ref_indexes.iter().any(|&i| m.has_capture(Some(i))) {
+            continue;
+        }
+        let callee = node_text(&name_node, source).to_string();
+        if callee.is_empty() {
+            continue;
+        }
+        out_calls.push(CallSite {
+            callee,
+            line: name_node.start_position().row + 1,
+            containing_function: None, // computed by caller after extraction
+        });
+        emitted = true;
+    }
+    emitted
 }
 
 fn get_or_insert_import<'a>(
