@@ -93,12 +93,48 @@
 
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
+        # --- Language selection --------------------------------------------
+        #
+        # Every tree-sitter grammar lives behind a per-language Cargo feature
+        # (`lang-bash`, `lang-haskell`, …). The 13 core languages are always
+        # compiled in; everything else is gated.
+        #
+        # `mkFeatureArgs` translates a Nix-level `languages` selector into the
+        # `--features` portion of `cargo build`:
+        #
+        #   "all"             → default features (core 13 + extra-languages
+        #                       umbrella → every supported grammar bundled).
+        #   "core"            → only the always-on core 13.
+        #   [ "haskell" "bash" "nix" ]
+        #                     → core 13 + the listed extras (each name is
+        #                       prefixed with `lang-` and joined into the
+        #                       Cargo feature list).
+        #
+        # The "all" alias compiles to an empty string because the default
+        # feature set in `Cargo.toml` already equals "everything" — paying the
+        # extra `--no-default-features --features extra-languages` round-trip
+        # is wasted work.
+        mkFeatureArgs = languages:
+          if languages == "all" then ""
+          else if languages == "core" then "--no-default-features"
+          else if builtins.isList languages then
+            (if builtins.elem "all" languages then ""
+             else
+               let
+                 langFlags = pkgs.lib.concatStringsSep ","
+                   (map (l: "lang-${l}") languages);
+               in
+                 "--no-default-features --features \"${langFlags}\"")
+          else
+            throw "diffcore: `languages` must be \"all\", \"core\", or a list of language names";
+
         # --- Packages -------------------------------------------------------
 
-        diffcore-cli = craneLib.buildPackage (commonArgs // {
+        # Generic builder for the CLI. Pass a `languages` selector (see above).
+        mkDiffcoreCli = languages: craneLib.buildPackage (commonArgs // {
           inherit cargoArtifacts;
           pname = "diffcore";
-          cargoExtraArgs = "--package diffcore-cli";
+          cargoExtraArgs = "--package diffcore-cli ${mkFeatureArgs languages}";
           meta.mainProgram = "diffcore";
         });
 
@@ -121,10 +157,11 @@
           # Left empty so the flake parses; the CLI package works without it.
         };
 
-        diffcore-tauri = craneLib.buildPackage (commonArgs // {
+        # Generic builder for the desktop app. Same `languages` selector as CLI.
+        mkDiffcoreTauri = languages: craneLib.buildPackage (commonArgs // {
           inherit cargoArtifacts;
           pname = "diffcore-tauri";
-          cargoExtraArgs = "--package diffcore-tauri";
+          cargoExtraArgs = "--package diffcore-tauri ${mkFeatureArgs languages}";
 
           # Point Tauri build at the pre-built frontend dist.
           preBuild = ''
@@ -136,10 +173,29 @@
           ]);
         });
 
+        # Convenience handles: the "all languages" variant is the default; a
+        # core-only variant is exposed for fast / slim builds.
+        diffcore-cli        = mkDiffcoreCli "all";
+        diffcore-cli-core   = mkDiffcoreCli "core";
+        diffcore-tauri      = mkDiffcoreTauri "all";
+        diffcore-tauri-core = mkDiffcoreTauri "core";
+
       in {
         packages = {
           default = diffcore-cli;
-          inherit diffcore-cli diffcore-tauri;
+          inherit diffcore-cli diffcore-tauri
+                  diffcore-cli-core diffcore-tauri-core;
+
+          # Aliases requested for clarity ("all" intent in the package name).
+          all-cli = diffcore-cli;
+          all-gui = diffcore-tauri;
+        };
+
+        # Expose the builders so a downstream flake can import this one and
+        # build a slimmer variant, e.g.
+        #   diffcore.lib.${system}.mkDiffcoreCli [ "haskell" "bash" "nix" ]
+        lib = {
+          inherit mkDiffcoreCli mkDiffcoreTauri mkFeatureArgs;
         };
 
         devShells.default = craneLib.devShell {

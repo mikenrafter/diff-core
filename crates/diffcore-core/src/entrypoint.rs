@@ -184,6 +184,30 @@ fn detect_http_routes(file: &ParsedFile, out: &mut Vec<Entrypoint>) {
         Language::C => detect_http_routes_c_cpp(file, out),
         Language::Cpp => detect_http_routes_c_cpp(file, out),
         Language::Scala => detect_http_routes_scala(file, out),
+        // Extras: no language-specific HTTP route detection (yet).
+        Language::Bash
+        | Language::Haskell
+        | Language::Nix
+        | Language::Lua
+        | Language::Perl
+        | Language::Elixir
+        | Language::Erlang
+        | Language::Zig
+        | Language::OCaml
+        | Language::Julia
+        | Language::Dart
+        | Language::R
+        | Language::Fish
+        | Language::Html
+        | Language::Css
+        | Language::Scss
+        | Language::Json
+        | Language::Yaml
+        | Language::Toml
+        | Language::Markdown
+        | Language::GraphQl
+        | Language::Vue
+        | Language::Svelte => {}
         Language::Unknown => {}
     }
 }
@@ -1386,6 +1410,30 @@ fn has_web_framework_import_for_lang(file: &ParsedFile) -> bool {
         Language::Swift => is_swift_web_framework_import(imp),
         Language::Scala => is_scala_web_framework_import(imp),
         Language::C | Language::Cpp | Language::Unknown => false,
+        // Extras: no web framework heuristics (yet).
+        Language::Bash
+        | Language::Haskell
+        | Language::Nix
+        | Language::Lua
+        | Language::Perl
+        | Language::Elixir
+        | Language::Erlang
+        | Language::Zig
+        | Language::OCaml
+        | Language::Julia
+        | Language::Dart
+        | Language::R
+        | Language::Fish
+        | Language::Html
+        | Language::Css
+        | Language::Scss
+        | Language::Json
+        | Language::Yaml
+        | Language::Toml
+        | Language::Markdown
+        | Language::GraphQl
+        | Language::Vue
+        | Language::Svelte => false,
     })
 }
 

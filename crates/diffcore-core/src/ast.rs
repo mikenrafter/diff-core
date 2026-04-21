@@ -17,6 +17,7 @@ pub enum AstError {
 /// Detected programming language.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Language {
+    // ── Core 13 (always-on) ──────────────────────────────────────────
     TypeScript,
     JavaScript,
     Python,
@@ -31,6 +32,30 @@ pub enum Language {
     C,
     Cpp,
     Scala,
+    // ── Extras (each gated behind a `lang-<name>` Cargo feature) ─────
+    Bash,
+    Haskell,
+    Nix,
+    Lua,
+    Perl,
+    Elixir,
+    Erlang,
+    Zig,
+    OCaml,
+    Julia,
+    Dart,
+    R,
+    Fish,
+    Html,
+    Css,
+    Scss,
+    Json,
+    Yaml,
+    Toml,
+    Markdown,
+    GraphQl,
+    Vue,
+    Svelte,
     Unknown,
 }
 
@@ -38,6 +63,7 @@ impl Language {
     /// Detect language from file path extension.
     pub fn from_path(path: &str) -> Self {
         match path.rsplit('.').next().unwrap_or("") {
+            // ── Core 13 ─────────────────────────────────────────────
             "ts" | "tsx" => Language::TypeScript,
             "js" | "jsx" | "mjs" | "cjs" => Language::JavaScript,
             "py" | "pyi" => Language::Python,
@@ -54,6 +80,30 @@ impl Language {
             "cpp" | "cc" | "cxx" | "c++" => Language::Cpp,
             "hpp" | "hxx" | "h++" | "hh" => Language::Cpp,
             "scala" | "sc" => Language::Scala,
+            // ── Extras ──────────────────────────────────────────────
+            "sh" | "bash" => Language::Bash,
+            "hs" | "lhs" => Language::Haskell,
+            "nix" => Language::Nix,
+            "lua" => Language::Lua,
+            "pl" | "pm" | "t" | "perl" => Language::Perl,
+            "ex" | "exs" => Language::Elixir,
+            "erl" | "hrl" => Language::Erlang,
+            "zig" | "zon" => Language::Zig,
+            "ml" | "mli" => Language::OCaml,
+            "jl" => Language::Julia,
+            "dart" => Language::Dart,
+            "r" | "R" => Language::R,
+            "fish" => Language::Fish,
+            "html" | "htm" => Language::Html,
+            "css" => Language::Css,
+            "scss" | "sass" => Language::Scss,
+            "json" | "jsonc" => Language::Json,
+            "yaml" | "yml" => Language::Yaml,
+            "toml" => Language::Toml,
+            "md" | "markdown" | "mdx" => Language::Markdown,
+            "graphql" | "gql" => Language::GraphQl,
+            "vue" => Language::Vue,
+            "svelte" => Language::Svelte,
             _ => Language::Unknown,
         }
     }
@@ -175,6 +225,29 @@ pub fn parse_file(path: &str, source: &str) -> Result<ParsedFile, AstError> {
         | Language::C
         | Language::Cpp
         | Language::Scala
+        | Language::Bash
+        | Language::Haskell
+        | Language::Nix
+        | Language::Lua
+        | Language::Perl
+        | Language::Elixir
+        | Language::Erlang
+        | Language::Zig
+        | Language::OCaml
+        | Language::Julia
+        | Language::Dart
+        | Language::R
+        | Language::Fish
+        | Language::Html
+        | Language::Css
+        | Language::Scss
+        | Language::Json
+        | Language::Yaml
+        | Language::Toml
+        | Language::Markdown
+        | Language::GraphQl
+        | Language::Vue
+        | Language::Svelte
         | Language::Unknown => Ok(ParsedFile {
             path: path.to_string(),
             language,
@@ -263,6 +336,29 @@ pub fn extract_data_flow_info(path: &str, source: &str) -> Result<DataFlowInfo, 
         | Language::C
         | Language::Cpp
         | Language::Scala
+        | Language::Bash
+        | Language::Haskell
+        | Language::Nix
+        | Language::Lua
+        | Language::Perl
+        | Language::Elixir
+        | Language::Erlang
+        | Language::Zig
+        | Language::OCaml
+        | Language::Julia
+        | Language::Dart
+        | Language::R
+        | Language::Fish
+        | Language::Html
+        | Language::Css
+        | Language::Scss
+        | Language::Json
+        | Language::Yaml
+        | Language::Toml
+        | Language::Markdown
+        | Language::GraphQl
+        | Language::Vue
+        | Language::Svelte
         | Language::Unknown => Ok(DataFlowInfo {
             assignments: vec![],
             calls_with_args: vec![],
