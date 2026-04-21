@@ -74,7 +74,12 @@ expression: v
   },
   "summary": {
     "frameworks_detected": [],
-    "languages_detected": [],
+    "languages_detected": [
+      "bash",
+      "json",
+      "markdown",
+      "yaml"
+    ],
     "total_files_changed": 8,
     "total_groups": 1
   },

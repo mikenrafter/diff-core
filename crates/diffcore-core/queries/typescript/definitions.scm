@@ -1,46 +1,79 @@
-; TypeScript/JavaScript definition patterns
-; Each pattern uses distinct capture names so the engine can dispatch
-; by capture-name presence instead of fragile pattern_index ordering.
+; TypeScript / JavaScript — standard tree-sitter "tags" convention.
+;
+; Captures follow the universal-ctags / nvim-treesitter / GitHub code-nav
+; convention so that `query_engine::extract_definitions_standard` can pick
+; them up and so that this file is recognisable to anyone familiar with
+; upstream `tree-sitter-typescript/queries/tags.scm`.
+;
+; Conventions:
+;   - Every match has exactly one `@name` capture for the symbol identifier.
+;   - The whole symbol node is tagged `@definition.<kind>`. Suffix maps to
+;     SymbolKind via `standard_kind_to_symbol_kind`.
 
-; Function declaration
+; Function declaration — function foo() { ... }
 (function_declaration
-  name: (identifier) @fn_name) @fn_node
+  name: (identifier) @name) @definition.function
 
-; Generator function declaration
+; Generator function declaration — function* foo() { ... }
 (generator_function_declaration
-  name: (identifier) @gen_name) @gen_node
+  name: (identifier) @name) @definition.function
 
-; Class declaration
+; Class declaration — class Foo { ... }
 (class_declaration
-  name: (_) @class_name) @class_node
+  name: (_) @name) @definition.class
 
-; Abstract class declaration
+; Abstract class declaration — abstract class Foo { ... }
 (abstract_class_declaration
-  name: (_) @abstract_name) @abstract_node
+  name: (_) @name) @definition.class
 
-; Interface declaration
+; Interface declaration — interface Foo { ... }
 (interface_declaration
-  name: (_) @iface_name) @iface_node
+  name: (_) @name) @definition.interface
 
-; Type alias declaration
+; Type alias declaration — type Foo = ...
 (type_alias_declaration
-  name: (_) @type_name) @type_node
+  name: (_) @name) @definition.type_alias
 
-; Variable declarator with arrow function value
+; Variable declarator with arrow-function value — const foo = () => {}
 (variable_declarator
-  name: (identifier) @arrow_name
-  value: (arrow_function)) @arrow_node
+  name: (identifier) @name
+  value: (arrow_function)) @definition.function
 
-; Variable declarator with function expression value
+; Variable declarator with function-expression value — const foo = function() {}
 (variable_declarator
-  name: (identifier) @fn_expr_name
-  value: (function_expression)) @fn_expr_node
+  name: (identifier) @name
+  value: (function_expression)) @definition.function
 
-; Variable declarator with non-function value (constant)
+; Variable declarator with non-function value — const FOO = 42
+; The structural patterns above for arrow_function / function_expression run
+; first; this fallback covers everything else (literals, calls, expressions).
 (variable_declarator
-  name: (identifier) @const_name
-  value: (_) @const_value) @const_node
+  name: (identifier) @name
+  value: [
+    (number)
+    (string)
+    (template_string)
+    (true)
+    (false)
+    (null)
+    (object)
+    (array)
+    (regex)
+    (call_expression)
+    (member_expression)
+    (identifier)
+    (binary_expression)
+    (unary_expression)
+    (new_expression)
+    (parenthesized_expression)
+    (await_expression)
+    (yield_expression)
+    (subscript_expression)
+    (as_expression)
+    (satisfies_expression)
+    (ternary_expression)
+  ]) @definition.constant
 
-; Class method definition
+; Class method — class Foo { bar() { ... } }
 (method_definition
-  name: (_) @method_name) @method_node
+  name: (_) @name) @definition.method
