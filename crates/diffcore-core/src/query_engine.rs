@@ -2760,6 +2760,15 @@ impl QueryEngine {
                 } // close `else` opened above for the standard-convention fallback
             }
             Language::Python => {
+                if extract_definitions_standard(
+                    &matches,
+                    source,
+                    qwc,
+                    &mut definitions,
+                    &mut seen_nodes,
+                ) {
+                    // Standard path took over: bespoke fallback skipped.
+                } else {
                 // Python: each definition kind has a distinct capture name pair
                 let fn_name_idx = qwc.capture_index("fn_name");
                 let fn_node_idx = qwc.capture_index("fn_node");
@@ -2824,6 +2833,7 @@ impl QueryEngine {
                         }
                     }
                 }
+                } // close `else` opened above for the standard-convention fallback
             }
             Language::Go => {
                 let fn_name_idx = qwc.capture_index("fn_name");
@@ -3744,8 +3754,13 @@ fn extract_definitions_standard(
         if name_text.is_empty() {
             continue;
         }
-        let (start_line, end_line, node_start) = node_span(m, Some(def_idx));
-        let key = (node_start, hash_str(&name_text));
+        let (start_line, end_line, _outer_start) = node_span(m, Some(def_idx));
+        // Dedup by the name identifier's start byte (not the outer node's),
+        // so that "wrapping" patterns like Python's decorated_definition do
+        // not produce a duplicate of the inner function/class — both patterns
+        // capture the same `@name` node.
+        let name_start = name_node.start_byte();
+        let key = (name_start, hash_str(&name_text));
         if !seen_nodes.contains(&key) {
             seen_nodes.push(key);
             out_definitions.push(Definition {

@@ -1,34 +1,39 @@
-; Python definition patterns
-; Each pattern uses distinct capture names so the engine can dispatch
-; by capture-name presence instead of fragile pattern_index ordering.
+; Python — standard tree-sitter "tags" convention.
+;
+; See `queries/typescript/definitions.scm` for an overview of the convention
+; (`@name` for the symbol identifier, `@definition.<kind>` for the symbol
+; node). The standard-convention extractor in `query_engine.rs` deduplicates
+; matches by the start byte of the `@name` capture, which means the bare
+; (function_definition …) and the wrapping (decorated_definition …)
+; patterns below correctly resolve to a single Definition each.
 
-; Function definition
+; Function definition — def foo(): ...
 (function_definition
-  name: (identifier) @fn_name) @fn_node
+  name: (identifier) @name) @definition.function
 
-; Class definition
+; Class definition — class Foo: ...
 (class_definition
-  name: (identifier) @class_name) @class_node
+  name: (identifier) @name) @definition.class
 
-; Decorated function
+; Decorated function — @decorator\ndef foo(): ...
 (decorated_definition
   definition: (function_definition
-    name: (identifier) @decorated_fn_name)) @decorated_fn_node
+    name: (identifier) @name)) @definition.function
 
-; Decorated class
+; Decorated class — @decorator\nclass Foo: ...
 (decorated_definition
   definition: (class_definition
-    name: (identifier) @decorated_class_name)) @decorated_class_node
+    name: (identifier) @name)) @definition.class
 
-; Class method (function inside class body)
+; Class method — class Foo: def bar(self): ...
 (class_definition
   body: (block
     (function_definition
-      name: (identifier) @method_name) @method_node))
+      name: (identifier) @name) @definition.method))
 
-; Decorated class method
+; Decorated class method — class Foo: @decorator\ndef bar(self): ...
 (class_definition
   body: (block
     (decorated_definition
       definition: (function_definition
-        name: (identifier) @decorated_method_name) @decorated_method_node)))
+        name: (identifier) @name) @definition.method)))
