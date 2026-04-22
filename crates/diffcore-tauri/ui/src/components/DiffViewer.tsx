@@ -566,23 +566,61 @@ function applyCommentDecorations(
 }
 
 function mapLanguage(lang: string): string {
+  // Maps the lowercased language tag from `FileDiffContent.language`
+  // (set by `detect_language` on the Rust side) onto a Monaco language
+  // ID. Monaco ships with built-in tokenizers for the canonical set
+  // listed below; languages not present in Monaco's bundle (Dart,
+  // Elixir, Haskell, Nix, …) fall through to the closest reasonable
+  // syntactic neighbour or `plaintext`.
+  //
+  // When adding a new language to diffcore-core, add it here too —
+  // otherwise the diff viewer renders it as plaintext (no syntax
+  // highlighting). Picking the wrong neighbour is rarely catastrophic;
+  // picking nothing leaves the user with monochrome code.
   const map: Record<string, string> = {
+    // ── Core 13 ──────────────────────────────────────────────────
     typescript: "typescript",
     javascript: "javascript",
     python: "python",
-    rust: "rust",
-    json: "json",
-    toml: "toml",
-    yaml: "yaml",
-    markdown: "markdown",
-    css: "css",
-    html: "html",
-    sql: "sql",
-    shell: "shell",
     go: "go",
+    rust: "rust",
     java: "java",
+    csharp: "csharp",
+    php: "php",
     ruby: "ruby",
-    prisma: "graphql", // Closest Monaco match for Prisma
+    kotlin: "kotlin",
+    swift: "swift",
+    c: "c",
+    cpp: "cpp",
+    scala: "scala",
+    // ── Extras supported by Monaco ───────────────────────────────
+    bash: "shell",
+    shell: "shell",
+    lua: "lua",
+    perl: "perl",
+    r: "r",
+    julia: "julia",
+    dart: "dart",
+    yaml: "yaml",
+    json: "json",
+    toml: "ini",       // Monaco lacks a real TOML tokenizer; INI is closest.
+    markdown: "markdown",
+    html: "html",
+    css: "css",
+    scss: "scss",
+    graphql: "graphql",
+    sql: "sql",
+    // ── Extras WITHOUT Monaco support (best-effort neighbour) ────
+    haskell: "plaintext",   // Monaco has no Haskell mode.
+    nix: "plaintext",       // No Nix mode in stock Monaco.
+    elixir: "plaintext",    // No Elixir mode (some forks add it).
+    erlang: "plaintext",
+    zig: "rust",            // Closer to Rust than C syntactically.
+    ocaml: "plaintext",
+    fish: "shell",          // Bash highlighter is a passable approximation.
+    vue: "html",            // SFCs render OK as HTML.
+    svelte: "html",
+    prisma: "graphql",      // Pre-existing mapping (Prisma DSL ≈ GraphQL).
     plaintext: "plaintext",
   };
   return map[lang] || "plaintext";

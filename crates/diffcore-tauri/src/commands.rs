@@ -25,6 +25,7 @@ use diffcore_core::llm::refinement;
 use diffcore_core::llm::schema::{Pass1Response, Pass2Response, RefinementResponse};
 use diffcore_core::output::{self, build_analysis_output};
 use diffcore_core::pipeline;
+use diffcore_core::query_engine::QueryEngine;
 use diffcore_core::rank;
 use diffcore_core::types::{AnalysisOutput, GroupRankInput};
 
@@ -42,6 +43,12 @@ pub struct AppState {
     pub last_cache_key: Mutex<Option<String>>,
     /// Path to the currently watched manifest file.
     pub watched_manifest_path: Mutex<Option<PathBuf>>,
+    /// Long-lived QueryEngine instance for on-demand single-file parsing
+    /// (e.g. the source-explorer outline). Uses internal `OnceCell`s to
+    /// cache compiled tree-sitter queries per language across calls, so
+    /// the first parse of any given language pays the compilation cost
+    /// once for the whole app lifetime.
+    pub query_engine: Arc<QueryEngine>,
 }
 
 /// Cached diff result with the parameters that produced it, for cache invalidation.
@@ -53,6 +60,22 @@ pub struct CachedDiff {
 
 impl AppState {
     pub fn new() -> Self {
+        // Construct the QueryEngine eagerly so the field is non-Optional.
+        // QueryEngine::new() itself is cheap — per-language tree-sitter
+        // query compilation is deferred to the first parse of each
+        // language via internal OnceCells. We fall back to a fresh
+        // construction on error rather than panicking at startup; in
+        // practice QueryEngine::new() is infallible today, but the
+        // Result return type leaves room for future configuration loading.
+        let query_engine = Arc::new(
+            QueryEngine::new().unwrap_or_else(|e| {
+                log::error!("QueryEngine construction failed at startup: {e}");
+                // Re-attempt; if this also fails the app cannot parse files
+                // but other commands continue to work, so we panic only as
+                // a last resort. (Today new() can't actually fail.)
+                QueryEngine::new().expect("QueryEngine::new() failed twice")
+            }),
+        );
         Self {
             last_analysis: Mutex::new(None),
             last_diff: Mutex::new(None),
@@ -60,6 +83,7 @@ impl AppState {
             activity_stream_base_url: Mutex::new(None),
             last_cache_key: Mutex::new(None),
             watched_manifest_path: Mutex::new(None),
+            query_engine,
         }
     }
 
@@ -1822,6 +1846,34 @@ pub fn get_workspace_file_content(
     })
 }
 
+/// Parse a single file's source via the diffcore-core query engine and
+/// return the language-agnostic IR (definitions, imports, exports, call
+/// sites). Used by the source-explorer outline panel so it can show
+/// symbols for any language the engine supports — replacing the
+/// hand-written per-language regex parsers that used to live in
+/// `SourceExplorer.tsx` and only covered TS/JS/Python/Go/Rust.
+///
+/// `path` is used only for language detection (via file extension); no
+/// disk access happens. `source` is the raw text to parse. The shared
+/// `QueryEngine` instance held on `AppState` caches per-language
+/// tree-sitter query compilation across calls, so repeated outline
+/// updates for the same language are cheap.
+///
+/// Returns an empty `ParsedFile` (with `Language::Unknown`) when the
+/// path's extension is not recognised — the caller is expected to
+/// degrade gracefully rather than treat that as an error.
+#[tauri::command]
+pub fn parse_file_content(
+    path: String,
+    source: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<diffcore_core::ast::ParsedFile, CommandError> {
+    state
+        .query_engine
+        .parse_file(&path, &source)
+        .map_err(|e| CommandError::Analysis(format!("parse_file failed: {e}")))
+}
+
 /// Check whether LLM access is configured and available.
 ///
 /// This includes API-key-based providers plus subscription-backed Codex/Claude CLIs.
@@ -3132,23 +3184,54 @@ pub fn unwatch_manifest(
     Ok(())
 }
 
+/// Map a file path's extension to a lowercase language tag the UI can
+/// look up in its Monaco-language map. Mirrors
+/// `diffcore_core::ast::Language::from_path` but emits a string the UI
+/// already keys on (we keep this thin wrapper rather than serialising
+/// `Language` directly so the wire shape stays a plain `String`).
 fn detect_language(path: &str) -> String {
     match path.rsplit('.').next() {
+        // ── Core 13 ─────────────────────────────────────────────
         Some("ts" | "tsx") => "typescript".to_string(),
-        Some("js" | "jsx") => "javascript".to_string(),
-        Some("py") => "python".to_string(),
+        Some("js" | "jsx" | "mjs" | "cjs") => "javascript".to_string(),
+        Some("py" | "pyi") => "python".to_string(),
+        Some("go") => "go".to_string(),
         Some("rs") => "rust".to_string(),
+        Some("java") => "java".to_string(),
+        Some("cs") => "csharp".to_string(),
+        Some("php") => "php".to_string(),
+        Some("rb") => "ruby".to_string(),
+        Some("kt" | "kts") => "kotlin".to_string(),
+        Some("swift") => "swift".to_string(),
+        Some("c" | "h") => "c".to_string(),
+        Some("cpp" | "cc" | "cxx" | "c++" | "hpp" | "hxx" | "h++" | "hh") => "cpp".to_string(),
+        Some("scala" | "sc") => "scala".to_string(),
+        // ── Extras (matching the lang-* Cargo features) ─────────
+        Some("sh" | "bash" | "zsh") => "shell".to_string(),
+        Some("hs" | "lhs") => "haskell".to_string(),
+        Some("nix") => "nix".to_string(),
+        Some("lua") => "lua".to_string(),
+        Some("pl" | "pm" | "perl") => "perl".to_string(),
+        Some("ex" | "exs") => "elixir".to_string(),
+        Some("erl" | "hrl") => "erlang".to_string(),
+        Some("zig" | "zon") => "zig".to_string(),
+        Some("ml" | "mli") => "ocaml".to_string(),
+        Some("jl") => "julia".to_string(),
+        Some("dart") => "dart".to_string(),
+        Some("r" | "R") => "r".to_string(),
+        Some("fish") => "fish".to_string(),
+        Some("html" | "htm") => "html".to_string(),
+        Some("css") => "css".to_string(),
+        Some("scss" | "sass") => "scss".to_string(),
+        Some("vue") => "vue".to_string(),
+        Some("svelte") => "svelte".to_string(),
+        Some("graphql" | "gql") => "graphql".to_string(),
+        // ── Data formats ────────────────────────────────────────
         Some("json") => "json".to_string(),
         Some("toml") => "toml".to_string(),
         Some("yaml" | "yml") => "yaml".to_string(),
-        Some("md") => "markdown".to_string(),
-        Some("css") => "css".to_string(),
-        Some("html") => "html".to_string(),
+        Some("md" | "markdown") => "markdown".to_string(),
         Some("sql") => "sql".to_string(),
-        Some("sh" | "bash" | "zsh") => "shell".to_string(),
-        Some("go") => "go".to_string(),
-        Some("java") => "java".to_string(),
-        Some("rb") => "ruby".to_string(),
         Some("prisma") => "prisma".to_string(),
         _ => "plaintext".to_string(),
     }

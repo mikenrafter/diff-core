@@ -68,6 +68,7 @@ fn main() {
             commands::get_last_diff_file_statuses,
             commands::cross_file_search,
             commands::get_workspace_file_content,
+            commands::parse_file_content,
             commands::check_api_key,
             commands::get_llm_settings,
             commands::save_llm_settings,

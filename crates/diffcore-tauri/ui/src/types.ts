@@ -105,6 +105,73 @@ export interface FileDiffContent {
   language: string;
 }
 
+// ── Parsed-file IR (mirrors diffcore_core::ast::ParsedFile) ──
+//
+// Returned by the `parse_file_content` Tauri command. The source-explorer
+// outline panel reads this directly instead of running its own per-language
+// regex parsers, so any language the Rust query engine supports is also
+// supported by the outline (Dart, Elixir, Haskell, Lua, Nix, Svelte, Vue, …).
+
+/** SymbolKind values mirror the Rust enum `diffcore_core::types::SymbolKind`.
+ *  Serde uses the variant name as the JSON value (default representation),
+ *  so the strings here must match exactly. */
+export type ParsedSymbolKind =
+  | "Function"
+  | "Class"
+  | "Struct"
+  | "Interface"
+  | "TypeAlias"
+  | "Constant"
+  | "Module";
+
+export interface ParsedDefinition {
+  name: string;
+  kind: ParsedSymbolKind;
+  start_line: number;
+  end_line: number;
+}
+
+export interface ParsedImportedName {
+  name: string;
+  alias: string | null;
+}
+
+export interface ParsedImport {
+  source: string;
+  names: ParsedImportedName[];
+  is_default: boolean;
+  is_namespace: boolean;
+  line: number;
+}
+
+export interface ParsedExport {
+  name: string;
+  is_default: boolean;
+  is_reexport: boolean;
+  source: string | null;
+  line: number;
+}
+
+export interface ParsedCallSite {
+  callee: string;
+  line: number;
+  containing_function: string | null;
+}
+
+export interface ParsedFile {
+  path: string;
+  /** Serde-default tag of `diffcore_core::ast::Language` (CamelCase variant
+   *  name, e.g. "TypeScript", "Python", "Dart", "CSharp"); "Unknown" when
+   *  the file extension is unrecognised. Note this differs from
+   *  `FileDiffContent.language`, which is lowercase ("typescript", …) —
+   *  callers that need to compare the two must normalise. */
+  language: string;
+  definitions: ParsedDefinition[];
+  imports: ParsedImport[];
+  exports: ParsedExport[];
+  call_sites: ParsedCallSite[];
+}
+
 /** Parameters for the analyze command. */
 export interface AnalyzeParams {
   repo_path: string;

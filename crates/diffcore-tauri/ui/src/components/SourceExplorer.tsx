@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { FileChange, FileDiffContent, FlowEdge, FlowGroup } from "../types";
+import type {
+  FileChange,
+  FileDiffContent,
+  FlowEdge,
+  FlowGroup,
+  ParsedFile,
+  ParsedSymbolKind,
+} from "../types";
 
 type OutlineKind = "operation" | "interface" | "type" | "class" | "constant" | "dependency";
 
@@ -72,9 +79,50 @@ export default function SourceExplorer({
   onNavigateToSymbol,
   onScrollToLine,
 }: SourceExplorerProps) {
+  /** Definitions extracted by the Rust query engine for the current file.
+   *  Fetched asynchronously via the `parse_file_content` Tauri command so
+   *  the outline supports every language diffcore-core can parse — not
+   *  just the five (TS/JS/Python/Go/Rust) the old in-tree regex parsers
+   *  covered. Empty array means "no parse yet" or "language unsupported";
+   *  both render an empty outline, which is the desired graceful fallback. */
+  const [parsedDefinitions, setParsedDefinitions] = useState<ParsedDefinition[]>([]);
+
+  // Refetch whenever the file (or its content) changes. The cancellation
+  // flag prevents a stale response for a previous file from clobbering
+  // newer results when the user clicks through files quickly.
+  useEffect(() => {
+    if (!fileDiff) {
+      setParsedDefinitions([]);
+      return;
+    }
+    let cancelled = false;
+    const sourceText = fileDiff.new_content || fileDiff.old_content || "";
+    void (async () => {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const parsed = await invoke<ParsedFile>("parse_file_content", {
+          path: fileDiff.path,
+          source: sourceText,
+        });
+        if (cancelled) return;
+        setParsedDefinitions(parsed.definitions.map(rustDefToOutlineDef));
+      } catch (err) {
+        if (cancelled) return;
+        // Non-fatal — outline degrades to empty. Likely causes: backend
+        // not yet ready (cold-start race), unrecognised file extension,
+        // or a tree-sitter parse error in malformed source.
+        console.warn("parse_file_content failed:", err);
+        setParsedDefinitions([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [fileDiff]);
+
   const outline = useMemo(
-    () => buildOutline(fileDiff, selectedGroup, selectedFileChange),
-    [fileDiff, selectedGroup, selectedFileChange],
+    () => buildOutline(fileDiff, selectedGroup, selectedFileChange, parsedDefinitions),
+    [fileDiff, selectedGroup, selectedFileChange, parsedDefinitions],
   );
   const allItems = useMemo(
     () => outline.sections.flatMap((section) => section.items),
@@ -226,6 +274,7 @@ function buildOutline(
   fileDiff: FileDiffContent | null,
   selectedGroup: FlowGroup | null,
   selectedFileChange: FileChange | null,
+  definitions: ParsedDefinition[],
 ): { sections: OutlineSection[] } {
   if (!fileDiff) {
     return {
@@ -237,8 +286,12 @@ function buildOutline(
     };
   }
 
+  // Definitions arrive from the Rust engine via the `parse_file_content`
+  // Tauri command (see the `useEffect` in `SourceExplorer`). They were
+  // historically computed inline here by hand-written per-language regex
+  // parsers, but that scaled to only TS/JS/Python/Go/Rust and silently
+  // returned empty for everything else (Dart, Elixir, Haskell, …).
   const sourceText = fileDiff.new_content || fileDiff.old_content || "";
-  const definitions = parseDefinitions(fileDiff.language, sourceText);
   // TODO fix
   // const changedSymbols = new Set(
   //   (selectedFileChange?.symbols_changed ?? []).map((symbol) => normalizeSymbol(symbol)),
@@ -378,322 +431,49 @@ function buildDependencyItems(filePath: string, edges: FlowEdge[]): OutlineItem[
   return items;
 }
 
-function parseDefinitions(language: string, sourceText: string): ParsedDefinition[] {
-  const lines = sourceText.split("\n");
-  if (language === "typescript" || language === "javascript") {
-    return parseTsLikeDefinitions(lines);
-  }
-  if (language === "python") {
-    return parsePythonDefinitions(lines);
-  }
-  if (language === "go") {
-    return parseGoDefinitions(lines);
-  }
-  if (language === "rust") {
-    return parseRustDefinitions(lines);
-  }
-  return [];
-}
-
-function parseTsLikeDefinitions(lines: string[]): ParsedDefinition[] {
-  const results: ParsedDefinition[] = [];
-  let braceDepth = 0;
-  let currentClass: { name: string; depth: number } | null = null;
-
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    const trimmed = line.trim();
-    if (!trimmed) {
-      braceDepth += countChar(line, "{") - countChar(line, "}");
-      continue;
-    }
-
-    const classMatch = trimmed.match(/^(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/);
-    if (classMatch) {
-      results.push({
-        name: classMatch[1],
-        kind: "class",
-        startLine: index + 1,
-        endLine: findBlockEnd(lines, index),
-      });
-      currentClass = {
-        name: classMatch[1],
-        depth: braceDepth + countChar(line, "{"),
-      };
-    }
-
-    const interfaceMatch = trimmed.match(/^(?:export\s+)?interface\s+([A-Za-z_$][\w$]*)/);
-    if (interfaceMatch) {
-      results.push({
-        name: interfaceMatch[1],
-        kind: "interface",
-        startLine: index + 1,
-        endLine: findBlockEnd(lines, index),
-      });
-    }
-
-    const typeMatch = trimmed.match(/^(?:export\s+)?type\s+([A-Za-z_$][\w$]*)\s*=/);
-    if (typeMatch) {
-      results.push({
-        name: typeMatch[1],
-        kind: "type",
-        startLine: index + 1,
-        endLine: findStatementEnd(lines, index),
-      });
-    }
-
-    const functionMatch = trimmed.match(/^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/);
-    if (functionMatch) {
-      results.push({
-        name: functionMatch[1],
-        kind: "operation",
-        startLine: index + 1,
-        endLine: findBlockEnd(lines, index),
-      });
-    }
-
-    const constArrowMatch = trimmed.match(/^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>/);
-    if (constArrowMatch) {
-      results.push({
-        name: constArrowMatch[1],
-        kind: "operation",
-        startLine: index + 1,
-        endLine: findStatementEnd(lines, index),
-      });
-    } else {
-      const constantMatch = trimmed.match(/^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/);
-      if (constantMatch) {
-        results.push({
-          name: constantMatch[1],
-          kind: "constant",
-          startLine: index + 1,
-          endLine: findStatementEnd(lines, index),
-        });
-      }
-    }
-
-    if (currentClass) {
-      const methodMatch = trimmed.match(/^(?:public\s+|private\s+|protected\s+)?(?:static\s+)?(?:async\s+)?([A-Za-z_$][\w$]*)\s*\(/);
-      if (methodMatch && methodMatch[1] !== "constructor" && !/^(if|for|while|switch|catch)$/.test(methodMatch[1])) {
-        results.push({
-          name: `${currentClass.name}.${methodMatch[1]}`,
-          kind: "operation",
-          startLine: index + 1,
-          endLine: findBlockEnd(lines, index),
-        });
-      }
-    }
-
-    braceDepth += countChar(line, "{") - countChar(line, "}");
-    if (currentClass && braceDepth < currentClass.depth) {
-      currentClass = null;
-    }
-  }
-
-  return dedupeDefinitions(results);
-}
-
-function parsePythonDefinitions(lines: string[]): ParsedDefinition[] {
-  const results: ParsedDefinition[] = [];
-  let currentClass: string | null = null;
-  let currentIndent = 0;
-
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    const trimmed = line.trim();
-    const indent = line.length - line.trimStart().length;
-    if (!trimmed) continue;
-
-    const classMatch = trimmed.match(/^class\s+([A-Za-z_][\w]*)/);
-    if (classMatch) {
-      currentClass = classMatch[1];
-      currentIndent = indent;
-      results.push({
-        name: classMatch[1],
-        kind: "class",
-        startLine: index + 1,
-        endLine: findIndentedBlockEnd(lines, index, indent),
-      });
-      continue;
-    }
-
-    const defMatch = trimmed.match(/^def\s+([A-Za-z_][\w]*)\s*\(/);
-    if (defMatch) {
-      results.push({
-        name: currentClass && indent > currentIndent ? `${currentClass}.${defMatch[1]}` : defMatch[1],
-        kind: "operation",
-        startLine: index + 1,
-        endLine: findIndentedBlockEnd(lines, index, indent),
-      });
-    }
-
-    if (currentClass && indent <= currentIndent && !trimmed.startsWith("@")) {
-      currentClass = null;
-    }
-  }
-
-  return dedupeDefinitions(results);
-}
-
-function parseGoDefinitions(lines: string[]): ParsedDefinition[] {
-  const results: ParsedDefinition[] = [];
-  for (let index = 0; index < lines.length; index += 1) {
-    const trimmed = lines[index].trim();
-    if (!trimmed) continue;
-
-    const funcMatch = trimmed.match(/^func\s+(?:\([^)]*\)\s*)?([A-Za-z_][\w]*)\s*\(/);
-    if (funcMatch) {
-      results.push({
-        name: funcMatch[1],
-        kind: "operation",
-        startLine: index + 1,
-        endLine: findBlockEnd(lines, index),
-      });
-      continue;
-    }
-
-    const interfaceMatch = trimmed.match(/^type\s+([A-Za-z_][\w]*)\s+interface\b/);
-    if (interfaceMatch) {
-      results.push({
-        name: interfaceMatch[1],
-        kind: "interface",
-        startLine: index + 1,
-        endLine: findBlockEnd(lines, index),
-      });
-      continue;
-    }
-
-    const structMatch = trimmed.match(/^type\s+([A-Za-z_][\w]*)\s+struct\b/);
-    if (structMatch) {
-      results.push({
-        name: structMatch[1],
-        kind: "class",
-        startLine: index + 1,
-        endLine: findBlockEnd(lines, index),
-      });
-      continue;
-    }
-
-    const constMatch = trimmed.match(/^(?:const|var)\s+([A-Za-z_][\w]*)/);
-    if (constMatch) {
-      results.push({
-        name: constMatch[1],
-        kind: "constant",
-        startLine: index + 1,
-        endLine: findStatementEnd(lines, index),
-      });
-    }
-  }
-  return dedupeDefinitions(results);
-}
-
-function parseRustDefinitions(lines: string[]): ParsedDefinition[] {
-  const results: ParsedDefinition[] = [];
-  for (let index = 0; index < lines.length; index += 1) {
-    const trimmed = lines[index].trim();
-    if (!trimmed) continue;
-
-    const fnMatch = trimmed.match(/^(?:pub\s+)?(?:async\s+)?fn\s+([A-Za-z_][\w]*)\s*\(/);
-    if (fnMatch) {
-      results.push({
-        name: fnMatch[1],
-        kind: "operation",
-        startLine: index + 1,
-        endLine: findBlockEnd(lines, index),
-      });
-      continue;
-    }
-
-    const traitMatch = trimmed.match(/^(?:pub\s+)?trait\s+([A-Za-z_][\w]*)/);
-    if (traitMatch) {
-      results.push({
-        name: traitMatch[1],
-        kind: "interface",
-        startLine: index + 1,
-        endLine: findBlockEnd(lines, index),
-      });
-      continue;
-    }
-
-    const structMatch = trimmed.match(/^(?:pub\s+)?(?:struct|enum)\s+([A-Za-z_][\w]*)/);
-    if (structMatch) {
-      results.push({
-        name: structMatch[1],
-        kind: "class",
-        startLine: index + 1,
-        endLine: findBlockEnd(lines, index),
-      });
-      continue;
-    }
-
-    const constMatch = trimmed.match(/^(?:pub\s+)?const\s+([A-Za-z_][\w]*)/);
-    if (constMatch) {
-      results.push({
-        name: constMatch[1],
-        kind: "constant",
-        startLine: index + 1,
-        endLine: findStatementEnd(lines, index),
-      });
-    }
-  }
-  return dedupeDefinitions(results);
-}
-
-function dedupeDefinitions(definitions: ParsedDefinition[]): ParsedDefinition[] {
-  const seen = new Set<string>();
-  const deduped: ParsedDefinition[] = [];
-  for (const def of definitions) {
-    const key = `${def.kind}:${def.name}:${def.startLine}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    deduped.push(def);
-  }
-  return deduped;
-}
-
-function findBlockEnd(lines: string[], startIndex: number): number {
-  let balance = 0;
-  let sawOpen = false;
-  for (let index = startIndex; index < lines.length; index += 1) {
-    const line = stripQuotedContent(lines[index]);
-    const opens = countChar(line, "{");
-    const closes = countChar(line, "}");
-    balance += opens - closes;
-    if (opens > 0) sawOpen = true;
-    if (sawOpen && balance <= 0) {
-      return index + 1;
-    }
-  }
-  return Math.min(lines.length, startIndex + 1);
-}
-
-function findStatementEnd(lines: string[], startIndex: number): number {
-  let balance = 0;
-  let sawStructuralToken = false;
-  for (let index = startIndex; index < lines.length; index += 1) {
-    const line = stripQuotedContent(lines[index]);
-    balance += countChar(line, "{") - countChar(line, "}");
-    balance += countChar(line, "(") - countChar(line, ")");
-    balance += countChar(line, "[") - countChar(line, "]");
-    if (/[{([=]/.test(line)) sawStructuralToken = true;
-    if ((balance <= 0 && /[;}]\s*$/.test(line)) || (!sawStructuralToken && index > startIndex && line.trim() === "")) {
-      return index + 1;
-    }
-  }
-  return Math.min(lines.length, startIndex + 1);
-}
-
-function findIndentedBlockEnd(lines: string[], startIndex: number, startIndent: number): number {
-  for (let index = startIndex + 1; index < lines.length; index += 1) {
-    const line = lines[index];
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    const indent = line.length - line.trimStart().length;
-    if (indent <= startIndent) {
-      return index;
-    }
-  }
-  return lines.length;
+/** Maps a Rust-engine `ParsedDefinition` (from the `parse_file_content`
+ *  Tauri command) to the local `ParsedDefinition` shape the outline
+ *  expects. The Rust enum variants are the seven `SymbolKind` values
+ *  (Function, Class, Struct, Interface, TypeAlias, Constant, Module);
+ *  these collapse onto our four outline kinds:
+ *
+ *    - Function           -> "operation"  (functions, methods)
+ *    - Class | Struct     -> "class"      (Struct collapses to Class —
+ *                                          C/Go/Rust structs, etc.)
+ *    - Interface          -> "interface"  (Go interfaces, Java/C# ifaces,
+ *                                          Rust traits, Scala traits, …)
+ *    - TypeAlias          -> "type"       (TS type aliases, Rust type =,
+ *                                          Kotlin typealias, etc.)
+ *    - Constant | Module  -> "constant"   (top-level vals, Ruby modules,
+ *                                          C++ namespaces — all bucketed
+ *                                          here for now since the outline
+ *                                          has no dedicated module bucket)
+ *
+ *  The `dependencies` outline section is built separately from FlowEdges,
+ *  not from definitions, so this function never produces "dependency".
+ */
+function rustDefToOutlineDef(def: {
+  name: string;
+  kind: ParsedSymbolKind;
+  start_line: number;
+  end_line: number;
+}): ParsedDefinition {
+  const kind: ParsedDefinition["kind"] =
+    def.kind === "Function"
+      ? "operation"
+      : def.kind === "Class" || def.kind === "Struct"
+        ? "class"
+        : def.kind === "Interface"
+          ? "interface"
+          : def.kind === "TypeAlias"
+            ? "type"
+            : "constant";
+  return {
+    name: def.name,
+    kind,
+    startLine: def.start_line,
+    endLine: def.end_line,
+  };
 }
 
 function findSymbolLine(sourceText: string, symbol: string): number | null {
@@ -742,18 +522,6 @@ function normalizeSymbol(value: string): string {
     .pop()
     ?.replace(/[^\w$]/g, "")
     .toLowerCase() ?? value.toLowerCase();
-}
-
-function stripQuotedContent(value: string): string {
-  return value.replace(/"[^"]*"|'[^']*'|`[^`]*`/g, "");
-}
-
-function countChar(value: string, char: string): number {
-  let count = 0;
-  for (const current of value) {
-    if (current === char) count += 1;
-  }
-  return count;
 }
 
 function kindLabel(kind: OutlineKind): string {
