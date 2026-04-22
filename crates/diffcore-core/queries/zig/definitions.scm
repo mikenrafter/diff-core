@@ -9,20 +9,28 @@
   name: (identifier) @name) @definition.function
 
 ; Struct definition assigned to a const — const Foo = struct { … };
+; NOTE: variable_declaration has no `value:` field; the struct literal
+; sits as a positional child after the `=` token.
 (variable_declaration
   (identifier) @name
-  value: (struct_declaration)) @definition.class
+  "="
+  (struct_declaration)) @definition.class
 
 ; Enum definition assigned to a const — const Foo = enum { … };
 (variable_declaration
   (identifier) @name
-  value: (enum_declaration)) @definition.enum
+  "="
+  (enum_declaration)) @definition.enum
 
 ; Union definition assigned to a const — const Foo = union { … };
 (variable_declaration
   (identifier) @name
-  value: (union_declaration)) @definition.class
+  "="
+  (union_declaration)) @definition.class
 
 ; Test block — test "description" { … }
+; NOTE: tree-sitter-zig uses `(string)` not `(string_literal)` for the
+; test name token. test_declaration has no `name:` field — string is
+; a positional child.
 (test_declaration
-  name: (string_literal) @name) @definition.function
+  (string) @name) @definition.function

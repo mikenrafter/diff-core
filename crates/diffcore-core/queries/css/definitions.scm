@@ -22,11 +22,10 @@
 (keyframes_statement
   (keyframes_name) @name) @definition.function
 
-; @layer name — @layer foo { ... }
-(layer_statement
-  (layer_name_list
-    (dotted_name) @name)) @definition.module
-
-; @counter-style name — @counter-style foo { ... }
-(counter_style_rule
-  (counter_style_name) @name) @definition.type_alias
+; @layer — tree-sitter-css-0.25 does not expose `layer_statement` as a
+; distinct named node; @layer rules are represented as `at_rule` which
+; has no structured name child. Skip for now.
+;
+; @counter-style — tree-sitter-css-0.25 does not expose a named
+; `counter_style_rule` node; @counter-style rules are represented as
+; `at_rule` (generic) which has no structured name child. Skipped.

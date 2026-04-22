@@ -13,7 +13,8 @@
 ; grammar for component names. This file intentionally stays minimal;
 ; TS extraction from the injected `<script>` section handles definitions.
 
-; Custom block (e.g. <docs>) — treated as a module-level constant.
-(component
-  (start_tag
-    (tag_name) @name)) @definition.module
+; The tree-sitter-vue-next grammar does not expose a `component` node;
+; SFC-level structure uses `element`, `script_element`, `template_element`
+; — but none carry a name that maps cleanly to our IR.
+; Symbol extraction for Vue relies on the injected TS/JS parser for
+; the `<script setup>` block rather than the SFC grammar itself.
