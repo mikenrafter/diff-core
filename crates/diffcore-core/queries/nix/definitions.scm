@@ -1,4 +1,7 @@
-; definitions — placeholder query (no captures)
-; .scm content for this language is added incrementally; an empty query
-; compiles to zero matches and is the same observable behavior as having
-; no language-specific extraction.
+; Nix — adapted from upstream tree-sitter-nix tags.scm.
+; See `queries/typescript/definitions.scm` for the convention overview.
+
+; Top-level attribute binding that holds a function — foo = arg: ...
+(binding
+  attrpath: (attrpath attr: (identifier) @name)
+  expression: (function_expression)) @definition.function

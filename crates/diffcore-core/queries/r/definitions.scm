@@ -1,4 +1,14 @@
-; definitions — placeholder query (no captures)
-; .scm content for this language is added incrementally; an empty query
-; compiles to zero matches and is the same observable behavior as having
-; no language-specific extraction.
+; R — adapted from upstream tree-sitter-r tags.scm.
+; See `queries/typescript/definitions.scm` for the convention overview.
+
+; foo <- function(...) { ... }
+(binary_operator
+  lhs: (identifier) @name
+  operator: "<-"
+  rhs: (function_definition)) @definition.function
+
+; foo = function(...) { ... }
+(binary_operator
+  lhs: (identifier) @name
+  operator: "="
+  rhs: (function_definition)) @definition.function

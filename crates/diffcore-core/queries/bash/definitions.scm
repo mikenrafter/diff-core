@@ -1,4 +1,7 @@
-; definitions — placeholder query (no captures)
-; .scm content for this language is added incrementally; an empty query
-; compiles to zero matches and is the same observable behavior as having
-; no language-specific extraction.
+; Bash — node types from tree-sitter-bash grammar.
+; See `queries/typescript/definitions.scm` for the convention overview.
+
+; Both POSIX and Bash-style function definitions:
+;   function foo() { … }
+;   foo() { … }
+(function_definition name: (word) @name) @definition.function

@@ -1,4 +1,9 @@
-; calls — placeholder query (no captures)
-; .scm content for this language is added incrementally; an empty query
-; compiles to zero matches and is the same observable behavior as having
-; no language-specific extraction.
+; Dart call sites — standard convention using @callee + @node captures.
+
+; Function/method call — foo() or obj.foo()
+(function_call_expression
+  function: (_) @callee) @node
+
+; Constructor call — new Foo() or Foo()
+(instance_creation_expression
+  constructor: (_) @callee) @node

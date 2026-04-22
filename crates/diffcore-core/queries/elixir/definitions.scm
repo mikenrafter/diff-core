@@ -1,4 +1,21 @@
-; definitions — placeholder query (no captures)
-; .scm content for this language is added incrementally; an empty query
-; compiles to zero matches and is the same observable behavior as having
-; no language-specific extraction.
+; Elixir — adapted from upstream tree-sitter-elixir tags.scm.
+; See `queries/typescript/definitions.scm` for the convention overview.
+
+; Module / protocol / behaviour definition
+(call
+  target: (identifier) @ignore
+  (arguments (alias) @name)
+  (#any-of? @ignore "defmodule" "defprotocol")) @definition.module
+
+; Function / macro definition (def, defp, defmacro, …)
+(call
+  target: (identifier) @ignore
+  (arguments
+    [
+      (identifier) @name
+      (call target: (identifier) @name)
+      (binary_operator
+        left: (call target: (identifier) @name)
+        operator: "when")
+    ])
+  (#any-of? @ignore "def" "defp" "defdelegate" "defguard" "defguardp" "defmacro" "defmacrop")) @definition.function

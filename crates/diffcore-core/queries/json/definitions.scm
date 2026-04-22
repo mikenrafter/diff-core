@@ -1,4 +1,4 @@
-; definitions — placeholder query (no captures)
-; .scm content for this language is added incrementally; an empty query
-; compiles to zero matches and is the same observable behavior as having
-; no language-specific extraction.
+; JSON — a data format with no symbol definitions.
+; See `queries/typescript/definitions.scm` for the convention overview.
+;
+; Intentionally empty so the standard extractor produces zero definitions.
