@@ -18,6 +18,7 @@ pub mod flow;
 pub mod git;
 pub mod graph;
 pub mod ir;
+pub(crate) mod languages;
 pub mod llm;
 pub mod output;
 pub mod pipeline;
