@@ -1,0 +1,32 @@
+import type { RepoInfo } from "../types";
+
+export function deriveGitShortStatus(additions: number, deletions: number): "A" | "D" | "M" {
+  if (additions > 0 && deletions === 0) return "A";
+  if (deletions > 0 && additions === 0) return "D";
+  return "M";
+}
+
+export function resolveFileShortStatus(
+  path: string,
+  statusMap: Record<string, string>,
+  additions: number,
+  deletions: number,
+): "A" | "M" | "D" | "R" | "C" {
+  const fromMap = statusMap[path];
+  if (fromMap === "A" || fromMap === "M" || fromMap === "D" || fromMap === "R" || fromMap === "C") {
+    return fromMap;
+  }
+  return deriveGitShortStatus(additions, deletions);
+}
+
+/** Format the branch tracking status into a readable string. */
+export function formatBranchStatus(repoInfo: RepoInfo | null): string | null {
+  if (!repoInfo?.status) return null;
+  const { ahead, behind, upstream } = repoInfo.status;
+  if (!upstream) return null;
+  if (ahead === 0 && behind === 0) return "up to date";
+  const parts: string[] = [];
+  if (ahead > 0) parts.push(`${ahead} ahead`);
+  if (behind > 0) parts.push(`${behind} behind`);
+  return parts.join(", ");
+}
