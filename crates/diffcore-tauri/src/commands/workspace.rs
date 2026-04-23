@@ -11,6 +11,20 @@ use diffcore_core::git;
 
 use super::{AppState, CommandError, FileDiffContent};
 
+
+
+/// Summary of repository state for the UI.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RepoInfo {
+    pub current_branch: Option<String>,
+    pub default_branch: String,
+    pub branches: Vec<git::BranchInfo>,
+    pub worktrees: Vec<git::WorktreeInfo>,
+    pub status: Option<git::BranchStatus>,
+    /// Whether the opened path is a linked worktree (not the main worktree).
+    pub is_worktree: bool,
+}
+
 /// List all local branches in the repository.
 ///
 /// Returns branches sorted with current branch first, then alphabetically.
@@ -322,17 +336,4 @@ pub fn parse_file_content(
         .query_engine
         .parse_file(&path, &source)
         .map_err(|e| CommandError::Analysis(format!("parse_file failed: {e}")))
-}
-
-
-/// Summary of repository state for the UI.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct RepoInfo {
-    pub current_branch: Option<String>,
-    pub default_branch: String,
-    pub branches: Vec<git::BranchInfo>,
-    pub worktrees: Vec<git::WorktreeInfo>,
-    pub status: Option<git::BranchStatus>,
-    /// Whether the opened path is a linked worktree (not the main worktree).
-    pub is_worktree: bool,
 }

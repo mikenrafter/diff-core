@@ -197,12 +197,8 @@ async fn emit_diffcore_activity(job: &JobHandle, message: impl Into<String>) {
         .await;
 }
 
-fn provider_supports_tool_activity(provider: &str) -> bool {
-    matches!(provider, "codex" | "claude")
-}
-
 async fn emit_direct_api_activity_notice(job: &JobHandle, provider: &str) {
-    if provider_supports_tool_activity(provider) {
+    if super::provider_supports_tool_activity(provider) {
         return;
     }
 
