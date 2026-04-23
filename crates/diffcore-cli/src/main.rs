@@ -373,7 +373,11 @@ fn run_analyze_and_return(args: AnalyzeArgs) -> Result<AnalysisOutput, Box<dyn s
         });
     }
 
-    let cache_key = cache::compute_cache_key(&diff_result);
+    let cache_key = if args.staged || args.unstaged {
+        cache::compute_cache_key_working_dir(&diff_result, &workdir)
+    } else {
+        cache::compute_cache_key(&diff_result)
+    };
     if let Some(cached) = cache::load_cached(&workdir, &cache_key) {
         return Ok(cached);
     }
@@ -393,6 +397,7 @@ fn run_analyze_and_return(args: AnalyzeArgs) -> Result<AnalysisOutput, Box<dyn s
             Some((path, content))
         })
         .collect();
+
     let parsed_files = pipeline::parse_files_parallel(&file_inputs);
     let workspace_map = diffcore_core::graph::build_workspace_map(&workdir);
     let mut graph = SymbolGraph::build_with_workspace(&parsed_files, &workspace_map);
@@ -500,7 +505,11 @@ fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Check cache (skip if LLM annotation or refinement requested — those are additive)
-    let cache_key = cache::compute_cache_key(&diff_result);
+    let cache_key = if args.staged || args.unstaged {
+        cache::compute_cache_key_working_dir(&diff_result, &workdir)
+    } else {
+        cache::compute_cache_key(&diff_result)
+    };
     if !args.annotate && !args.refine && args.refine_model.is_none() {
         if let Some(cached) = cache::load_cached(&workdir, &cache_key) {
             return write_output(&cached, args.output.as_deref());

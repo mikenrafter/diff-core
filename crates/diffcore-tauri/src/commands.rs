@@ -258,7 +258,11 @@ pub fn analyze(
     }
 
     // Check cache for previously computed results
-    let cache_key = cache::compute_cache_key(&diff_result);
+    let cache_key = if staged || unstaged {
+        cache::compute_cache_key_working_dir(&diff_result, &workdir)
+    } else {
+        cache::compute_cache_key(&diff_result)
+    };
     if let Some(cached) = cache::load_cached(&workdir, &cache_key) {
         match state.last_analysis.lock() {
             Ok(mut last) => *last = Some(cached.clone()),

@@ -5,11 +5,16 @@
 //! the same diff, the cached result is returned instantly without re-parsing or
 //! re-analyzing.
 //!
+//! For working-directory diffs (staged/unstaged modes) the key additionally
+//! captures filesystem state so any edit or staging action invalidates the
+//! entry immediately — see [`compute_cache_key_working_dir`].
+//!
 //! Cache location: `<repo>/.diffcore/cache/` (gitignored by convention).
 
 use log::warn;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 
 use crate::git::DiffResult;
 use crate::types::AnalysisOutput;
@@ -19,16 +24,10 @@ use crate::types::AnalysisOutput;
 /// Changing this value invalidates all existing on-disk cache entries.
 const CACHE_SCHEMA_VERSION: &str = "2";
 
-/// Compute a deterministic cache key from a diff result.
+/// Compute a deterministic cache key for a branch/range diff.
 ///
-/// The key is a hex-encoded SHA-256 hash of:
-/// - CACHE_SCHEMA_VERSION (invalidated on schema changes)
-/// - base_sha (or "none")
-/// - head_sha (or "none")
-/// - sorted file paths joined by newlines
-///
-/// This ensures the cache is invalidated when any file is added/removed,
-/// when the base/head refs change, or when the output schema changes.
+/// Hashes CACHE_SCHEMA_VERSION + base_sha + head_sha + sorted file paths.
+/// Use [`compute_cache_key_working_dir`] for staged/unstaged diffs instead.
 pub fn compute_cache_key(diff_result: &DiffResult) -> String {
     let mut hasher = Sha256::new();
 
@@ -43,6 +42,81 @@ pub fn compute_cache_key(diff_result: &DiffResult) -> String {
     paths.sort();
     for path in &paths {
         hasher.update(path.as_bytes());
+        hasher.update(b"\n");
+    }
+
+    hex::encode(hasher.finalize())
+}
+
+/// Compute a cache key for staged or unstaged (working-directory) diffs.
+///
+/// Extends the base key with two extra filesystem signals so that the cache
+/// invalidates as soon as the index or any tracked file changes:
+///
+/// 1. **`.git/index` SHA-256** — changes atomically on every `git add`,
+///    `git restore --staged`, or `git reset` operation, catching all staging /
+///    unstaging events.
+/// 2. **Max mtime of changed files** — for each file path in the diff, we
+///    stat the file and fold its mtime into the hash.  An edit to any file
+///    that is already in the diff therefore invalidates the entry immediately.
+///
+/// Together these two signals cover:
+/// - "A file was staged/unstaged since the last analysis" → `.git/index` changes.
+/// - "A file I was already diffing changed on disk" → its mtime changes.
+/// - "The set of diffed files changed" → the file-path portion of the key
+///   changes (handled by the base key logic, same as branch diffs).
+pub fn compute_cache_key_working_dir(diff_result: &DiffResult, workdir: &Path) -> String {
+    let mut hasher = Sha256::new();
+
+    // ── Base portion (same as branch key) ──
+    hasher.update(CACHE_SCHEMA_VERSION.as_bytes());
+    hasher.update(b"\n");
+    hasher.update(diff_result.base_sha.as_deref().unwrap_or("none"));
+    hasher.update(b"\n");
+    hasher.update(diff_result.head_sha.as_deref().unwrap_or("none"));
+    hasher.update(b"\n");
+
+    let mut paths: Vec<&str> = diff_result.files.iter().map(|f| f.path()).collect();
+    paths.sort();
+    for path in &paths {
+        hasher.update(path.as_bytes());
+        hasher.update(b"\n");
+    }
+
+    // ── Signal 1: hash the git index file itself ──
+    // Any `git add`, `git restore --staged`, or `git reset` causes git to
+    // rewrite `.git/index`, so its content hash changes every time staging
+    // state changes.
+    let index_path = workdir.join(".git").join("index");
+    match std::fs::read(&index_path) {
+        Ok(contents) => {
+            hasher.update(b"index:");
+            hasher.update(&contents);
+            hasher.update(b"\n");
+        }
+        Err(_) => {
+            // Empty repo or no git directory — include a fixed sentinel so the
+            // signal slot is still present (keeps key format stable).
+            hasher.update(b"index:none\n");
+        }
+    }
+
+    // ── Signal 2: max mtime across the changed file set ──
+    // Sorting by path first keeps the contribution deterministic regardless of
+    // iteration order.  We fold the nanosecond-precision mtime of every
+    // changed file so an edit to any of them invalidates the entry.
+    let mut sorted_paths: Vec<&str> = diff_result.files.iter().map(|f| f.path()).collect();
+    sorted_paths.sort();
+    for rel_path in &sorted_paths {
+        let abs_path = workdir.join(rel_path);
+        let mtime_ns = std::fs::metadata(&abs_path)
+            .and_then(|m| m.modified())
+            .and_then(|t| t.duration_since(UNIX_EPOCH).map_err(|e| std::io::Error::other(e)))
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        hasher.update(rel_path.as_bytes());
+        hasher.update(b":");
+        hasher.update(mtime_ns.to_le_bytes());
         hasher.update(b"\n");
     }
 
