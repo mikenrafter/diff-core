@@ -179,6 +179,7 @@ pub fn import_manifest(
         Some(InfrastructureGroup {
             files: infra_files,
             sub_groups: vec![],
+            file_changes: vec![],
             reason: "Listed as unassigned in groups manifest".to_string(),
         })
     };

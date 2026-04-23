@@ -14,18 +14,26 @@ use std::path::{Path, PathBuf};
 use crate::git::DiffResult;
 use crate::types::AnalysisOutput;
 
+/// Increment this whenever the `AnalysisOutput` JSON schema changes in a
+/// backward-incompatible way (new required fields, renamed fields, etc.).
+/// Changing this value invalidates all existing on-disk cache entries.
+const CACHE_SCHEMA_VERSION: &str = "2";
+
 /// Compute a deterministic cache key from a diff result.
 ///
 /// The key is a hex-encoded SHA-256 hash of:
+/// - CACHE_SCHEMA_VERSION (invalidated on schema changes)
 /// - base_sha (or "none")
 /// - head_sha (or "none")
 /// - sorted file paths joined by newlines
 ///
-/// This ensures the cache is invalidated when any file is added/removed
-/// or when the base/head refs change.
+/// This ensures the cache is invalidated when any file is added/removed,
+/// when the base/head refs change, or when the output schema changes.
 pub fn compute_cache_key(diff_result: &DiffResult) -> String {
     let mut hasher = Sha256::new();
 
+    hasher.update(CACHE_SCHEMA_VERSION.as_bytes());
+    hasher.update(b"\n");
     hasher.update(diff_result.base_sha.as_deref().unwrap_or("none"));
     hasher.update(b"\n");
     hasher.update(diff_result.head_sha.as_deref().unwrap_or("none"));

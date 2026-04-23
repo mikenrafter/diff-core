@@ -220,8 +220,12 @@ pub struct InfraSubGroup {
     pub name: String,
     /// Classification category
     pub category: InfraCategory,
-    /// Files in this sub-group
+    /// Files in this sub-group (bare paths, for backward-compatible JSON consumers)
     pub files: Vec<String>,
+    /// Per-file change stats, populated by the output layer from the diff.
+    /// Empty until `build_analysis_output` enriches the infra group.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub file_changes: Vec<FileChange>,
 }
 
 /// Infrastructure group for files not reachable from any entrypoint.
@@ -232,6 +236,10 @@ pub struct InfrastructureGroup {
     /// Semantically organized sub-groups
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sub_groups: Vec<InfraSubGroup>,
+    /// Per-file change stats, populated by the output layer from the diff.
+    /// Parallel to `files`; index N corresponds to `files[N]`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub file_changes: Vec<FileChange>,
     /// Reason these files weren't assigned to flow groups
     pub reason: String,
 }

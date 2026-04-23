@@ -73,12 +73,18 @@ export type InfraCategory =
 export interface InfraSubGroup {
   name: string;
   category: InfraCategory;
+  /** Bare paths (backward-compatible). Prefer `file_changes` for change stats. */
   files: string[];
+  /** Per-file change stats, populated by the output layer. */
+  file_changes?: FileChange[];
 }
 
 export interface InfrastructureGroup {
+  /** Bare paths (backward-compatible). Prefer `file_changes` for change stats. */
   files: string[];
   sub_groups?: InfraSubGroup[];
+  /** Per-file change stats, parallel to `files`. */
+  file_changes?: FileChange[];
   reason: string;
 }
 

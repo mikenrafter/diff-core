@@ -3488,10 +3488,9 @@ export default function App() {
                 <li key={i} className="edge-item file-item edge-item-row">
                   <FileDisplay
                     path={fromFile}
-                    roleBadge={edge.edge_type.toUpperCase()}
-                    roleLabel={edge.edge_type}
+                    roleBadge={edge.edge_type}
                     hideChanges
-                    suffix={(
+                    prefix={(
                       <span className="edge-target">
                         <span className="edge-from-symbol" title={edge.from}>
                           {fromSymbol}
@@ -4993,14 +4992,13 @@ export default function App() {
                               <FileDisplay
                                 path={file.path}
                                 gitStatus={status}
-                                roleBadge={roleInitial(file.role)}
-                                roleLabel={file.role}
+                                roleBadge={file.role}
                                 additions={file.changes.additions}
                                 deletions={file.changes.deletions}
                                 reviewedInReplay={replayActive && replayVisited.has(file.path)}
                                 variant="two-line"
                                 movedFrom={fileMoved?.from}
-                                suffix={fileCommentCount > 0 ? (
+                                prefix={fileCommentCount > 0 ? (
                                   <button
                                     className="file-comment-btn"
                                     title={`${fileCommentCount} comment${fileCommentCount === 1 ? "" : "s"} — click to view`}
@@ -5035,7 +5033,13 @@ export default function App() {
                 );
               })}
               {/* Infrastructure group — collapsed by default, shows count, with sub-groups */}
-              {analysis?.infrastructure_group && analysis.infrastructure_group.files.length > 0 && (
+              {analysis?.infrastructure_group && analysis.infrastructure_group.files.length > 0 && (() => {
+                // Build path → FileChange lookup from the enriched file_changes list
+                // so sub-group and flat-list renderers can pass real stats.
+                const infraChangesMap = new Map(
+                  (analysis.infrastructure_group.file_changes ?? []).map((fc) => [fc.path, fc]),
+                );
+                return (
                 <div className="group-item infra-group">
                   <div
                     className="group-header"
@@ -5085,7 +5089,15 @@ export default function App() {
                               {isSubExpanded && (
                                 <ul className="file-list">
                                   {sg.files.map((f) => {
-                                    const status = resolveFileShortStatus(f, fileStatusByPath, 1, 1);
+                                    // Prefer per-file stats from the sub-group's file_changes;
+                                    // fall back to the top-level infraChangesMap.
+                                    const fc = sg.file_changes?.find((c) => c.path === f)
+                                      ?? infraChangesMap.get(f);
+                                    const status = resolveFileShortStatus(
+                                      f, fileStatusByPath,
+                                      fc?.changes.additions ?? 1,
+                                      fc?.changes.deletions ?? 1,
+                                    );
                                     return (
                                     <li
                                       key={f}
@@ -5095,7 +5107,13 @@ export default function App() {
                                         openFileInTab(f, "infra");
                                       }}
                                     >
-                                      <FileDisplay path={f} gitStatus={status} hideChanges />
+                                      <FileDisplay
+                                        path={f}
+                                        gitStatus={status}
+                                        additions={fc?.changes.additions}
+                                        deletions={fc?.changes.deletions}
+                                        hideChanges
+                                      />
                                     </li>
                                     );
                                   })}
@@ -5110,7 +5128,12 @@ export default function App() {
                             ? analysis.infrastructure_group.files
                             : analysis.infrastructure_group.files.slice(0, 50)
                           ).map((f) => {
-                            const status = resolveFileShortStatus(f, fileStatusByPath, 1, 1);
+                            const fc = infraChangesMap.get(f);
+                            const status = resolveFileShortStatus(
+                              f, fileStatusByPath,
+                              fc?.changes.additions ?? 1,
+                              fc?.changes.deletions ?? 1,
+                            );
                             return (
                             <li
                               key={f}
@@ -5120,7 +5143,13 @@ export default function App() {
                                 openFileInTab(f, "infra");
                               }}
                             >
-                              <FileDisplay path={f} gitStatus={status} hideChanges />
+                              <FileDisplay
+                                path={f}
+                                gitStatus={status}
+                                additions={fc?.changes.additions}
+                                deletions={fc?.changes.deletions}
+                                hideChanges
+                              />
                             </li>
                             );
                           })}
@@ -5138,7 +5167,8 @@ export default function App() {
                     </>
                   )}
                 </div>
-              )}
+                );
+              })()}
             </div>
             {loading && (
               <div className="empty-state loading-state">
@@ -6472,21 +6502,6 @@ function truncateSearchResultLine(line: string): string {
   return `${line.slice(0, 200)}...`;
 }
 
-/** Map a FileRole to a single-letter abbreviation for compact display. */
-function roleInitial(role: string): string {
-  switch (role) {
-    case "Entrypoint": return "E";
-    case "Handler": return "H";
-    case "Service": return "S";
-    case "Repository": return "R";
-    case "Model": return "M";
-    case "Utility": return "U";
-    case "Config": return "C";
-    case "Test": return "T";
-    case "Infrastructure": return "I";
-    default: return role.charAt(0).toUpperCase();
-  }
-}
 
 function shortSymbol(symbol: string): string {
   const parts = symbol.split("::");

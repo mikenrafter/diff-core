@@ -719,6 +719,7 @@ fn add_file_to_group_or_infra(
                         name: display_name,
                         category,
                         files: vec![path],
+                        file_changes: vec![],
                     });
                     ig.sub_groups.sort_by(|a, b| a.name.cmp(&b.name));
                 }
@@ -730,7 +731,9 @@ fn add_file_to_group_or_infra(
                         name: display_name,
                         category,
                         files: vec![path],
+                        file_changes: vec![],
                     }],
+                    file_changes: vec![],
                     reason: "Moved to infrastructure by LLM refinement".to_string(),
                 });
             }

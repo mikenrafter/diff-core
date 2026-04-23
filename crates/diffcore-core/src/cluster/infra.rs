@@ -34,6 +34,7 @@ pub fn sub_cluster_infra_files(files: &[String], graph: &SymbolGraph) -> Vec<Inf
                 name,
                 category,
                 files,
+                file_changes: vec![],
             }
         })
         .collect();
@@ -53,6 +54,7 @@ pub fn sub_cluster_infra_files(files: &[String], graph: &SymbolGraph) -> Vec<Inf
                     name,
                     category: InfraCategory::DirectoryGroup,
                     files,
+                    file_changes: vec![],
                 });
             }
         }
@@ -71,6 +73,7 @@ pub fn sub_cluster_infra_files(files: &[String], graph: &SymbolGraph) -> Vec<Inf
                     name: dir,
                     category: InfraCategory::DirectoryGroup,
                     files,
+                    file_changes: vec![],
                 });
             }
         }
@@ -84,6 +87,7 @@ pub fn sub_cluster_infra_files(files: &[String], graph: &SymbolGraph) -> Vec<Inf
             name: "Unclassified".to_string(),
             category: InfraCategory::Unclassified,
             files,
+            file_changes: vec![],
         });
     }
 

@@ -3847,11 +3847,50 @@ body {
   min-width: 0;
 }
 
+/* One-line wrapper: becomes the sole flex child of .file-item so it can own
+   pointer events for hover detection. Flex + flex:1 reproduces the old
+   fragment layout while giving the element a paintable box for hit-testing. */
+.file-display.file-display-one-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
 .file-display-line {
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
+}
+
+/* Primary line splits into three flex sections so prefix+status sit left,
+   role badge is centred, and the changes badge is right-aligned. */
+.file-display-line-primary {
+  justify-content: space-between;
+}
+
+.file-display-primary-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.file-display-primary-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  min-width: 0;
+}
+
+.file-display-primary-right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-shrink: 0;
 }
 
 .file-display-line-secondary {
@@ -3860,18 +3899,36 @@ body {
   padding-left: 2px;
 }
 
-/* Push the diff stats / chips on line 2 to the right edge so the layout
-   reads `[role label]  …  [+N -N]`. */
-.file-display-line-secondary .file-display-changes {
-  margin-left: auto;
+/* Secondary line: dirname left-aligned, baseName right-aligned inside path. */
+.file-display-line-secondary .file-path {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* Combined +N/-N badge used in both layout variants. */
+.file-display-changes-badge {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
   font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  gap: 2px;
+  flex-shrink: 0;
 }
 
 .file-display-additions {
   color: #a6e3a1;
+}
+
+.file-display-changes-sep {
+  color: var(--text-muted);
+  opacity: 0.6;
 }
 
 .file-display-deletions {

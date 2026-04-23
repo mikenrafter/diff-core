@@ -12,7 +12,7 @@ use crate::ast::{Language, ParsedFile};
 use crate::cluster::ClusterResult;
 use crate::git::DiffResult;
 use crate::rank::is_risk_path;
-use crate::types::{AnalysisOutput, AnalysisSummary, ChangeStats, DiffSource, DiffType, FileChange, FlowGroup, RankedGroup};
+use crate::types::{AnalysisOutput, AnalysisSummary, ChangeStats, DiffSource, DiffType, FileChange, FileRole, FlowGroup, InfraSubGroup, InfrastructureGroup, RankedGroup};
 
 /// Errors from output operations.
 #[derive(Debug, thiserror::Error)]
@@ -93,12 +93,42 @@ pub fn build_analysis_output(
         frameworks_detected,
     };
 
+    // Enrich the infra group with per-file change stats using the same diff_stats
+    // map already built above. `files` (bare paths) is kept for JSON backward
+    // compatibility; `file_changes` carries the enriched data for UI consumers.
+    let infrastructure_group = cluster_result.infrastructure.as_ref().map(|ig| {
+        let make_fc = |path: &String| -> FileChange {
+            let (additions, deletions) = diff_stats.get(path.as_str()).copied().unwrap_or((0, 0));
+            FileChange {
+                path: path.clone(),
+                flow_position: 0,
+                role: FileRole::Infrastructure,
+                changes: ChangeStats { additions, deletions },
+                symbols_changed: vec![],
+            }
+        };
+        let file_changes = ig.files.iter().map(&make_fc).collect();
+        let sub_groups = ig
+            .sub_groups
+            .iter()
+            .map(|sg| InfraSubGroup {
+                file_changes: sg.files.iter().map(&make_fc).collect(),
+                ..sg.clone()
+            })
+            .collect();
+        InfrastructureGroup {
+            file_changes,
+            sub_groups,
+            ..ig.clone()
+        }
+    });
+
     AnalysisOutput {
         version: "1.0.0".to_string(),
         diff_source,
         summary,
         groups,
-        infrastructure_group: cluster_result.infrastructure.clone(),
+        infrastructure_group,
         annotations: None,
     }
 }

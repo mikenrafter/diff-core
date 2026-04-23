@@ -438,6 +438,7 @@ fn cluster_files_internal(
                     Some(InfrastructureGroup {
                         files: true_infra,
                         sub_groups: vec![],
+                        file_changes: vec![],
                         reason: "Not reachable from any detected entrypoint".to_string(),
                     })
                 },
@@ -461,6 +462,7 @@ fn cluster_files_internal(
             Some(InfrastructureGroup {
                 files: true_infra,
                 sub_groups,
+                file_changes: vec![],
                 reason: "Not reachable from any detected entrypoint".to_string(),
             })
         };
@@ -654,11 +656,11 @@ fn cluster_files_internal(
         Some(InfrastructureGroup {
             files: infra_files,
             sub_groups,
+            file_changes: vec![],
             reason: "Not reachable from any detected entrypoint".to_string(),
         })
     };
-
-    // Step 6: Merge groups that share test+impl pairs by bare stem.
+    // Merge groups that share test+impl pairs by bare stem.
     // After all prior grouping, test files may end up in different groups than their
     // implementations (e.g., packages/X/src/Foo.ts in group A, packages/X/test/Foo.test.ts
     // in group B). Merge the smaller group into the larger one.
@@ -727,6 +729,7 @@ fn cluster_large_diff_files(
         Some(InfrastructureGroup {
             files: infra_files,
             sub_groups,
+            file_changes: vec![],
             reason: format!(
                 "Large diff partitioned into coarse buckets before semantic grouping ({}+ files)",
                 LARGE_DIFF_PARTITION_THRESHOLD

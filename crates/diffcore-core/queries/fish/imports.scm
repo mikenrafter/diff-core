@@ -1,4 +1,5 @@
-; imports — placeholder query (no captures)
-; .scm content for this language is added incrementally; an empty query
-; compiles to zero matches and is the same observable behavior as having
-; no language-specific extraction.
+; Fish shell — node types from tree-sitter-fish grammar.
+; See `queries/typescript/definitions.scm` for the convention overview.
+
+; function foo … end
+(function_definition name: (_) @name) @definition.function
