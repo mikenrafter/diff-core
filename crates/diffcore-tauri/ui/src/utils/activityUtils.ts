@@ -4,7 +4,7 @@
  * These pure functions format LLM activity stream entries for display in the
  * Activity tab. No React or hooks — safe to import anywhere.
  */
-import type { LlmActivityEntry, LlmProvider } from "../types";
+import type { LlmActivityEntry } from "../types";
 import { shortPath } from "./pathUtils";
 
 // ---------------------------------------------------------------------------

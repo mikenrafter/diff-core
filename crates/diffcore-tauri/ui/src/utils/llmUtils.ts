@@ -9,6 +9,17 @@ import type { LlmProvider } from "../types";
 
 export type SubscriptionProvider = "codex" | "claude";
 
+/** Human-readable display labels for each LLM provider. */
+export const PROVIDER_LABELS: Record<LlmProvider, string> = {
+  codex: "Codex CLI",
+  claude: "Claude Code",
+  anthropic: "Anthropic API",
+  openai: "OpenAI API",
+  gemini: "Gemini API",
+  openrouter: "OpenRouter",
+  github_copilot: "GitHub Copilot",
+};
+
 export function isApiProvider(provider: string): boolean {
   return (
     provider === "anthropic"
