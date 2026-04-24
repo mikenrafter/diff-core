@@ -60,11 +60,13 @@ export default [
 
     rules: {
       // ── File size cap ───────────────────────────────────────────────────
-      // 2 000 lines per non-test TS/TSX file. Blank lines and comments count
-      // (they are part of the cognitive load too).
+      // 2 000 lines per non-test TS/TSX file. Blank lines count,
+      // but comments do not. Even though blank lines do contribute in a small
+      // way to cognitive load, comments typically provide clarity and should
+      // not be avoided merely for a max line count. Keep comments free.
       "max-lines": [
         "error",
-        { max: 2000, skipBlankLines: false, skipComments: false },
+        { max: 2000, skipBlankLines: false, skipComments: true },
       ],
 
       // ── React hooks ─────────────────────────────────────────────────────

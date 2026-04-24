@@ -68,8 +68,12 @@ export default {
   },
 
   create(context) {
-    // If the commands directory couldn't be read, skip — don't block CI.
-    if (rustCommands.size === 0) return {};
+    // If the commands directory couldn't be read, BLOW UP. No circumvention here!
+    if (!rustCommands?.size) {
+      throw new Error(
+        `ESLint rule 'no-orphan-tauri-commands' failed to read Rust commands from ${COMMANDS_DIR}. Ensure this path is correct and the Rust source files are present.`
+      );
+    }
 
     return {
       CallExpression(node) {
