@@ -1176,6 +1176,9 @@ mod tests {
             model: "claude-sonnet-4-6".to_string(),
             had_changes: false,
             warnings: Vec::new(),
+            stop_reason: diffcore_core::llm::refinement::RefinementIterationStopReason::NoOp,
+            attempts_used: 1,
+            parse_failures: 0,
         };
         let json = serde_json::to_string(&result).unwrap();
         let back: RefinementResult = serde_json::from_str(&json).unwrap();
@@ -1185,6 +1188,8 @@ mod tests {
         assert!(back.refined_groups.is_empty());
         assert!(back.infrastructure_group.is_none());
         assert!(back.warnings.is_empty());
+        assert_eq!(back.attempts_used, 1);
+        assert_eq!(back.parse_failures, 0);
     }
 
     #[test]
@@ -1230,12 +1235,17 @@ mod tests {
             model: "gpt-4.1".to_string(),
             had_changes: true,
             warnings: Vec::new(),
+            stop_reason: diffcore_core::llm::refinement::RefinementIterationStopReason::MaxIterationsReached,
+            attempts_used: 2,
+            parse_failures: 1,
         };
         let json = serde_json::to_string(&result).unwrap();
         let back: RefinementResult = serde_json::from_str(&json).unwrap();
         assert!(back.had_changes);
         assert_eq!(back.refined_groups.len(), 1);
         assert_eq!(back.refinement_response.splits.len(), 1);
+        assert_eq!(back.attempts_used, 2);
+        assert_eq!(back.parse_failures, 1);
     }
 
     #[test]

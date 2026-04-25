@@ -149,8 +149,8 @@ pub struct LlmConfig {
 ///
 /// The refinement pass takes deterministic groups (v1) and asks an LLM to improve them:
 /// split coincidental groupings, merge scattered refactors, re-rank by semantic review
-/// order, reclassify misplaced files. Uses an evaluator-optimizer loop: refine → score →
-/// refine again if score improved, up to `max_iterations`.
+/// order, reclassify misplaced files. `max_iterations` is a bounded runtime attempt budget
+/// for iterative refinement, including parse retries and successful follow-up iterations.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RefinementConfig {
     /// Whether refinement is enabled (default: true).
@@ -165,8 +165,8 @@ pub struct RefinementConfig {
     /// Shell command to retrieve the refinement API key.
     #[serde(default)]
     pub key_cmd: Option<String>,
-    /// Maximum evaluator-optimizer loop iterations (default: 1).
-    /// 1 = single refinement pass, 2+ = iterative improvement.
+    /// Maximum bounded refinement attempts (default: 1).
+    /// 1 = single provider call, 2+ = bounded iterative refinement within this attempt budget.
     #[serde(default = "default_max_iterations")]
     pub max_iterations: u32,
 }

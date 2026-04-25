@@ -10,6 +10,7 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::cluster::{category_display_name, classify_by_convention};
+use crate::llm::{LlmError, LlmProvider};
 use crate::types::{
     ChangeStats, FileChange, FileRole, FlowGroup, InfraSubGroup, InfrastructureGroup,
 };
@@ -54,10 +55,22 @@ impl RefinementWarning {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RefinementOp {
+    Pipeline,
     Split,
     Merge,
     ReRank,
     Reclassify,
+}
+
+pub fn fallback_warning(message: impl Into<String>) -> RefinementWarning {
+    let message = message.into();
+    RefinementWarning {
+        op: RefinementOp::Pipeline,
+        action: RefinementWarningAction::Dropped {
+            reason: message.clone(),
+        },
+        message,
+    }
 }
 
 /// What the lenient apply path did with the problematic op.
@@ -687,6 +700,208 @@ pub fn has_refinements(response: &RefinementResponse) -> bool {
         || !response.reclassifications.is_empty()
 }
 
+/// Deterministic stop reasons for the bounded refinement runtime loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RefinementIterationStopReason {
+    /// Provider returned no operations.
+    NoOp,
+    /// Provider returned operations, but applying them did not change groups.
+    NoScoreGain,
+    /// Reached the configured attempt budget after applying changes.
+    MaxIterationsReached,
+    /// Structured output parse failed until the attempt budget was exhausted.
+    ParseRetriesExhausted,
+    /// Non-parse provider failure; deterministic groups retained.
+    ProviderFailure,
+}
+
+/// Final result from the shared iterative refinement runtime.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RefinementRunOutcome {
+    pub refined_groups: Vec<FlowGroup>,
+    pub infrastructure_group: Option<InfrastructureGroup>,
+    pub refinement_response: RefinementResponse,
+    #[serde(default)]
+    pub warnings: Vec<RefinementWarning>,
+    pub had_changes: bool,
+    pub stop_reason: RefinementIterationStopReason,
+    pub attempts_used: u32,
+    pub parse_failures: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_message: Option<String>,
+}
+
+fn fallback_outcome(
+    groups: Vec<FlowGroup>,
+    infrastructure_group: Option<InfrastructureGroup>,
+    stop_reason: RefinementIterationStopReason,
+    attempts_used: u32,
+    parse_failures: u32,
+    message: String,
+) -> RefinementRunOutcome {
+    RefinementRunOutcome {
+        refined_groups: groups,
+        infrastructure_group,
+        refinement_response: RefinementResponse {
+            splits: vec![],
+            merges: vec![],
+            re_ranks: vec![],
+            reclassifications: vec![],
+            reasoning: message.clone(),
+        },
+        warnings: vec![fallback_warning(message.clone())],
+        had_changes: false,
+        stop_reason,
+        attempts_used,
+        parse_failures,
+        fallback_message: Some(message),
+    }
+}
+
+/// Run bounded iterative refinement with deterministic stop conditions.
+///
+/// Runtime policy:
+/// - `max_iterations` is a total provider-call budget (`>= 1`).
+/// - Parse failures consume budget and are retried until exhausted.
+/// - Successful responses apply leniently and can feed the next iteration.
+/// - Stop on no-op, no score gain, or when the budget is exhausted.
+pub async fn run_refinement_iterations(
+    provider: &(dyn LlmProvider + Send + Sync),
+    groups: &[FlowGroup],
+    infrastructure: Option<&InfrastructureGroup>,
+    analysis_json: &str,
+    diff_summary: &str,
+    max_iterations: u32,
+) -> RefinementRunOutcome {
+    let bounded_max_iterations = max_iterations.max(1);
+    let mut current_groups = groups.to_vec();
+    let mut current_infra = infrastructure.cloned();
+    let mut all_warnings = Vec::new();
+    let mut parse_failures = 0_u32;
+    let mut attempts_used = 0_u32;
+    let mut had_changes = false;
+
+    for attempt in 1..=bounded_max_iterations {
+        attempts_used = attempt;
+        let request = build_refinement_request(
+            &current_groups,
+            current_infra.as_ref(),
+            analysis_json,
+            diff_summary,
+        );
+
+        let response = match provider.refine_groups(&request).await {
+            Ok(response) => response,
+            Err(LlmError::ParseResponse(message)) => {
+                parse_failures += 1;
+                if attempt == bounded_max_iterations {
+                    return fallback_outcome(
+                        current_groups,
+                        current_infra,
+                        RefinementIterationStopReason::ParseRetriesExhausted,
+                        attempts_used,
+                        parse_failures,
+                        format!(
+                            "Refinement fell back to deterministic groups after {} parse attempt(s): {}",
+                            bounded_max_iterations, message
+                        ),
+                    );
+                }
+                continue;
+            }
+            Err(error) => {
+                return fallback_outcome(
+                    current_groups,
+                    current_infra,
+                    RefinementIterationStopReason::ProviderFailure,
+                    attempts_used,
+                    parse_failures,
+                    format!(
+                        "Refinement fell back to deterministic groups after provider failure: {}",
+                        error
+                    ),
+                );
+            }
+        };
+
+        if !has_refinements(&response) {
+            return RefinementRunOutcome {
+                refined_groups: current_groups,
+                infrastructure_group: current_infra,
+                refinement_response: response,
+                warnings: all_warnings,
+                had_changes,
+                stop_reason: RefinementIterationStopReason::NoOp,
+                attempts_used,
+                parse_failures,
+                fallback_message: None,
+            };
+        }
+
+        let (refined_groups, refined_infra, warnings) =
+            apply_refinement_lenient(&current_groups, current_infra.as_ref(), &response);
+        all_warnings.extend(warnings);
+
+        if refined_groups == current_groups && refined_infra == current_infra {
+            return RefinementRunOutcome {
+                refined_groups: current_groups,
+                infrastructure_group: current_infra,
+                refinement_response: response,
+                warnings: all_warnings,
+                had_changes,
+                stop_reason: RefinementIterationStopReason::NoScoreGain,
+                attempts_used,
+                parse_failures,
+                fallback_message: None,
+            };
+        }
+
+        had_changes = true;
+        current_groups = refined_groups;
+        current_infra = refined_infra;
+
+        if attempt == bounded_max_iterations {
+            return RefinementRunOutcome {
+                refined_groups: current_groups,
+                infrastructure_group: current_infra,
+                refinement_response: response,
+                warnings: all_warnings,
+                had_changes,
+                stop_reason: RefinementIterationStopReason::MaxIterationsReached,
+                attempts_used,
+                parse_failures,
+                fallback_message: None,
+            };
+        }
+    }
+
+    // Unreachable in practice because bounded_max_iterations >= 1 and each loop path returns.
+    RefinementRunOutcome {
+        refined_groups: groups.to_vec(),
+        infrastructure_group: infrastructure.cloned(),
+        refinement_response: RefinementResponse {
+            splits: vec![],
+            merges: vec![],
+            re_ranks: vec![],
+            reclassifications: vec![],
+            reasoning: "Refinement fell back to deterministic groups without a provider response"
+                .to_string(),
+        },
+        warnings: vec![fallback_warning(
+            "Refinement fell back to deterministic groups without a provider response",
+        )],
+        had_changes: false,
+        stop_reason: RefinementIterationStopReason::ProviderFailure,
+        attempts_used,
+        parse_failures,
+        fallback_message: Some(
+            "Refinement fell back to deterministic groups without a provider response"
+                .to_string(),
+        ),
+    }
+}
+
 // ── Internal helpers ──
 
 fn remove_file_from_group_or_infra(
@@ -852,7 +1067,12 @@ fn apply_split(source: &FlowGroup, split: &RefinementSplit, offset: usize) -> Ve
 )]
 mod tests {
     use super::*;
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+
+    use async_trait::async_trait;
     use crate::llm::schema::{
+        JudgeRequest, JudgeResponse, Pass1Request, Pass1Response, Pass2Request, Pass2Response,
         RefinementMerge, RefinementNewGroup, RefinementReRank, RefinementReclassify,
         RefinementSplit,
     };
@@ -897,7 +1117,9 @@ mod tests {
 
     #[test]
     fn test_validate_empty_refinement() {
-        let groups = vec![make_group("g1", "Group 1", vec![make_file("a.ts", 0)])];
+        let mut group = make_group("g1", "Group 1", vec![make_file("a.ts", 0)]);
+        group.review_order = 1;
+        let groups = vec![group];
         let result = validate_refinement(&empty_refinement(), &groups, None);
         assert!(result.is_ok());
     }
@@ -1437,6 +1659,244 @@ mod tests {
         assert!(request
             .infrastructure_files
             .contains(&"README.md".to_string()));
+    }
+
+    #[derive(Clone)]
+    enum MockRefinementCall {
+        Ok(RefinementResponse),
+        ParseError(String),
+        ProviderError(String),
+    }
+
+    struct MockIterativeProvider {
+        calls: Arc<Mutex<VecDeque<MockRefinementCall>>>,
+    }
+
+    impl MockIterativeProvider {
+        fn new(calls: Vec<MockRefinementCall>) -> Self {
+            Self {
+                calls: Arc::new(Mutex::new(calls.into())),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl LlmProvider for MockIterativeProvider {
+        fn name(&self) -> &str {
+            "mock"
+        }
+
+        fn model(&self) -> &str {
+            "mock-model"
+        }
+
+        fn max_context_tokens(&self) -> usize {
+            100_000
+        }
+
+        async fn annotate_overview(
+            &self,
+            _request: &Pass1Request,
+        ) -> Result<Pass1Response, LlmError> {
+            unreachable!("Not used by refinement tests")
+        }
+
+        async fn annotate_group(&self, _request: &Pass2Request) -> Result<Pass2Response, LlmError> {
+            unreachable!("Not used by refinement tests")
+        }
+
+        async fn evaluate_quality(&self, _request: &JudgeRequest) -> Result<JudgeResponse, LlmError> {
+            unreachable!("Not used by refinement tests")
+        }
+
+        async fn refine_groups(
+            &self,
+            _request: &RefinementRequest,
+        ) -> Result<RefinementResponse, LlmError> {
+            let call = self
+                .calls
+                .lock()
+                .expect("mock lock poisoned")
+                .pop_front()
+                .expect("mock provider ran out of scripted calls");
+
+            match call {
+                MockRefinementCall::Ok(response) => Ok(response),
+                MockRefinementCall::ParseError(message) => Err(LlmError::ParseResponse(message)),
+                MockRefinementCall::ProviderError(message) => {
+                    Err(LlmError::ApiError { status: 500, message })
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_run_refinement_iterations_parse_retries_exhausted() {
+        let provider = MockIterativeProvider::new(vec![
+            MockRefinementCall::ParseError("bad parse #1".to_string()),
+            MockRefinementCall::ParseError("bad parse #2".to_string()),
+        ]);
+        let groups = vec![make_group("g1", "Group 1", vec![make_file("a.ts", 0)])];
+
+        let outcome = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(run_refinement_iterations(
+                &provider,
+                &groups,
+                None,
+                "{}",
+                "1 file changed",
+                2,
+            ));
+
+        assert_eq!(
+            outcome.stop_reason,
+            RefinementIterationStopReason::ParseRetriesExhausted
+        );
+        assert!(!outcome.had_changes);
+        assert_eq!(outcome.attempts_used, 2);
+        assert_eq!(outcome.parse_failures, 2);
+        assert!(outcome.fallback_message.is_some());
+        assert_eq!(outcome.warnings.len(), 1);
+    }
+
+    #[test]
+    fn test_run_refinement_iterations_stops_on_no_score_gain() {
+        let rerank = RefinementResponse {
+            splits: vec![],
+            merges: vec![],
+            re_ranks: vec![
+                RefinementReRank {
+                    group_id: "g2".to_string(),
+                    new_position: 1,
+                    reason: "prioritize g2".to_string(),
+                },
+                RefinementReRank {
+                    group_id: "g1".to_string(),
+                    new_position: 2,
+                    reason: "g1 second".to_string(),
+                },
+            ],
+            reclassifications: vec![],
+            reasoning: "No meaningful change".to_string(),
+        };
+        let provider = MockIterativeProvider::new(vec![
+            MockRefinementCall::Ok(rerank.clone()),
+            MockRefinementCall::Ok(rerank),
+        ]);
+        let groups = vec![
+            make_group("g1", "Group 1", vec![make_file("a.ts", 0)]),
+            make_group("g2", "Group 2", vec![make_file("b.ts", 0)]),
+        ];
+
+        let outcome = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(run_refinement_iterations(
+                &provider,
+                &groups,
+                None,
+                "{}",
+                "2 files changed",
+                3,
+            ));
+
+        assert_eq!(outcome.stop_reason, RefinementIterationStopReason::NoScoreGain);
+        assert!(outcome.had_changes);
+        assert_eq!(outcome.attempts_used, 2);
+        assert!(outcome.fallback_message.is_none());
+        assert!(outcome.warnings.is_empty());
+    }
+
+    #[test]
+    fn test_run_refinement_iterations_reaches_max_iterations_with_changes() {
+        let groups = vec![
+            make_group("g1", "Group 1", vec![make_file("a.ts", 0)]),
+            make_group("g2", "Group 2", vec![make_file("b.ts", 0)]),
+        ];
+        let response_swap = RefinementResponse {
+            splits: vec![],
+            merges: vec![],
+            re_ranks: vec![
+                RefinementReRank {
+                    group_id: "g2".to_string(),
+                    new_position: 1,
+                    reason: "prioritize g2".to_string(),
+                },
+                RefinementReRank {
+                    group_id: "g1".to_string(),
+                    new_position: 2,
+                    reason: "g1 second".to_string(),
+                },
+            ],
+            reclassifications: vec![],
+            reasoning: "swap".to_string(),
+        };
+        let response_swap_back = RefinementResponse {
+            splits: vec![],
+            merges: vec![],
+            re_ranks: vec![
+                RefinementReRank {
+                    group_id: "g1".to_string(),
+                    new_position: 1,
+                    reason: "restore g1".to_string(),
+                },
+                RefinementReRank {
+                    group_id: "g2".to_string(),
+                    new_position: 2,
+                    reason: "restore g2".to_string(),
+                },
+            ],
+            reclassifications: vec![],
+            reasoning: "swap back".to_string(),
+        };
+        let provider = MockIterativeProvider::new(vec![
+            MockRefinementCall::Ok(response_swap),
+            MockRefinementCall::Ok(response_swap_back),
+        ]);
+
+        let outcome = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(run_refinement_iterations(
+                &provider,
+                &groups,
+                None,
+                "{}",
+                "2 files changed",
+                2,
+            ));
+
+        assert_eq!(
+            outcome.stop_reason,
+            RefinementIterationStopReason::MaxIterationsReached
+        );
+        assert!(outcome.had_changes);
+        assert_eq!(outcome.attempts_used, 2);
+        assert!(outcome.fallback_message.is_none());
+    }
+
+    #[test]
+    fn test_run_refinement_iterations_provider_failure_falls_back() {
+        let provider = MockIterativeProvider::new(vec![MockRefinementCall::ProviderError(
+            "provider unavailable".to_string(),
+        )]);
+        let groups = vec![make_group("g1", "Group 1", vec![make_file("a.ts", 0)])];
+
+        let outcome = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(run_refinement_iterations(
+                &provider,
+                &groups,
+                None,
+                "{}",
+                "1 file changed",
+                3,
+            ));
+
+        assert_eq!(outcome.stop_reason, RefinementIterationStopReason::ProviderFailure);
+        assert!(!outcome.had_changes);
+        assert_eq!(outcome.attempts_used, 1);
+        assert!(outcome.fallback_message.is_some());
+        assert_eq!(outcome.warnings.len(), 1);
     }
 
     #[test]

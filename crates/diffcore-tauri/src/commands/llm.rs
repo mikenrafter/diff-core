@@ -197,6 +197,27 @@ async fn emit_diffcore_activity(job: &JobHandle, message: impl Into<String>) {
         .await;
 }
 
+async fn emit_diffcore_warning(
+    job: &JobHandle,
+    source: impl Into<String>,
+    message: impl Into<String>,
+    event_type: Option<String>,
+    payload: Option<serde_json::Value>,
+) {
+    job.emit(ActivityEntry {
+        source: source.into(),
+        level: "warning".to_string(),
+        message: message.into(),
+        event_type,
+        payload,
+        timestamp_ms: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis() as u64)
+            .unwrap_or(0),
+    })
+    .await;
+}
+
 async fn emit_direct_api_activity_notice(job: &JobHandle, provider: &str) {
     if super::provider_supports_tool_activity(provider) {
         return;
@@ -276,6 +297,36 @@ fn refinement_operations_summary(response: &RefinementResponse) -> String {
     }
 }
 
+fn empty_refinement_response(reasoning: String) -> RefinementResponse {
+    RefinementResponse {
+        splits: vec![],
+        merges: vec![],
+        re_ranks: vec![],
+        reclassifications: vec![],
+        reasoning,
+    }
+}
+
+fn fallback_refinement_result(
+    analysis: &AnalysisOutput,
+    provider: String,
+    model: String,
+    message: String,
+) -> RefinementResult {
+    RefinementResult {
+        refined_groups: analysis.groups.clone(),
+        infrastructure_group: analysis.infrastructure_group.clone(),
+        refinement_response: empty_refinement_response(message.clone()),
+        provider,
+        model,
+        had_changes: false,
+        warnings: vec![refinement::fallback_warning(message)],
+        stop_reason: refinement::RefinementIterationStopReason::ProviderFailure,
+        attempts_used: 1,
+        parse_failures: 0,
+    }
+}
+
 async fn run_overview_with_activity(
     request: llm::schema::Pass1Request,
     llm_config: diffcore_core::config::LlmConfig,
@@ -350,20 +401,71 @@ async fn run_refinement_with_activity(
         "{} files changed across {} groups",
         analysis.summary.total_files_changed, analysis.summary.total_groups,
     );
-    let request = refinement::build_refinement_request(
-        &analysis.groups,
-        analysis.infrastructure_group.as_ref(),
-        &analysis_json,
-        &diff_summary,
-    );
-
-    let response = llm::with_activity_callback(make_activity_callback(job.clone()), async {
-        provider.refine_groups(&request).await
+    let configured_provider_name = refinement_llm_config
+        .provider
+        .clone()
+        .unwrap_or_else(|| "anthropic".to_string());
+    let configured_model_name = refinement_llm_config
+        .model
+        .clone()
+        .unwrap_or_else(|| super::default_model_for_provider(&configured_provider_name).to_string());
+    let outcome = llm::with_activity_callback(make_activity_callback(job.clone()), async {
+        refinement::run_refinement_iterations(
+            provider.as_ref(),
+            &analysis.groups,
+            analysis.infrastructure_group.as_ref(),
+            &analysis_json,
+            &diff_summary,
+            refinement_llm_config.refinement.max_iterations,
+        )
+        .await
     })
-    .await
-    .map_err(|e| CommandError::Llm(format!("{}", e)))?;
+    .await;
 
-    if let Some(reasoning) = refinement_reasoning_excerpt(&response.reasoning) {
+    if outcome.parse_failures > 0
+        && outcome.fallback_message.is_none()
+        && outcome.attempts_used > 1
+    {
+        emit_diffcore_activity(
+            &job,
+            format!(
+                "Refinement recovered after parse retry on attempt {}/{}",
+                outcome.attempts_used,
+                refinement_llm_config.refinement.max_iterations.max(1)
+            ),
+        )
+        .await;
+    }
+
+    if let Some(fallback_message) = &outcome.fallback_message {
+        emit_diffcore_warning(
+            &job,
+            configured_provider_name.clone(),
+            fallback_message.clone(),
+            Some("refinement.fallback".to_string()),
+            Some(serde_json::json!({
+                "attempts": outcome.attempts_used,
+                "parse_failures": outcome.parse_failures,
+                "reason": format!("{:?}", outcome.stop_reason),
+            })),
+        )
+        .await;
+
+        let mut result = fallback_refinement_result(
+            &analysis,
+            configured_provider_name,
+            configured_model_name,
+            fallback_message.clone(),
+        );
+        result.stop_reason = outcome.stop_reason;
+        result.attempts_used = outcome.attempts_used;
+        result.parse_failures = outcome.parse_failures;
+        result.warnings = outcome.warnings;
+        result.refinement_response = outcome.refinement_response;
+        return Ok(result);
+    }
+
+    if let Some(reasoning) = refinement_reasoning_excerpt(&outcome.refinement_response.reasoning) {
         job.emit(ActivityEntry::info(
             provider_name.clone(),
             format!("Refinement rationale: {}", reasoning),
@@ -372,35 +474,26 @@ async fn run_refinement_with_activity(
         .await;
     }
 
-    let provider_name = refinement_llm_config
-        .provider
-        .clone()
-        .unwrap_or_else(|| "anthropic".to_string());
-    let model_name = refinement_llm_config
-        .model
-        .clone()
-        .unwrap_or_else(|| super::default_model_for_provider(&provider_name).to_string());
+    let provider_name = configured_provider_name;
+    let model_name = configured_model_name;
 
-    if !refinement::has_refinements(&response) {
+    if !outcome.had_changes {
         emit_diffcore_activity(&job, "Refinement kept the current grouping").await;
         return Ok(RefinementResult {
             refined_groups: analysis.groups.clone(),
             infrastructure_group: analysis.infrastructure_group.clone(),
-            refinement_response: response,
+            refinement_response: outcome.refinement_response,
             provider: provider_name,
             model: model_name,
             had_changes: false,
-            warnings: Vec::new(),
+            warnings: outcome.warnings,
+            stop_reason: outcome.stop_reason,
+            attempts_used: outcome.attempts_used,
+            parse_failures: outcome.parse_failures,
         });
     }
 
-    let (refined_groups, infra, warnings) = refinement::apply_refinement_lenient(
-        &analysis.groups,
-        analysis.infrastructure_group.as_ref(),
-        &response,
-    );
-
-    for warning in &warnings {
+    for warning in &outcome.warnings {
         let mut entry = ActivityEntry::info(
             provider_name.clone(),
             format!("Refinement warning: {}", warning.message),
@@ -420,19 +513,22 @@ async fn run_refinement_with_activity(
         &job,
         format!(
             "Refinement proposed {}",
-            refinement_operations_summary(&response)
+            refinement_operations_summary(&outcome.refinement_response)
         ),
     )
     .await;
 
     Ok(RefinementResult {
-        refined_groups,
-        infrastructure_group: infra,
-        refinement_response: response,
+        refined_groups: outcome.refined_groups,
+        infrastructure_group: outcome.infrastructure_group,
+        refinement_response: outcome.refinement_response,
         provider: provider_name,
         model: model_name,
         had_changes: true,
-        warnings,
+        warnings: outcome.warnings,
+        stop_reason: outcome.stop_reason,
+        attempts_used: outcome.attempts_used,
+        parse_failures: outcome.parse_failures,
     })
 }
 
@@ -891,46 +987,54 @@ pub async fn refine_groups(
         analysis.summary.total_files_changed, analysis.summary.total_groups,
     );
 
-    let request = refinement::build_refinement_request(
-        &analysis.groups,
-        analysis.infrastructure_group.as_ref(),
-        &analysis_json,
-        &diff_summary,
-    );
-
-    let response = provider
-        .refine_groups(&request)
-        .await
-        .map_err(|e| CommandError::Llm(format!("{}", e)))?;
-
     let provider_name = refinement_llm_config
         .provider
         .unwrap_or_else(|| "anthropic".to_string());
     let model_name = refinement_llm_config
         .model
         .unwrap_or_else(|| super::default_model_for_provider(&provider_name).to_string());
+    let outcome = refinement::run_refinement_iterations(
+        provider.as_ref(),
+        &analysis.groups,
+        analysis.infrastructure_group.as_ref(),
+        &analysis_json,
+        &diff_summary,
+        refinement_llm_config.refinement.max_iterations,
+    )
+    .await;
 
-    if !refinement::has_refinements(&response) {
+    if let Some(fallback_message) = &outcome.fallback_message {
+        warn!("{}", fallback_message);
+        let mut result = fallback_refinement_result(
+            &analysis,
+            provider_name,
+            model_name,
+            fallback_message.clone(),
+        );
+        result.stop_reason = outcome.stop_reason;
+        result.attempts_used = outcome.attempts_used;
+        result.parse_failures = outcome.parse_failures;
+        result.warnings = outcome.warnings;
+        result.refinement_response = outcome.refinement_response;
+        return Ok(result);
+    }
+
+    if !outcome.had_changes {
         return Ok(RefinementResult {
             refined_groups: analysis.groups.clone(),
             infrastructure_group: analysis.infrastructure_group.clone(),
-            refinement_response: response,
+            refinement_response: outcome.refinement_response,
             provider: provider_name,
             model: model_name,
             had_changes: false,
-            warnings: Vec::new(),
+            warnings: outcome.warnings,
+            stop_reason: outcome.stop_reason,
+            attempts_used: outcome.attempts_used,
+            parse_failures: outcome.parse_failures,
         });
     }
 
-    // Apply the refinement leniently: repair what we can, drop what we can't,
-    // surface warnings instead of erroring on individual hallucinated ops.
-    let (refined_groups, infra, warnings) = refinement::apply_refinement_lenient(
-        &analysis.groups,
-        analysis.infrastructure_group.as_ref(),
-        &response,
-    );
-
-    for w in &warnings {
+    for w in &outcome.warnings {
         warn!(
             "Refinement warning [{}]: {}",
             w.event_type(),
@@ -942,8 +1046,8 @@ pub async fn refine_groups(
     match state.last_analysis.lock() {
         Ok(mut last) => {
             if let Some(ref mut a) = *last {
-                a.groups = refined_groups.clone();
-                a.infrastructure_group = infra.clone();
+                a.groups = outcome.refined_groups.clone();
+                a.infrastructure_group = outcome.infrastructure_group.clone();
             }
         }
         Err(e) => warn!(
@@ -953,13 +1057,16 @@ pub async fn refine_groups(
     }
 
     Ok(RefinementResult {
-        refined_groups,
-        infrastructure_group: infra,
-        refinement_response: response,
+        refined_groups: outcome.refined_groups,
+        infrastructure_group: outcome.infrastructure_group,
+        refinement_response: outcome.refinement_response,
         provider: provider_name,
         model: model_name,
         had_changes: true,
-        warnings,
+        warnings: outcome.warnings,
+        stop_reason: outcome.stop_reason,
+        attempts_used: outcome.attempts_used,
+        parse_failures: outcome.parse_failures,
     })
 }
 
@@ -983,6 +1090,23 @@ pub struct RefinementResult {
     /// dropped operations. Empty in the common case.
     #[serde(default)]
     pub warnings: Vec<diffcore_core::llm::refinement::RefinementWarning>,
+    /// Deterministic runtime stop reason for the refinement loop.
+    #[serde(default = "default_refinement_stop_reason")]
+    pub stop_reason: diffcore_core::llm::refinement::RefinementIterationStopReason,
+    /// Number of provider attempts used for this run.
+    #[serde(default = "default_refinement_attempts_used")]
+    pub attempts_used: u32,
+    /// Number of parse failures encountered before completion/fallback.
+    #[serde(default)]
+    pub parse_failures: u32,
+}
+
+fn default_refinement_stop_reason() -> diffcore_core::llm::refinement::RefinementIterationStopReason {
+    diffcore_core::llm::refinement::RefinementIterationStopReason::NoOp
+}
+
+fn default_refinement_attempts_used() -> u32 {
+    1
 }
 
 /// Load cached refinement result for the current analysis.

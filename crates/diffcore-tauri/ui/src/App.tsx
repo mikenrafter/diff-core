@@ -1501,7 +1501,18 @@ export default function App() {
     } else {
       setShowRefined(false);
       if (!opts?.fromCache) {
-        showToast("Refinement kept the existing grouping");
+        if (result.warnings.length > 0) {
+          const attemptLabel = `${result.attempts_used} attempt${result.attempts_used === 1 ? "" : "s"}`;
+          if (result.stop_reason === "parse_retries_exhausted") {
+            showToast(`Refinement parse retries exhausted after ${attemptLabel}; using deterministic grouping`);
+          } else if (result.stop_reason === "provider_failure") {
+            showToast(`Refinement provider failed after ${attemptLabel}; using deterministic grouping`);
+          } else {
+            showToast("Refinement kept deterministic grouping");
+          }
+        } else {
+          showToast("Refinement kept the existing grouping");
+        }
       }
     }
 

@@ -341,7 +341,7 @@ model = "claude-sonnet-4-6"     # user selects the model for refinement
 # - re-rank groups based on semantic review ordering ("read schema before handler")
 # - reclassify file roles (e.g. "shared utility" → "critical change")
 # - re-assign files between groups when static reachability gets it wrong
-max_iterations = 1  # evaluator-optimizer loop iterations (1 = single refinement, 2+ = iterative)
+max_iterations = 1  # max refinement attempts (1 = single call, 2+ = bounded iterative refinement)
 
 [ranking]
 # Override default weights
@@ -1956,23 +1956,34 @@ Touchpoints to focus efforts:
 Acceptance intent:
 - Invalid individual operations do not abort whole refinement unless all operations are unusable; baseline deterministic grouping remains safe.
 
-### 15.5 Step 5: Align Retry/Iteration Policy and Fallback UX
+### 15.5 Step 5: Align Retry/Iteration Policy and Fallback UX (Executed)
 
-Close the gap between documented refinement iteration semantics and runtime behavior, and make fallback user-visible but non-disruptive.
+Retry/iteration behavior is now centralized and deterministic across CLI and Tauri.
 
-Planned changes:
-- Define how parse retries interact with `llm.refinement.max_iterations`.
-- Define stop conditions for iterative refinement attempts (no-op, no score gain, repeated parse failure, bounded retries reached).
-- Require consistent fallback behavior between CLI and Tauri when refinement fails.
+Implemented behavior:
+- Shared bounded runtime loop in `crates/diffcore-core/src/llm/refinement.rs` via `run_refinement_iterations`.
+- `llm.refinement.max_iterations` is now treated as a total provider-attempt budget (`>= 1`), not just an ad-hoc parse retry knob.
+- Parse failures consume attempt budget and retry until exhausted; exhaustion yields deterministic fallback with warning payloads and retained deterministic groups.
+- Successful responses can run for multiple iterations (bounded by `max_iterations`) by rebuilding each request from the latest refined group state.
+- Runtime stop conditions are explicit and surfaced as machine-readable metadata:
+  - `no_op`
+  - `no_score_gain`
+  - `max_iterations_reached`
+  - `parse_retries_exhausted`
+  - `provider_failure`
+- CLI and both Tauri refinement paths now delegate to the same core loop, eliminating previous divergence.
+- Tauri `RefinementResult` now includes `stop_reason`, `attempts_used`, and `parse_failures`; fallback remains non-fatal and user-visible via toast/activity messaging.
 
-Touchpoints to focus efforts:
-- `crates/diffcore-core/src/config.rs` (`RefinementConfig.max_iterations` semantics)
-- `crates/diffcore-cli/src/main.rs` (`run_refinement`, deterministic fallback warning path)
-- `crates/diffcore-tauri/src/commands/llm.rs` (error vs fallback return path policy)
-- `crates/diffcore-tauri/ui/src/App.tsx` (user-facing error/fallback messaging)
+Touchpoints updated:
+- `crates/diffcore-core/src/llm/refinement.rs` (shared iteration runtime + stop reasons + fallback outcome)
+- `crates/diffcore-cli/src/main.rs` (`run_refinement` now consumes shared outcome)
+- `crates/diffcore-tauri/src/commands/llm.rs` (streaming and non-streaming refinement parity)
+- `crates/diffcore-tauri/ui/src/App.tsx` (non-disruptive fallback toast messaging)
+- `crates/diffcore-tauri/ui/src/types.ts` (stop metadata fields)
 
-Acceptance intent:
-- Retry and iteration behavior is deterministic, bounded, and documented; end users retain a usable deterministic result when refinement cannot complete.
+Acceptance status:
+- Retry and iteration behavior is now bounded, deterministic, and consistent across surfaces.
+- Refinement failures preserve a usable deterministic result and surface fallback context without hard-failing the UX.
 
 ### 15.6 Step 6: Add Regression Matrix and Rollout Gates
 

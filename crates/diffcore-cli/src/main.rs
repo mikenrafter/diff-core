@@ -740,35 +740,59 @@ async fn run_refinement(
         analysis_output.summary.total_files_changed, analysis_output.summary.total_groups,
     );
 
-    let request = refinement::build_refinement_request(
+    let outcome = refinement::run_refinement_iterations(
+        provider.as_ref(),
         &analysis_output.groups,
         analysis_output.infrastructure_group.as_ref(),
         &analysis_json,
         &diff_summary,
-    );
+        refinement_llm_config.refinement.max_iterations,
+    )
+    .await;
 
-    // Call LLM for refinement
-    let response = provider.refine_groups(&request).await?;
-
-    if !refinement::has_refinements(&response) {
+    if let Some(message) = &outcome.fallback_message {
+        eprintln!("{}", message);
         return Ok(());
     }
 
-    // Apply refinement leniently — repair LLM-hallucinated IDs via name
-    // matching and drop any ops we can't repair instead of aborting the
-    // entire refinement on a single bad reference.
-    let (refined_groups, refined_infra, warnings) = refinement::apply_refinement_lenient(
-        &analysis_output.groups,
-        analysis_output.infrastructure_group.as_ref(),
-        &response,
-    );
-
-    for w in &warnings {
+    for w in &outcome.warnings {
         eprintln!("{}: {}", w.event_type(), w.message);
     }
 
-    analysis_output.groups = refined_groups;
-    analysis_output.infrastructure_group = refined_infra;
+    match outcome.stop_reason {
+        refinement::RefinementIterationStopReason::NoOp => {
+            eprintln!(
+                "refinement stopped after {}/{} attempt(s): no-op response",
+                outcome.attempts_used,
+                refinement_llm_config.refinement.max_iterations.max(1)
+            );
+            return Ok(());
+        }
+        refinement::RefinementIterationStopReason::NoScoreGain => {
+            eprintln!(
+                "refinement stopped after {}/{} attempt(s): no score gain",
+                outcome.attempts_used,
+                refinement_llm_config.refinement.max_iterations.max(1)
+            );
+            return Ok(());
+        }
+        refinement::RefinementIterationStopReason::MaxIterationsReached
+            if outcome.had_changes =>
+        {
+            eprintln!(
+                "refinement reached max iterations ({}) with applied changes",
+                refinement_llm_config.refinement.max_iterations.max(1)
+            );
+        }
+        _ => {}
+    }
+
+    if !outcome.had_changes {
+        return Ok(());
+    }
+
+    analysis_output.groups = outcome.refined_groups;
+    analysis_output.infrastructure_group = outcome.infrastructure_group;
     analysis_output.summary.total_groups = analysis_output.groups.len() as u32;
 
     Ok(())

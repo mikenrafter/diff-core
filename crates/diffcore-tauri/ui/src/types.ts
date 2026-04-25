@@ -332,6 +332,25 @@ export interface RefinementResult {
   provider: string;
   model: string;
   had_changes: boolean;
+  warnings: RefinementWarning[];
+  stop_reason: RefinementStopReason;
+  attempts_used: number;
+  parse_failures: number;
+}
+
+export type RefinementStopReason =
+  | "no_op"
+  | "no_score_gain"
+  | "max_iterations_reached"
+  | "parse_retries_exhausted"
+  | "provider_failure";
+
+export interface RefinementWarning {
+  op: "pipeline" | "split" | "merge" | "re_rank" | "reclassify";
+  action:
+    | { repaired: { field: string; original: string; resolved: string } }
+    | { dropped: { reason: string } };
+  message: string;
 }
 
 /** Raw refinement response with structural operations. */

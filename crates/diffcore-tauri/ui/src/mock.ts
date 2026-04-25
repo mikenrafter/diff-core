@@ -779,6 +779,10 @@ export const MOCK_REFINEMENT: RefinementResult = {
   provider: "anthropic",
   model: "claude-sonnet-4-6",
   had_changes: true,
+  warnings: [],
+  stop_reason: "max_iterations_reached",
+  attempts_used: 1,
+  parse_failures: 0,
 };
 
 export const MOCK_LLM_SETTINGS: LlmSettings = {
