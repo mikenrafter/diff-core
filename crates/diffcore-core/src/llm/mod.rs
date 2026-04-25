@@ -808,6 +808,16 @@ pub fn refinement_system_prompt() -> String {
 /// Build the user prompt for the refinement pass from a request.
 pub fn refinement_user_prompt(request: &RefinementRequest) -> String {
     let mut prompt = format!("## Diff Summary\n{}\n\n", request.diff_summary);
+    prompt.push_str(
+        "## Refinement Request Contract\n\
+This request always contains:\n\
+- diff_summary: human summary of diff scope\n\
+- groups: canonical group IDs + names + file membership\n\
+- infrastructure_files: changed files not assigned to a flow group\n\
+- analysis_json: full deterministic analysis snapshot\n\
+\nID fields in your response must reference literal IDs from `groups` (or\n\
+`infrastructure` where allowed), never descriptive names.\n\n",
+    );
     prompt.push_str("## Current Flow Groups (from static analysis)\n");
     for group in &request.groups {
         prompt.push_str(&format!(
@@ -1242,6 +1252,7 @@ mod tests {
         };
         let prompt = refinement_user_prompt(&request);
         assert!(prompt.contains("20 files changed"));
+        assert!(prompt.contains("Refinement Request Contract"));
         assert!(prompt.contains("Auth flow"));
         assert!(prompt.contains("src/auth.ts, src/token.ts"));
         assert!(prompt.contains("0.75"));

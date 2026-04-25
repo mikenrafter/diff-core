@@ -1832,3 +1832,157 @@ Hunk navigation MUST remain deterministic when moving between files:
 - `diff hunks` and `user edit hunks` are distinct concepts and MUST NOT be conflated.
 - APIs/methods that expose review/navigation hunks MUST use diff-hunk semantics.
 - APIs/methods that expose user-entered local edits MUST use user-edit semantics (for example naming akin to `getUserEdits`), and must not be used as the source of replay navigation.
+
+## 15. Refinement Robustness Program (Planned)
+
+This section defines a six-step hardening plan for the LLM refinement path, focused on structured-output reliability, semantic safety, and graceful fallback behavior.
+
+### 15.1 Step 1: Document Runtime Flow and Failure Surface (Executed)
+
+The canonical refinement runtime flow is now defined here and is the source of truth for failure handling:
+
+1. UI trigger:
+  - Tauri app invokes refinement from `runRefinement` and receives either job success payload or `CommandError::Llm` failure text.
+2. Command dispatch:
+  - `start_refine_groups` builds provider/model config and schedules the async job.
+3. Request construction:
+  - `run_refinement_with_activity` serializes analysis and calls `build_refinement_request`.
+4. Provider call:
+  - `provider.refine_groups(&request)` executes against the selected LLM backend.
+5. Parse stage:
+  - Provider parser converts raw model output into `RefinementResponse`.
+  - Known failure class recorded: prose-prefixed output before JSON can fail at top-level parse (for example `expected value at line 1 column 1`).
+6. Semantic apply stage:
+  - No-op response: keep deterministic groups.
+  - Non-empty response: `apply_refinement_lenient` performs repair-then-drop semantics and emits warnings.
+7. User-visible result:
+  - Success path returns `RefinementResult` (with warnings when relevant).
+  - Failure path maps to `CommandError::Llm`, surfaced in UI job/error messaging.
+
+Rule for future changes:
+- Every refinement change MUST identify which runtime stage above it modifies (trigger, request, provider, parse, semantic apply, or surfacing).
+
+Touchpoints to focus efforts:
+- `crates/diffcore-tauri/ui/src/App.tsx` (`runRefinement`, error display path)
+- `crates/diffcore-tauri/src/commands/llm.rs` (`start_refine_groups`, `run_refinement_with_activity`, `refine_groups`)
+- `crates/diffcore-core/src/llm/mod.rs` (`refinement_system_prompt`, `refinement_user_prompt`)
+- `crates/diffcore-tauri/src/commands/mod.rs` (`CommandError::Llm` wrapping)
+
+Acceptance intent:
+- Engineers can point to this section and identify exactly where parse, validation, apply, and UI surfacing failures are handled.
+
+### 15.2 Step 2: Tighten the Refinement I/O Contract (Executed)
+
+The refinement I/O contract is now explicit and testable.
+
+Request payload contract (`RefinementRequest`):
+- `diff_summary`: human summary of diff scope.
+- `groups`: canonical flow groups with stable `id`, `name`, and `files` membership.
+- `infrastructure_files`: changed files not assigned to any flow group.
+- `analysis_json`: full deterministic analysis snapshot.
+- Valid ID allow-list is derived from `groups[*].id` plus literal `infrastructure`; prompt text requires literal IDs for all ID-bearing fields.
+
+Response contract (`RefinementResponse`):
+- Operations: `splits`, `merges`, `re_ranks`, `reclassifications`, plus `reasoning`.
+- ID-bearing fields (`source_group_id`, `group_ids`, `group_id`, `from_group_id`, `to_group_id`) MUST use literal group IDs or `infrastructure` where allowed.
+- Display names MUST NOT be used in ID positions.
+- Semantic references are validated against source groups/files before strict apply; lenient apply repairs known ID/name substitutions and drops invalid residual ops.
+
+Normative response examples are now part of the schema description:
+- Valid no-op response (all operation arrays empty).
+- Valid minimal non-empty response (single `re_rank`).
+
+Touchpoints to focus efforts:
+- `crates/diffcore-core/src/llm/schema.rs` (`RefinementRequest`, `RefinementResponse`, `refinement_schema_description`)
+- `crates/diffcore-core/src/llm/refinement.rs` (`build_refinement_request`)
+- `crates/diffcore-core/src/llm/mod.rs` (`refinement_user_prompt` ID allow-list and prompt framing)
+
+Acceptance intent:
+- Contract is explicit enough that a failing response can be categorized as: format violation (non-JSON prefix/shape), schema violation (JSON shape/type mismatch), or semantic-reference violation (unknown IDs/files).
+
+### 15.3 Step 3: Harden Provider Parser Pipeline (Shared Strategy)
+
+Unify parser behavior across providers with a staged fallback policy that handles mixed prose/JSON outputs without relaxing schema expectations.
+
+Planned changes:
+- Specify staged parse pipeline:
+  1. Direct JSON parse
+  2. Markdown-fence extraction
+  3. Embedded-object extraction from mixed text
+  4. Bounded re-ask retry with stricter "JSON only" reminder
+- Consolidate duplicate parser utilities into a shared helper to keep behavior consistent across providers.
+- Standardize parse-stage error tags for observability.
+
+Touchpoints to focus efforts:
+- `crates/diffcore-core/src/llm/openai.rs` (`parse_json_response`, `strip_markdown_json`)
+- `crates/diffcore-core/src/llm/openrouter.rs` (`parse_json_response`, `strip_markdown_json`)
+- `crates/diffcore-core/src/llm/github_copilot.rs` (`parse_json_response`, `strip_markdown_json`)
+- `crates/diffcore-core/src/llm/gemini.rs` (`parse_json_response`, `strip_markdown_json`)
+- `crates/diffcore-core/src/llm/anthropic.rs` (`parse_json_response`, `strip_markdown_json`)
+- Shared helper target: `crates/diffcore-core/src/llm/mod.rs`
+
+Acceptance intent:
+- A prose-prefixed fenced JSON response is recoverable by parser fallback, while malformed or schema-incompatible content still fails deterministically.
+
+### 15.4 Step 4: Preserve Semantic Safety During Apply
+
+Ensure post-parse operations cannot corrupt grouping state, even when responses contain partial hallucinations.
+
+Planned changes:
+- Keep strict semantic invariants for split/merge/re-rank/reclassify references and file membership checks.
+- Continue using repair-first, drop-invalid-second semantics for lenient application.
+- Standardize warning payloads so repaired and dropped operations are clearly auditable in UI and logs.
+
+Touchpoints to focus efforts:
+- `crates/diffcore-core/src/llm/refinement.rs` (`apply_refinement_lenient`, `repair_refinement_response`, `sanitize_refinement_response`, `apply_refinement`)
+- `crates/diffcore-tauri/src/commands/llm.rs` (`RefinementResult.warnings`, activity stream emission for repair/drop)
+- `crates/diffcore-cli/src/main.rs` (warning output on lenient apply)
+
+Acceptance intent:
+- Invalid individual operations do not abort whole refinement unless all operations are unusable; baseline deterministic grouping remains safe.
+
+### 15.5 Step 5: Align Retry/Iteration Policy and Fallback UX
+
+Close the gap between documented refinement iteration semantics and runtime behavior, and make fallback user-visible but non-disruptive.
+
+Planned changes:
+- Define how parse retries interact with `llm.refinement.max_iterations`.
+- Define stop conditions for iterative refinement attempts (no-op, no score gain, repeated parse failure, bounded retries reached).
+- Require consistent fallback behavior between CLI and Tauri when refinement fails.
+
+Touchpoints to focus efforts:
+- `crates/diffcore-core/src/config.rs` (`RefinementConfig.max_iterations` semantics)
+- `crates/diffcore-cli/src/main.rs` (`run_refinement`, deterministic fallback warning path)
+- `crates/diffcore-tauri/src/commands/llm.rs` (error vs fallback return path policy)
+- `crates/diffcore-tauri/ui/src/App.tsx` (user-facing error/fallback messaging)
+
+Acceptance intent:
+- Retry and iteration behavior is deterministic, bounded, and documented; end users retain a usable deterministic result when refinement cannot complete.
+
+### 15.6 Step 6: Add Regression Matrix and Rollout Gates
+
+Protect improvements with targeted tests and explicit rollout checkpoints.
+
+Planned changes:
+- Add parser regression cases for:
+  - prose prefix + fenced JSON
+  - prose prefix + bare JSON object
+  - multiple JSON blocks with first invalid and later valid
+  - trailing prose after valid JSON
+- Add integration checks for Tauri/CLI fallback parity and warning propagation.
+- Add rollout gates requiring parser and apply-layer coverage before enabling new provider behaviors by default.
+
+Touchpoints to focus efforts:
+- Provider test modules in:
+  - `crates/diffcore-core/src/llm/openai.rs`
+  - `crates/diffcore-core/src/llm/openrouter.rs`
+  - `crates/diffcore-core/src/llm/github_copilot.rs`
+  - `crates/diffcore-core/src/llm/gemini.rs`
+  - `crates/diffcore-core/src/llm/anthropic.rs`
+- Refinement apply tests in `crates/diffcore-core/src/llm/refinement.rs`
+- Command-level behavior tests in:
+  - `crates/diffcore-cli/src/main.rs`
+  - `crates/diffcore-tauri/src/commands/mod.rs`
+
+Acceptance intent:
+- The specific real-world parse failure class is permanently covered by automated tests, and future parser changes cannot regress silently.

@@ -173,12 +173,26 @@ pub struct JudgeCriterionScore {
 /// reclassifications.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RefinementRequest {
+    /// Full deterministic analysis payload as JSON string.
+    ///
+    /// This is the source-of-truth snapshot for refinement. Providers should
+    /// treat it as immutable context and use group IDs from `groups` when
+    /// emitting operations.
     /// The full analysis output JSON (serialized AnalysisOutput with groups v1).
     pub analysis_json: String,
+    /// Human summary of diff scope (file/group counts).
     /// Diff text for context.
     pub diff_summary: String,
+    /// Canonical list of current flow groups, including IDs and file membership.
+    ///
+    /// ID-bearing fields in `RefinementResponse` MUST refer to these IDs (or the
+    /// literal `infrastructure` where allowed).
     /// Current flow groups (serialized summary for the LLM).
     pub groups: Vec<RefinementGroupInput>,
+    /// Files outside any flow group.
+    ///
+    /// These are eligible for promotion into a flow via
+    /// `from_group_id = "infrastructure"` reclassifications.
     /// Infrastructure/ungrouped files not assigned to any flow group.
     #[serde(default)]
     pub infrastructure_files: Vec<String>,
@@ -310,6 +324,7 @@ You MUST include exactly these 5 criteria in the 'criteria' array:
 5. mermaid_accuracy: Does the Mermaid graph accurately represent the data flow between files in each group?"#
 }
 
+/// TODO test whether the "normative" section actually improves outcomes
 /// Generate the JSON schema description for the refinement pass.
 pub fn refinement_schema_description() -> &'static str {
     r#"Respond with a JSON object matching this exact schema:
@@ -364,7 +379,31 @@ Guidelines:
 ID fields — STRICT:
 - `source_group_id`, `group_ids`, `from_group_id`, and `to_group_id` MUST be literal group IDs (e.g. `group_1`, `group_2`) from the input, or the literal string `infrastructure`.
 - NEVER use a group's descriptive name (`name` field) in an ID position. IDs and names are different fields.
-- If you want to route a file to a newly-created group, create that group via a `split` operation — do NOT invent a new ID in `to_group_id`."#
+- If you want to route a file to a newly-created group, create that group via a `split` operation — do NOT invent a new ID in `to_group_id`.
+
+Normative examples:
+- No-op response (valid):
+    {
+        "splits": [],
+        "merges": [],
+        "re_ranks": [],
+        "reclassifications": [],
+        "reasoning": "Deterministic grouping already matches the logical flows"
+    }
+- Minimal non-empty response (valid):
+    {
+        "splits": [],
+        "merges": [],
+        "re_ranks": [
+            {
+                "group_id": "group_2",
+                "new_position": 1,
+                "reason": "Review schema-producing flow before its API consumer"
+            }
+        ],
+        "reclassifications": [],
+        "reasoning": "Only review order is semantically suboptimal"
+    }"#
 }
 
 /// Generate the JSON schema description for Pass 2 structured output.
@@ -965,6 +1004,9 @@ mod tests {
         assert!(desc.contains("new_position"));
         assert!(desc.contains("from_group_id"));
         assert!(desc.contains("to_group_id"));
+        assert!(desc.contains("Normative examples"));
+        assert!(desc.contains("No-op response"));
+        assert!(desc.contains("Minimal non-empty response"));
     }
 
     #[test]

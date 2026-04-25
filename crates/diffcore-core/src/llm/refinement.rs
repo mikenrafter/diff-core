@@ -1381,6 +1381,28 @@ mod tests {
     }
 
     #[test]
+    fn test_build_refinement_request_includes_infrastructure_files() {
+        let groups = vec![make_group("g1", "Auth flow", vec![make_file("src/auth.ts", 0)])];
+        let infra = InfrastructureGroup {
+            files: vec!["docker-compose.yml".to_string(), "README.md".to_string()],
+            sub_groups: vec![],
+            file_changes: vec![],
+            reason: "Unreachable from entrypoints".to_string(),
+        };
+
+        let request = build_refinement_request(&groups, Some(&infra), "{}", "2 files changed");
+
+        assert_eq!(request.groups.len(), 1);
+        assert_eq!(request.infrastructure_files.len(), 2);
+        assert!(request
+            .infrastructure_files
+            .contains(&"docker-compose.yml".to_string()));
+        assert!(request
+            .infrastructure_files
+            .contains(&"README.md".to_string()));
+    }
+
+    #[test]
     fn test_apply_removes_empty_groups_after_reclassify() {
         let groups = vec![
             make_group("g1", "Group 1", vec![make_file("a.ts", 0)]),
