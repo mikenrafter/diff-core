@@ -7,12 +7,14 @@ use diffcore_core::config::DiffcoreConfig;
 use super::CommandError;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[allow(dead_code)]
 struct AppStateSnapshotFile {
     version: String,
     saved_at_epoch_ms: u128,
     snapshot: serde_json::Value,
 }
 
+#[allow(dead_code)]
 fn app_logs_dir() -> Result<PathBuf, CommandError> {
     if let Some(global_config) = DiffcoreConfig::global_config_path() {
         let config_dir = global_config
@@ -26,6 +28,7 @@ fn app_logs_dir() -> Result<PathBuf, CommandError> {
     Ok(PathBuf::from(home).join(".diffcore").join("logs"))
 }
 
+#[allow(dead_code)]
 fn app_state_snapshot_dir() -> Result<PathBuf, CommandError> {
     Ok(app_logs_dir()?.join("app-state"))
 }

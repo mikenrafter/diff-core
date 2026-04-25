@@ -15,7 +15,8 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const COMMANDS_DIR = resolve(__dirname, "../../../src/commands");
+// eslint-rules/ → ui/ → diffcore-tauri/ → src/commands/
+const COMMANDS_DIR = resolve(__dirname, "../../src/commands");
 
 /** Extract all #[tauri::command] pub fn names from a Rust source directory. */
 function extractRustCommandNames(dir) {

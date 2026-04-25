@@ -209,6 +209,8 @@
 
             # Node.js for Tauri frontend development
             nodejs_22
+            eslint
+            eslint_d
 
             # Tauri CLI
             cargo-tauri

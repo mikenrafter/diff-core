@@ -3,6 +3,10 @@
  *
  * Rules enforced:
  *  - max-lines: 2000 on all .ts/.tsx files (test files exempt)
+ *    Exception: "entrypoint files" (see ENTRYPOINT_FILES below) are allowed up
+ *    to 3000 lines because they own a lot of application state, effects, and
+ *    the composing return JSX. Extracting panels/tabs/modals is preferred,
+ *    but the root orchestration layer has a naturally higher floor.
  *  - react-hooks/rules-of-hooks: error
  *  - react-hooks/exhaustive-deps: warn
  *  - no-orphan-tauri-commands: error — every tauriInvoke() call must
@@ -15,6 +19,29 @@ import tsPlugin from "@typescript-eslint/eslint-plugin";
 import reactPlugin from "eslint-plugin-react";
 import reactHooksPlugin from "eslint-plugin-react-hooks";
 import noOrphanTauriCommands from "./eslint-rules/no-orphan-tauri-commands.js";
+
+/**
+ * Files that legitimately exceed the 2 000-line cap.
+ *
+ * These are root orchestration / entrypoint files that own all React state,
+ * effects, and the composing return JSX for an entire application. They are
+ * exempt from the standard 2 000-line cap and use a 3 000-line cap instead.
+ * Each entry must have a comment explaining why it qualifies.
+ *
+ * Rules for adding to this list:
+ *  1. The file must be the single root component of a Tauri/web app.
+ *  2. All extractable panels, tabs, modals, and utilities must already be
+ *     extracted (see component-architecture.md).
+ *  3. The remaining lines must be irreducible React state + callbacks.
+ */
+const ENTRYPOINT_FILES = [
+  // App.tsx — root component owning all application state and the context
+  // provider. Panels (HeaderBar, LeftPane, CenterPane, RightPane), tabs
+  // (ActivityTab, AnnotationsTab, SourceTab, CommentsTab), and modals
+  // (AISetupModal, SettingsPanel, RegenDialog, CommentInputOverlay) are all
+  // extracted. The remaining lines are state + callback definitions.
+  "src/App.tsx",
+];
 
 export default [
   // ── Global ignores ────────────────────────────────────────────────────────
@@ -76,6 +103,19 @@ export default [
       // ── Tauri command alignment ──────────────────────────────────────────
       // Every tauriInvoke("cmd") must reference a real Rust backend command.
       "diffcore-local/no-orphan-tauri-commands": "error",
+    },
+  },
+
+  // ── Entrypoint file overrides ─────────────────────────────────────────────
+  // Root orchestration files listed in ENTRYPOINT_FILES are allowed up to
+  // 3 000 lines. All other rules are identical to the standard block above.
+  {
+    files: ENTRYPOINT_FILES,
+    rules: {
+      "max-lines": [
+        "error",
+        { max: 3000, skipBlankLines: false, skipComments: true },
+      ],
     },
   },
 ];

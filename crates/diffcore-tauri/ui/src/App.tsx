@@ -12,9 +12,7 @@ import type {
   CommitInfo,
   LlmSettings,
   LlmProvider,
-  AsyncLlmJobStart,
   LlmActivityEntry,
-  LlmActivityJob,
   RefinementResult,
   RefinementResponse,
   ReviewComment,
@@ -28,7 +26,6 @@ import { AISetupModal } from "./components/modals/AISetupModal";
 import { SettingsPanel } from "./components/modals/SettingsPanel";
 import { CommentInputOverlay } from "./components/modals/CommentInputOverlay";
 import { RegenDialog } from "./components/modals/RegenDialog";
-import { buildManifestPrompt } from "./buildManifestPrompt";
 import { MOCK_ANALYSIS, MOCK_DIFFS, MOCK_PASS1, MOCK_PASS2, MOCK_REPO_INFO, MOCK_LLM_SETTINGS, MOCK_REFINEMENT } from "./mock";
 import { parseSymbolEndpoint, findLineContainingSymbol } from "./utils/pathUtils";
 import { formatBranchStatus, formatCompareTargetLabel, COMPARE_TARGET_UNSTAGED, COMPARE_TARGET_STAGED } from "./utils/gitUtils";
@@ -37,6 +34,10 @@ import { describeActivityEntry, summarizeActivityTimeline, providerSupportsToolA
 import { resolveInteractiveProvider, resolveInteractiveModel, isApiProvider, PROVIDER_LABELS } from "./utils/llmUtils";
 import type { SubscriptionProvider } from "./utils/llmUtils";
 import { AppContext } from "./hooks/AppContext";
+import { useEditorIntegration } from "./hooks/useEditorIntegration";
+import { useActivityStream } from "./hooks/useActivityStream";
+import { useManifestActions } from "./hooks/useManifestActions";
+import { useCrossFileSearch } from "./hooks/useCrossFileSearch";
 import { IS_TAURI, STATE_SAVE_RESTORE_ENABLED, tauriInvoke } from "./utils/tauriUtils";
 import { HeaderBar } from "./components/panels/HeaderBar";
 import { LeftPane } from "./components/panels/LeftPane";
@@ -95,16 +96,6 @@ type PersistedAppState = {
   favoriteRepoPaths: string[];
 };
 
-type CrossFileSearchMatch = {
-  line_number: number;
-  line_text: string;
-};
-
-type CrossFileSearchResult = {
-  file_path: string;
-  matches: CrossFileSearchMatch[];
-};
-
 type FileShortStatus = {
   path: string;
   status: "A" | "M" | "D" | "R" | "C" | string;
@@ -128,14 +119,21 @@ export default function App() {
   const [deepAnalyzing, setDeepAnalyzing] = useState(false);
   // Counter to track concurrent deep analysis requests — prevents premature loading state clear
   const deepAnalyzingCount = useRef(0);
-  const [activityJob, setActivityJob] = useState<LlmActivityJob | null>(null);
-  const [activityEntries, setActivityEntries] = useState<LlmActivityEntry[]>([]);
-  const [activityError, setActivityError] = useState<string | null>(null);
-  const [activityViewMode, setActivityViewMode] = useState<ActivityViewMode>("stream");
   const [inspectedActivityId, setInspectedActivityId] = useState<string | null>(null);
-  const activitySourceRef = useRef<EventSource | null>(null);
   const activityLogRef = useRef<HTMLDivElement | null>(null);
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("annotations");
+
+  // Activity stream — must be called before any callbacks that reference its outputs
+  const {
+    activityJob, setActivityJob,
+    activityEntries, setActivityEntries,
+    activityError, setActivityError,
+    activityViewMode, setActivityViewMode,
+    closeActivityStream, runMockActivityJob, runStreamingJob,
+  } = useActivityStream({
+    onJobActive: () => setRightPanelTab("activity"),
+    setInspectedActivityId,
+  });
   const [sourceFocusRequest, setSourceFocusRequest] = useState<SourceFocusRequest | null>(null);
   const [regenDialogOpen, setRegenDialogOpen] = useState(false);
   const [regenFeedbackText, setRegenFeedbackText] = useState("");
@@ -170,12 +168,6 @@ export default function App() {
   // Diff behavior
   const [includeUncommitted, setIncludeUncommitted] = useState(true);
   const [showUnchangedFiles, setShowUnchangedFiles] = useState(false);
-  const [crossFileSearchOpen, setCrossFileSearchOpen] = useState(false);
-  const [crossFileSearchQuery, setCrossFileSearchQuery] = useState("");
-  const [crossFileSearchLoading, setCrossFileSearchLoading] = useState(false);
-  const [crossFileSearchResults, setCrossFileSearchResults] = useState<CrossFileSearchResult[]>([]);
-  const [crossFileSearchError, setCrossFileSearchError] = useState<string | null>(null);
-  const crossFileSearchInputRef = useRef<HTMLInputElement>(null);
   const [fileStatusByPath, setFileStatusByPath] = useState<Record<string, string>>({});
   const [repoQuickPickOpen, setRepoQuickPickOpen] = useState(false);
   const [recentRepoPaths, setRecentRepoPaths] = useState<string[]>([]);
@@ -312,9 +304,6 @@ export default function App() {
   const rightPanelStartX = useRef(0);
   const rightPanelStartWidth = useRef(0);
   const rightPanelRafId = useRef(0);
-
-  // Groups manifest watching state
-  const [watchedManifestPath, setWatchedManifestPath] = useState<string | null>(null);
 
   // Update notification state
   const [updateAvailable, setUpdateAvailable] = useState<{ version: string; body: string } | null>(null);
@@ -767,143 +756,6 @@ export default function App() {
     setAiSetupOpen(true);
     setAiSetupStep("recommended");
   }, [llmSettings]);
-
-  const closeActivityStream = useCallback(() => {
-    if (activitySourceRef.current) {
-      activitySourceRef.current.close();
-      activitySourceRef.current = null;
-    }
-  }, []);
-
-  useEffect(() => () => closeActivityStream(), [closeActivityStream]);
-
-  useEffect(() => {
-    if (activityJob || activityEntries.length > 0 || activityError) {
-      setRightPanelTab("activity");
-    }
-  }, [activityEntries.length, activityError, activityJob]);
-
-  const appendActivityEntry = useCallback((entry: LlmActivityEntry) => {
-    setActivityEntries((prev) => [...prev, entry]);
-  }, []);
-
-  const runMockActivityJob = useCallback(
-    async <T,>(
-      job: LlmActivityJob,
-      entries: Array<Omit<LlmActivityEntry, "timestamp_ms">>,
-      result: T,
-      onComplete: (value: T) => void,
-    ) => {
-      closeActivityStream();
-      setActivityViewMode("stream");
-      setInspectedActivityId(null);
-      setActivityJob(job);
-      setActivityEntries([]);
-      setActivityError(null);
-      for (const [index, entry] of entries.entries()) {
-        await new Promise((resolve) => setTimeout(resolve, index === 0 ? 120 : 220));
-        appendActivityEntry({ ...entry, timestamp_ms: Date.now() });
-      }
-      onComplete(result);
-      setActivityJob(null);
-    },
-    [appendActivityEntry, closeActivityStream],
-  );
-
-  const runStreamingJob = useCallback(
-    async <T,>(
-      command: string,
-      args: Record<string, unknown>,
-      onComplete: (value: T) => void,
-    ) => {
-      closeActivityStream();
-      setActivityViewMode("stream");
-      setInspectedActivityId(null);
-      setActivityEntries([]);
-      setActivityError(null);
-
-      const start = await tauriInvoke<AsyncLlmJobStart>(command, args);
-      setActivityJob({
-        job_id: start.job_id,
-        operation: start.operation,
-        provider: start.provider,
-        model: start.model,
-        title: start.title,
-      });
-
-      await new Promise<void>((resolve, reject) => {
-        const source = new EventSource(start.stream_url);
-        activitySourceRef.current = source;
-
-        source.addEventListener("job_started", (event) => {
-          try {
-            const payload = JSON.parse((event as MessageEvent).data) as { title: string; provider: string; model: string; job_id: string; operation: string };
-            setActivityJob({
-              job_id: payload.job_id,
-              operation: payload.operation,
-              provider: payload.provider,
-              model: payload.model,
-              title: payload.title,
-            });
-          } catch {
-            // Ignore malformed status events
-          }
-        });
-
-        source.addEventListener("activity", (event) => {
-          try {
-            const payload = JSON.parse((event as MessageEvent).data) as { entry: LlmActivityEntry };
-            appendActivityEntry(payload.entry);
-          } catch {
-            // Ignore malformed activity events
-          }
-        });
-
-        source.addEventListener("completed", (event) => {
-          closeActivityStream();
-          try {
-            const payload = JSON.parse((event as MessageEvent).data) as { result: T };
-            onComplete(payload.result);
-            setActivityJob(null);
-            resolve();
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            setActivityError(message);
-            reject(new Error(message));
-          }
-        });
-
-        source.addEventListener("failed", (event) => {
-          closeActivityStream();
-          try {
-            const payload = JSON.parse((event as MessageEvent).data) as { error: string };
-            setActivityError(payload.error);
-            appendActivityEntry({
-              source: "diffcore",
-              level: "error",
-              message: payload.error,
-              event_type: "job.failed",
-              timestamp_ms: Date.now(),
-            });
-            setActivityJob(null);
-            reject(new Error(payload.error));
-          } catch {
-            setActivityError("Activity stream failed");
-            setActivityJob(null);
-            reject(new Error("Activity stream failed"));
-          }
-        });
-
-        source.onerror = () => {
-          closeActivityStream();
-          setActivityError("Activity stream disconnected");
-          setActivityJob(null);
-          reject(new Error("Activity stream disconnected"));
-        };
-      });
-    },
-    [appendActivityEntry, closeActivityStream],
-  );
 
   const handleSelectFile = useCallback(
     async (path: string) => {
@@ -2518,77 +2370,6 @@ export default function App() {
     }
   }, [comments, repoPath, analysis, showToast]);
 
-  /** Import a groups manifest JSON and apply it to the current analysis. */
-  const importGroupsManifest = useCallback(async (manifestPath: string) => {
-    if (!IS_TAURI) return;
-    try {
-      const updated = await tauriInvoke<AnalysisOutput>("import_groups_manifest", { manifestPath });
-      setAnalysis(updated);
-      // Reset state for new groupings
-      setRefinedGroups(null);
-      setOriginalGroups(null);
-      setShowRefined(false);
-      setReviewedGroupIds(new Set());
-      if (updated.groups.length > 0) {
-        const sorted = [...updated.groups].sort((a, b) => a.review_order - b.review_order);
-        handleSelectGroup(sorted[0]);
-      }
-      showToast(`Loaded ${updated.groups.length} groups from manifest`);
-    } catch (e) {
-      showToast(`Failed to import manifest: ${String(e)}`);
-    }
-  }, [handleSelectGroup, showToast]);
-
-  /** Export current groups as an editable manifest JSON. */
-  const exportGroupsManifest = useCallback(async () => {
-    if (!IS_TAURI || !analysis) return null;
-    try {
-      // Default path: .diffcore/groups.json in repo
-      const outputPath = repoPath
-        ? `${repoPath}/.diffcore/groups.json`
-        : "groups.json";
-      await tauriInvoke("export_groups_manifest", { outputPath });
-      showToast(`Groups manifest exported to ${outputPath}`);
-      return outputPath;
-    } catch (e) {
-      showToast(`Failed to export manifest: ${String(e)}`);
-      return null;
-    }
-  }, [analysis, repoPath, showToast]);
-
-  /** Build an agent prompt for iterative manifest refinement. */
-  const buildManifestAgentPrompt = useCallback((manifestPath: string): string => {
-    return buildManifestPrompt({
-      manifestPath,
-      repoPath: repoPath || ".",
-      groupCount: analysis?.groups.length ?? 0,
-      fileCount: analysis?.summary.total_files_changed ?? 0,
-      infraCount: analysis?.infrastructure_group?.files.length ?? 0,
-    });
-  }, [analysis, repoPath]);
-
-  // Listen for manifest-changed events from the file watcher
-  useEffect(() => {
-    if (!IS_TAURI || !watchedManifestPath) return;
-    let cancelled = false;
-
-    (async () => {
-      const { listen } = await import("@tauri-apps/api/event");
-      const unlisten = await listen<string>("manifest-changed", (event) => {
-        if (!cancelled) {
-          importGroupsManifest(event.payload);
-        }
-      });
-      return unlisten;
-    })().then((unlisten) => {
-      if (cancelled && unlisten) unlisten();
-      // Store unlisten for cleanup
-      return unlisten;
-    });
-
-    return () => { cancelled = true; };
-  }, [watchedManifestPath, importGroupsManifest]);
-
   /** Pre-indexed comment counts by group for O(1) lookup. */
   const commentsByGroupMap = useMemo(() => {
     const map = new Map<string, number>();
@@ -2653,83 +2434,12 @@ export default function App() {
     [comments, selectedFile],
   );
 
-  /** Open the current file in an external editor. */
-  type EditorId = "vscode" | "cursor" | "zed" | "vim" | "terminal";
-  const [openWithDropdown, setOpenWithDropdown] = useState(false);
-  const [lastEditor, setLastEditor] = useState<EditorId>("vscode");
-  const [availableEditors, setAvailableEditors] = useState<Set<EditorId> | null>(null);
-  const openWithRef = useRef<HTMLDivElement>(null);
-
-  const allEditorOptions: { id: EditorId; label: string }[] = [
-    { id: "vscode", label: "VS Code" },
-    { id: "cursor", label: "Cursor" },
-    { id: "zed", label: "Zed" },
-    { id: "vim", label: "Vim" },
-    { id: "terminal", label: "Terminal" },
-  ];
-
-  const editorOptions = availableEditors
-    ? allEditorOptions.filter((opt) => availableEditors.has(opt.id))
-    : allEditorOptions;
-
-  // Detect which editors are installed
-  useEffect(() => {
-    if (!IS_TAURI) return;
-    tauriInvoke<Record<string, boolean>>("check_editors_available").then(
-      (result) => {
-        const available = new Set<EditorId>();
-        for (const [id, isAvailable] of Object.entries(result)) {
-          if (isAvailable) available.add(id as EditorId);
-        }
-        setAvailableEditors(available);
-        // If current lastEditor is not available, switch to first available
-        if (!available.has(lastEditor)) {
-          const first = allEditorOptions.find((opt) => available.has(opt.id));
-          if (first) setLastEditor(first.id);
-        }
-      },
-      () => {
-        // On error, show all editors (graceful fallback)
-      },
-    );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const openInEditor = useCallback(
-    async (editor: EditorId) => {
-      const file = selectedFile;
-      if (!file) {
-        showToast("No file selected");
-        return;
-      }
-      const absPath = buildAbsolutePath(file);
-      setLastEditor(editor);
-      setOpenWithDropdown(false);
-      if (!IS_TAURI) {
-        showToast(`Would open ${absPath} in ${editor}`);
-        return;
-      }
-      try {
-        await tauriInvoke("open_in_editor", { editor, filePath: absPath });
-      } catch (e: any) {
-        const msg = typeof e === "string" ? e : e?.message || String(e);
-        showToast(msg);
-      }
-    },
-    [selectedFile, buildAbsolutePath, showToast],
-  );
-
-  // Close "Open With" dropdown when clicking outside
-  useEffect(() => {
-    if (!openWithDropdown) return;
-    function handleClick(e: MouseEvent) {
-      if (openWithRef.current && !openWithRef.current.contains(e.target as Node)) {
-        setOpenWithDropdown(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, [openWithDropdown]);
+  // ── Editor integration ────────────────────────────────────────────────────
+  const {
+    openWithDropdown, setOpenWithDropdown,
+    lastEditor, availableEditors,
+    openWithRef, editorOptions, openInEditor,
+  } = useEditorIntegration({ selectedFile, buildAbsolutePath, showToast });
 
   const changedFilePathSet = useMemo(() => {
     const set = new Set<string>();
@@ -2744,93 +2454,6 @@ export default function App() {
     }
     return set;
   }, [analysis]);
-
-  const openCrossFileSearchResult = useCallback(async (filePath: string, lineNumber: number) => {
-    const group = selectedGroupRef.current;
-    const changed = changedFilePathSet.has(filePath);
-
-    if (changed && group) {
-      openFileInTab(filePath, group.id);
-      setTimeout(() => {
-        diffViewerRef.current?.scrollToLine(lineNumber, lineNumber);
-      }, 120);
-      return;
-    }
-
-    if (IS_TAURI && repoPath) {
-      try {
-        const content = await tauriInvoke<FileDiffContent>("get_workspace_file_content", {
-          repoPath,
-          filePath,
-        });
-        setSelectedFile(filePath);
-        setFileDiff(content);
-        setOpenTabs((prev) => {
-          if (prev.some((t) => t.path === filePath)) return prev;
-          return [...prev, { path: filePath, groupId: group?.id ?? "__workspace_search__" }];
-        });
-        setTimeout(() => {
-          diffViewerRef.current?.scrollToLine(lineNumber, lineNumber);
-        }, 120);
-        return;
-      } catch (e) {
-        showToast(`Unable to open ${filePath}: ${String(e)}`);
-      }
-    }
-  }, [changedFilePathSet, openFileInTab, repoPath, showToast]);
-
-  const runCrossFileSearch = useCallback(async () => {
-    const query = crossFileSearchQuery.trim();
-    if (!query) {
-      setCrossFileSearchResults([]);
-      setCrossFileSearchError(null);
-      return;
-    }
-
-    setCrossFileSearchLoading(true);
-    setCrossFileSearchError(null);
-    try {
-      if (IS_TAURI && repoPath) {
-        const results = await tauriInvoke<CrossFileSearchResult[]>("cross_file_search", {
-          repoPath,
-          query,
-          showUnchangedFiles,
-          maxResults: 200,
-        });
-        setCrossFileSearchResults(results);
-      } else {
-        // Demo fallback: search known mock diff files.
-        const needle = query.toLowerCase();
-        const results: CrossFileSearchResult[] = Object.entries(MOCK_DIFFS)
-          .map(([path, diff]) => {
-            const lines = (diff?.new_content || "").split("\n");
-            const matches: CrossFileSearchMatch[] = [];
-            lines.forEach((line, idx) => {
-              if (line.toLowerCase().includes(needle)) {
-                matches.push({ line_number: idx + 1, line_text: line });
-              }
-            });
-            return { file_path: path, matches };
-          })
-          .filter((r) => r.matches.length > 0);
-        setCrossFileSearchResults(results);
-      }
-    } catch (e) {
-      setCrossFileSearchResults([]);
-      setCrossFileSearchError(String(e));
-    } finally {
-      setCrossFileSearchLoading(false);
-    }
-  }, [crossFileSearchQuery, repoPath, showUnchangedFiles]);
-
-  useEffect(() => {
-    if (!crossFileSearchOpen) return;
-    const timer = setTimeout(() => {
-      crossFileSearchInputRef.current?.focus();
-      crossFileSearchInputRef.current?.select();
-    }, 0);
-    return () => clearTimeout(timer);
-  }, [crossFileSearchOpen]);
 
   /** Handle right-click context menu on a file item. */
   const handleFileContextMenu = useCallback(
@@ -3280,6 +2903,30 @@ export default function App() {
     },
     [mapEditedHunksToReplayHunks],
   );
+
+  // ── Composed feature hooks ────────────────────────────────────────────────
+  // Manifest actions and cross-file search are placed here (after the callbacks
+  // they depend on: handleSelectGroup, showToast, openFileInTab, etc.)
+
+  const {
+    watchedManifestPath, setWatchedManifestPath,
+    importGroupsManifest, exportGroupsManifest, buildManifestAgentPrompt,
+  } = useManifestActions({
+    analysis, repoPath,
+    setAnalysis, setRefinedGroups, setOriginalGroups, setShowRefined, setReviewedGroupIds,
+    handleSelectGroup, showToast,
+  });
+
+  const {
+    crossFileSearchOpen, setCrossFileSearchOpen,
+    crossFileSearchQuery, setCrossFileSearchQuery,
+    crossFileSearchLoading, crossFileSearchResults, crossFileSearchError,
+    crossFileSearchInputRef, runCrossFileSearch, openCrossFileSearchResult,
+  } = useCrossFileSearch({
+    changedFilePathSet, selectedGroupRef, openFileInTab,
+    repoPath, showToast, showUnchangedFiles, diffViewerRef,
+    setSelectedFile, setFileDiff, setOpenTabs,
+  });
 
   // ── Context value ─────────────────────────────────────────────────────────
   // All state and callbacks bundled for panel/tab/modal components to consume

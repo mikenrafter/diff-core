@@ -806,31 +806,39 @@ pub mod app_state;
 pub mod comments;
 pub mod manifest;
 
-// Re-export all public items so `commands::X` still works from main.rs.
+// Re-export public command items for internal tests and compatibility with
+// older call sites that import from `commands::*`.
+#[allow(unused_imports)]
 pub use llm::{
-    start_annotate_overview, annotate_overview, start_annotate_group, annotate_group,
-    start_refine_groups, refine_groups, RefinementResult, AsyncLlmJobStart,
-    get_cached_refinement, store_refinement_cache,
+    annotate_group, annotate_overview, get_cached_refinement, refine_groups,
+    start_annotate_group, start_annotate_overview, start_refine_groups,
+    store_refinement_cache, AsyncLlmJobStart, RefinementResult,
 };
+#[allow(unused_imports)]
 pub use workspace::{
-    list_branches, list_commits, list_worktrees, get_branch_status, get_repo_info,
-    get_launch_directory, get_last_diff_file_statuses, cross_file_search,
-    get_workspace_file_content, parse_file_content,
-    FileShortStatus, CrossFileSearchMatch, CrossFileSearchResult, RepoInfo,
+    cross_file_search, get_branch_status, get_last_diff_file_statuses,
+    get_launch_directory, get_repo_info, get_workspace_file_content, list_branches,
+    list_commits, list_worktrees, parse_file_content, CrossFileSearchMatch,
+    CrossFileSearchResult, FileShortStatus, RepoInfo,
 };
+#[allow(unused_imports)]
 pub use settings::{
-    check_api_key, get_llm_settings, save_llm_settings, save_api_key, clear_api_key,
-    fetch_provider_models, get_ignore_paths, save_ignore_paths, LlmSettings,
+    check_api_key, clear_api_key, fetch_provider_models, get_ignore_paths,
+    get_llm_settings, save_api_key, save_ignore_paths, save_llm_settings, LlmSettings,
 };
-pub use editor::{open_in_editor, check_editors_available, save_file_content};
-pub use app_state::{save_app_state, load_last_app_state};
+#[allow(unused_imports)]
+pub use editor::{check_editors_available, open_in_editor, save_file_content};
+#[allow(unused_imports)]
+pub use app_state::{load_last_app_state, save_app_state};
+#[allow(unused_imports)]
 pub use comments::{
-    save_comment, delete_comment, load_comments, export_comments,
-    save_comment_cached, load_comments_cached, delete_comment_cached, update_comment_cached,
-    ReviewComment, CommentsFile, comment_cache_key,
+    comment_cache_key, delete_comment, delete_comment_cached, export_comments,
+    load_comments, load_comments_cached, save_comment, save_comment_cached,
+    update_comment_cached, CommentsFile, ReviewComment,
 };
+#[allow(unused_imports)]
 pub use manifest::{
-    import_groups_manifest, export_groups_manifest, watch_manifest, unwatch_manifest,
+    export_groups_manifest, import_groups_manifest, unwatch_manifest, watch_manifest,
 };
 
 #[cfg(test)]

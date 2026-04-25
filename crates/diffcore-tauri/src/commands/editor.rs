@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use super::CommandError;
 
+#[cfg(target_os = "macos")]
 fn macos_app_name(editor: &str) -> Option<&'static str> {
     match editor {
         "vscode" => Some("Visual Studio Code"),
