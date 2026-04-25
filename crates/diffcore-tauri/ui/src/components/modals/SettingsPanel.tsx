@@ -20,7 +20,7 @@ import { useEffect, useMemo, useState } from "react";
 import { logger, type LogLevel } from "../../utils/logger";
 import { useLogger } from "../../hooks/useLogger";
 
-export function SettingsPanel() {
+export function SettingsPanel({ embedded = false }: { embedded?: boolean } = {}) {
   const {
     settingsOpen,
     llmSettings,
@@ -72,17 +72,18 @@ export function SettingsPanel() {
     };
   }, []);
 
-  if (!settingsOpen || !llmSettings) return null;
+  if ((!embedded && !settingsOpen) || !llmSettings) return null;
 
-  return (
-    <div className="settings-overlay" onClick={() => setSettingsOpen(false)}>
-      <div className="settings-panel" onClick={(e) => e.stopPropagation()}>
-        <div className="settings-header">
-          <h2>Settings</h2>
-          <button className="btn-close" onClick={() => setSettingsOpen(false)}>
-            &times;
-          </button>
-        </div>
+  const panel = (
+      <div className={`settings-panel ${embedded ? "settings-panel-embedded" : ""}`} onClick={(e) => !embedded && e.stopPropagation()}>
+        {!embedded && (
+          <div className="settings-header">
+            <h2>Settings</h2>
+            <button className="btn-close" onClick={() => setSettingsOpen(false)}>
+              &times;
+            </button>
+          </div>
+        )}
         <div className="settings-body">
           {/* Diff Behavior */}
           <div className="settings-section">
@@ -444,6 +445,13 @@ export function SettingsPanel() {
           </div>
         </div>
       </div>
+  );
+
+  if (embedded) return panel;
+
+  return (
+    <div className="settings-overlay" onClick={() => setSettingsOpen(false)}>
+      {panel}
     </div>
   );
 }

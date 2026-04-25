@@ -10,7 +10,7 @@ import { IS_TAURI, tauriInvoke } from "../../utils/tauriUtils";
  * Left panel — flow group list with file navigation, refinement controls,
  * cross-file search, and the infrastructure group accordion.
  */
-export function LeftPane() {
+export function LeftPane({ embedded = false }: { embedded?: boolean }) {
   const {
     analysis, loading, sortedGroups, selectedGroup, selectedFile,
     handleSelectGroup, openFileInTab, reviewedGroupIds, toggleGroupReviewed,
@@ -36,8 +36,11 @@ export function LeftPane() {
     pendingScrollToCommentRef, setActiveCommentId,
   } = useAppContext();
 
+  const Wrapper = embedded ? "div" : "aside";
+  const wrapperClassName = embedded ? "groups-pane-embedded" : "panel panel-left";
+
   return (
-        <aside className="panel panel-left">
+        <Wrapper className={wrapperClassName}>
           <div className="panel-header">
             <span>Flow Groups</span>
             {comments.length > 0 && (
@@ -515,6 +518,6 @@ export function LeftPane() {
               <span className="panel-footer-hint">Shift+C</span>
             </div>
           )}
-        </aside>
+        </Wrapper>
   );
 }

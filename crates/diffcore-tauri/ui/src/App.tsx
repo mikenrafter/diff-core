@@ -23,7 +23,6 @@ import type { ModelInfo } from "./types";
 import { type DiffViewerHandle, type EditedHunk } from "./components/DiffViewer";
 import { type SourceFocusRequest } from "./components/SourceExplorer";
 import { AISetupModal } from "./components/modals/AISetupModal";
-import { SettingsPanel } from "./components/modals/SettingsPanel";
 import { CommentInputOverlay } from "./components/modals/CommentInputOverlay";
 import { RegenDialog } from "./components/modals/RegenDialog";
 import { MOCK_ANALYSIS, MOCK_DIFFS, MOCK_PASS1, MOCK_PASS2, MOCK_REPO_INFO, MOCK_LLM_SETTINGS, MOCK_REFINEMENT } from "./mock";
@@ -42,9 +41,9 @@ import { useCrossFileSearch } from "./hooks/useCrossFileSearch";
 import { useDebouncedValue } from "./hooks/useDebouncedValue";
 import { IS_TAURI, STATE_SAVE_RESTORE_ENABLED, tauriInvoke } from "./utils/tauriUtils";
 import { HeaderBar } from "./components/panels/HeaderBar";
-import { LeftPane } from "./components/panels/LeftPane";
 import { CenterPane } from "./components/panels/CenterPane";
 import { RightPane } from "./components/panels/RightPane";
+import { GroupsAndSettingsPane } from "./components/panels/GroupsAndSettingsPane";
 
 
 type OnboardingStep = "recommended" | "api";
@@ -171,7 +170,6 @@ export default function App() {
   const [includeUncommitted, setIncludeUncommitted] = useState(true);
   const [showUnchangedFiles, setShowUnchangedFiles] = useState(false);
   const [fileStatusByPath, setFileStatusByPath] = useState<Record<string, string>>({});
-  const [repoQuickPickOpen, setRepoQuickPickOpen] = useState(false);
   const [recentRepoPaths, setRecentRepoPaths] = useState<string[]>([]);
   const [favoriteRepoPaths, setFavoriteRepoPaths] = useState<string[]>([]);
 
@@ -307,6 +305,14 @@ export default function App() {
   const rightPanelStartWidth = useRef(0);
   const rightPanelRafId = useRef(0);
 
+  const [groupsPanelWidth, setGroupsPanelWidth] = useState(320);
+  const groupsPanelDragging = useRef(false);
+  const groupsPanelStartX = useRef(0);
+  const groupsPanelStartWidth = useRef(0);
+  const groupsPanelRafId = useRef(0);
+
+  const [rightmostTab, setRightmostTab] = useState<"groups" | "settings">("groups");
+
   // Update notification state
   const [updateAvailable, setUpdateAvailable] = useState<{ version: string; body: string } | null>(null);
   const [updating, setUpdating] = useState(false);
@@ -353,6 +359,45 @@ export default function App() {
     document.body.style.userSelect = "none";
     document.querySelector(".panel-right")?.classList.add("panel-right-dragging");
   }, [rightPanelWidth]);
+
+  // Rightmost (groups/settings) drag resize handlers (rAF-throttled)
+  useEffect(() => {
+    const onMouseMove = (e: MouseEvent) => {
+      if (!groupsPanelDragging.current) return;
+      const clientX = e.clientX;
+      cancelAnimationFrame(groupsPanelRafId.current);
+      groupsPanelRafId.current = requestAnimationFrame(() => {
+        const delta = groupsPanelStartX.current - clientX;
+        const newWidth = Math.max(240, Math.min(900, groupsPanelStartWidth.current + delta));
+        setGroupsPanelWidth(newWidth);
+      });
+    };
+    const onMouseUp = () => {
+      if (groupsPanelDragging.current) {
+        groupsPanelDragging.current = false;
+        cancelAnimationFrame(groupsPanelRafId.current);
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+        document.querySelector(".panel-rightmost")?.classList.remove("panel-rightmost-dragging");
+      }
+    };
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+  }, []);
+
+  const startGroupsPanelDrag = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    groupsPanelDragging.current = true;
+    groupsPanelStartX.current = e.clientX;
+    groupsPanelStartWidth.current = groupsPanelWidth;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    document.querySelector(".panel-rightmost")?.classList.add("panel-rightmost-dragging");
+  }, [groupsPanelWidth]);
 
   // Demo mode: auto-load mock data on mount when not in Tauri
   const demoLoaded = useRef(false);
@@ -736,6 +781,8 @@ export default function App() {
   useEffect(() => {
     const recentRaw = window.localStorage.getItem("diffcore.recentRepos");
     const favoriteRaw = window.localStorage.getItem("diffcore.favoriteRepos");
+    const inspectorWidthRaw = window.localStorage.getItem("diffcore.inspectorWidth");
+    const groupsWidthRaw = window.localStorage.getItem("diffcore.groupsWidth");
     if (recentRaw) {
       try {
         const parsed = JSON.parse(recentRaw);
@@ -752,6 +799,15 @@ export default function App() {
         // ignore invalid saved favorites
       }
     }
+
+    const inspectorWidth = Number(inspectorWidthRaw);
+    if (Number.isFinite(inspectorWidth) && inspectorWidth > 0) {
+      setRightPanelWidth(Math.max(200, Math.min(800, inspectorWidth)));
+    }
+    const groupsWidth = Number(groupsWidthRaw);
+    if (Number.isFinite(groupsWidth) && groupsWidth > 0) {
+      setGroupsPanelWidth(Math.max(240, Math.min(900, groupsWidth)));
+    }
   }, []);
 
   useEffect(() => {
@@ -761,6 +817,14 @@ export default function App() {
   useEffect(() => {
     window.localStorage.setItem("diffcore.favoriteRepos", JSON.stringify(favoriteRepoPaths));
   }, [favoriteRepoPaths]);
+
+  useEffect(() => {
+    window.localStorage.setItem("diffcore.inspectorWidth", String(rightPanelWidth));
+  }, [rightPanelWidth]);
+
+  useEffect(() => {
+    window.localStorage.setItem("diffcore.groupsWidth", String(groupsPanelWidth));
+  }, [groupsPanelWidth]);
 
   useEffect(() => {
     const path = repoPath.trim();
@@ -2995,7 +3059,6 @@ export default function App() {
     recentCommits, showHeadCommits, setShowHeadCommits, showBaseCommits, setShowBaseCommits,
     baseBranches, headLabel, baseLabel, statusText, comparisonMode,
     includeUncommitted, setIncludeUncommitted, fileStatusByPath,
-    repoQuickPickOpen, setRepoQuickPickOpen,
     recentRepoPaths, favoriteRepoPaths, setFavoriteRepoPaths, editsEnabled, repoInputRef,
     llmSettings, settingsOpen, setSettingsOpen,
     aiSetupOpen, aiSetupStep, setAiSetupStep, apiProviderDraft, setApiProviderDraft,
@@ -3007,6 +3070,8 @@ export default function App() {
     crossFileSearchOpen, setCrossFileSearchOpen, crossFileSearchQuery, setCrossFileSearchQuery,
     crossFileSearchLoading, crossFileSearchResults, crossFileSearchError, crossFileSearchInputRef,
     rightPanelTab, setRightPanelTab, rightPanelCollapsed, setRightPanelCollapsed, rightPanelWidth,
+    groupsPanelWidth,
+    rightmostTab, setRightmostTab,
     sourceFocusRequest,
     annotationSubTab, setAnnotationSubTab, graphGranularity, setGraphGranularity,
     replayActive, replayStep, replayVisited, replayHunkIndex, replayViewedHunkIds,
@@ -3044,7 +3109,7 @@ export default function App() {
     fetchModelsForProvider, saveLlmSettings, resolvedPrimaryProvider, resolvedPrimaryModel,
     handleAddIgnorePath, handleRemoveIgnorePath, loadRepoInfo, browseForRepository, showToast,
     importGroupsManifest, exportGroupsManifest, buildManifestAgentPrompt,
-    openInEditor, runCrossFileSearch, openCrossFileSearchResult, startRightPanelDrag,
+    openInEditor, runCrossFileSearch, openCrossFileSearchResult, startRightPanelDrag, startGroupsPanelDrag,
     restoreLastSessionState,
     handleDiffCommentRequest, handleDiffEditorContentChange, handleDiffHunksChanged,
   };
@@ -3124,8 +3189,7 @@ export default function App() {
 
       <AISetupModal />
 
-      {/* Settings Panel Overlay */}
-      <SettingsPanel />
+      {/* SettingsPanel now lives in the rightmost tab */}
       {/* Error display */}
       {error && (
         <div className="error-bar">
@@ -3138,18 +3202,22 @@ export default function App() {
 
       {/* Three-panel layout */}
       <div className="panels">
-        {/* Left panel: Flow Groups */}
-        <LeftPane />
-
-
-        {/* Center panel: Monaco Diff Viewer */}
-        {/* Center panel: Monaco Diff Viewer */}
+        {/* Left: Monaco Diff Viewer */}
         <DiffContext.Provider value={diffContextValue}>
           <CenterPane />
         </DiffContext.Provider>
 
-        {/* Right panel: drag handle + panel */}
+        {/* Resize handle: diff | inspector */}
+        <div className="panel-resize-handle" onMouseDown={startRightPanelDrag} />
+
+        {/* Inner-right: Inspector tabs */}
         <RightPane />
+
+        {/* Resize handle: inspector | groups/settings */}
+        <div className="panel-resize-handle" onMouseDown={startGroupsPanelDrag} />
+
+        {/* Rightmost: Flow groups + Settings tab */}
+        <GroupsAndSettingsPane />
       </div>
 
       {/* Keyboard shortcuts bar */}

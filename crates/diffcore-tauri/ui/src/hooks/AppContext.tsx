@@ -190,14 +190,17 @@ export interface AppContextValue {
   includeUncommitted: boolean;
   setIncludeUncommitted: React.Dispatch<React.SetStateAction<boolean>>;
   fileStatusByPath: Record<string, string>;
-  repoQuickPickOpen: boolean;
-  setRepoQuickPickOpen: React.Dispatch<React.SetStateAction<boolean>>;
   recentRepoPaths: string[];
   favoriteRepoPaths: string[];
   setFavoriteRepoPaths: React.Dispatch<React.SetStateAction<string[]>>;
   /** True when comparing unstaged→staged changes (edits are persisted live). */
   editsEnabled: boolean;
   repoInputRef: MutableRefObject<HTMLInputElement | null>;
+
+  // ─── Pane layout ──────────────────────────────────────────────────────────
+  rightmostTab: "groups" | "settings";
+  setRightmostTab: React.Dispatch<React.SetStateAction<"groups" | "settings">>;
+  groupsPanelWidth: number;
 
   // ─── LLM settings ─────────────────────────────────────────────────────────
   llmSettings: LlmSettings | null;
@@ -254,6 +257,7 @@ export interface AppContextValue {
   rightPanelCollapsed: boolean;
   setRightPanelCollapsed: React.Dispatch<React.SetStateAction<boolean>>;
   rightPanelWidth: number;
+  startGroupsPanelDrag: (e: React.MouseEvent) => void;
   sourceFocusRequest: SourceFocusRequest | null;
 
   // ─── Annotation sub-tabs ──────────────────────────────────────────────────

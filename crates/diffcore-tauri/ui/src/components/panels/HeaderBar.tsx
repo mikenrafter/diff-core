@@ -24,6 +24,7 @@ export function HeaderBar() {
     restoreLastSessionState,
     aiAccessReady, llmSettings, openAiSetup,
     settingsOpen, setSettingsOpen,
+    setRightmostTab,
     statusText,
     analysis, reviewedGroupIds, sortedGroups,
   } = useAppContext();
@@ -245,10 +246,13 @@ export function HeaderBar() {
               Setup AI
             </button>
           )}
-          {/* Settings gear icon */}
+          {/* Settings gear icon (opens Settings tab in rightmost pane) */}
           <button
             className="btn btn-settings"
-            onClick={() => setSettingsOpen(!settingsOpen)}
+            onClick={() => {
+              setSettingsOpen(!settingsOpen);
+              setRightmostTab("settings");
+            }}
             title="Settings"
           >
             &#9881;

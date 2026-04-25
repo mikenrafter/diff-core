@@ -1185,6 +1185,29 @@ body {
   transition: none !important;
 }
 
+.panel-rightmost {
+  width: clamp(280px, 22vw, 420px);
+  min-width: 240px;
+  flex-shrink: 0;
+  border-right: none;
+  transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.panel-rightmost-dragging {
+  transition: none !important;
+}
+
+.groups-pane-embedded {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.settings-panel-embedded {
+  height: 100%;
+  max-height: 100%;
+}
 .panel-right-collapsed {
   width: 36px !important;
   min-width: 36px !important;

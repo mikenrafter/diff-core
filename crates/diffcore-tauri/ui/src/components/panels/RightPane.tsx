@@ -14,7 +14,7 @@ export function RightPane() {
   const {
     rightPanelCollapsed, setRightPanelCollapsed,
     rightPanelTab, setRightPanelTab,
-    rightPanelWidth, startRightPanelDrag,
+    rightPanelWidth,
     activityJob, activityTimeline,
     comments,
     annotating, deepAnalyzing, refining,
@@ -27,12 +27,6 @@ export function RightPane() {
 
   return (
     <>
-        {/* Right panel drag handle */}
-        <div
-          className="panel-resize-handle"
-          onMouseDown={startRightPanelDrag}
-        />
-
         {/* Right panel: Activity + Annotations */}
         <aside
           className={`panel panel-right ${rightPanelCollapsed ? "panel-right-collapsed" : ""}`}
