@@ -1,6 +1,6 @@
 //! Workspace, git, and file content commands.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 
 use grep_regex::RegexMatcherBuilder;
@@ -120,6 +120,79 @@ pub fn get_launch_directory() -> Option<String> {
         .find(|path| path.is_dir())
         .and_then(|path| std::fs::canonicalize(path).ok())
         .map(|path| path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub async fn list_repo_path_suggestions(query: String) -> Result<Vec<String>, CommandError> {
+    run_blocking(move || {
+        let q = query.trim().to_lowercase();
+        if q.len() < 2 {
+            return Ok(vec![]);
+        }
+
+        let root = std::env::current_dir()
+            .map_err(|e| CommandError::Analysis(format!("cwd error: {}", e)))?;
+
+        let max_depth: usize = 2;
+        let max_folders_searched: usize = 15;
+        let max_results: usize = 20;
+
+        let mut searched = 0usize;
+        let mut queue: VecDeque<(std::path::PathBuf, usize)> = VecDeque::new();
+        let mut seen: HashSet<std::path::PathBuf> = HashSet::new();
+        queue.push_back((root.clone(), 0));
+        seen.insert(root);
+
+        let mut candidates: Vec<(usize, usize, String)> = Vec::new(); // (pos, len, path)
+
+        while let Some((dir, depth)) = queue.pop_front() {
+            searched += 1;
+            if searched > max_folders_searched {
+                break;
+            }
+            if depth > max_depth {
+                continue;
+            }
+
+            let read_dir = match std::fs::read_dir(&dir) {
+                Ok(rd) => rd,
+                Err(_) => continue,
+            };
+
+            for entry in read_dir.filter_map(Result::ok) {
+                let path = entry.path();
+                let file_name = entry.file_name().to_string_lossy().to_string();
+
+                if file_name.starts_with('.') || file_name == "node_modules" || file_name == "target" {
+                    continue;
+                }
+
+                let is_dir = match entry.file_type() {
+                    Ok(ft) => ft.is_dir(),
+                    Err(_) => path.is_dir(),
+                };
+                if !is_dir {
+                    continue;
+                }
+
+                if depth < max_depth && seen.insert(path.clone()) {
+                    queue.push_back((path.clone(), depth + 1));
+                }
+
+                let path_str = path.to_string_lossy().to_string();
+                let hay = path_str.to_lowercase();
+                if let Some(pos) = hay.find(&q) {
+                    candidates.push((pos, hay.len(), path_str));
+                }
+            }
+        }
+
+        candidates.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)).then_with(|| a.2.cmp(&b.2)));
+        candidates.truncate(max_results);
+
+        Ok(candidates.into_iter().map(|(_, _, p)| p).collect())
+    })
+    .await
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

@@ -73,6 +73,7 @@ fn main() {
             commands::workspace::get_repo_info,
             commands::workspace::get_launch_directory,
             commands::workspace::get_last_diff_file_statuses,
+            commands::workspace::list_repo_path_suggestions,
             commands::workspace::cross_file_search,
             commands::workspace::get_workspace_file_content,
             commands::workspace::parse_file_content,

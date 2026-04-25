@@ -864,7 +864,8 @@ pub use settings::{
 #[allow(unused_imports)]
 pub use workspace::{
     cross_file_search, get_branch_status, get_last_diff_file_statuses, get_launch_directory,
-    get_repo_info, get_workspace_file_content, list_branches, list_commits, list_worktrees,
+    get_repo_info, get_workspace_file_content, list_branches, list_commits, list_repo_path_suggestions,
+    list_worktrees,
     parse_file_content, CrossFileSearchMatch, CrossFileSearchResult, FileShortStatus, RepoInfo,
 };
 

@@ -1,8 +1,7 @@
-import { useEffect, useRef, useState } from "react";
 import { useAppContext } from "../../hooks/AppContext";
-import { shortPath } from "../../utils/pathUtils";
 import { COMPARE_TARGET_STAGED, COMPARE_TARGET_UNSTAGED } from "../../utils/gitUtils";
 import { IS_TAURI, STATE_SAVE_RESTORE_ENABLED } from "../../utils/tauriUtils";
+import { RepoPathCombobox } from "../RepoPathCombobox";
 
 /**
  * Top navigation bar — repo path input, branch selectors, Analyze button, and
@@ -11,7 +10,7 @@ import { IS_TAURI, STATE_SAVE_RESTORE_ENABLED } from "../../utils/tauriUtils";
 export function HeaderBar() {
   const {
     repoPath, setRepoPath, repoInputRef, browseForRepository, loading,
-    repoQuickPickOpen, setRepoQuickPickOpen, recentRepoPaths,
+    recentRepoPaths,
     favoriteRepoPaths, setFavoriteRepoPaths,
     headBranchDropdownOpen, setHeadBranchDropdownOpen,
     headRef, headLabel,
@@ -29,14 +28,6 @@ export function HeaderBar() {
     analysis, reviewedGroupIds, sortedGroups,
   } = useAppContext();
 
-  // Local draft state so we don't run repo probes on every keystroke.
-  const [repoPathDraft, setRepoPathDraft] = useState(repoPath);
-  const commitTimerRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    setRepoPathDraft(repoPath);
-  }, [repoPath]);
-
   const commitRepoPath = (nextRaw: string) => {
     const next = nextRaw.trim();
     if (next === repoPath) return;
@@ -49,78 +40,25 @@ export function HeaderBar() {
           <span className="logo">Diffcore</span>
         </div>
         <div className="top-bar-center">
-          <input
-            ref={repoInputRef}
-            className="input repo-input"
-            type="text"
-            placeholder="Repository path..."
-            value={repoPathDraft}
-            onChange={(e) => {
-              const next = e.target.value;
-              setRepoPathDraft(next);
-
-              if (commitTimerRef.current) {
-                window.clearTimeout(commitTimerRef.current);
-                commitTimerRef.current = null;
-              }
-
-              // If user clears the input, commit immediately (so UI resets).
-              if (next.trim().length === 0) {
-                setRepoPath("");
-                return;
-              }
-
-              // Debounce committing to app state so expensive repo checks run after idle.
-              commitTimerRef.current = window.setTimeout(() => {
-                commitRepoPath(next);
-                commitTimerRef.current = null;
-              }, 450);
+          <RepoPathCombobox
+            inputRef={repoInputRef}
+            value={repoPath}
+            favorites={favoriteRepoPaths}
+            recents={recentRepoPaths}
+            disabled={loading}
+            onCommit={(p) => {
+              if (p.length === 0) setRepoPath("");
+              else commitRepoPath(p);
             }}
-            onBlur={() => {
-              if (commitTimerRef.current) {
-                window.clearTimeout(commitTimerRef.current);
-                commitTimerRef.current = null;
-              }
-              commitRepoPath(repoPathDraft);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && repoPathDraft.trim() && !loading) {
-                (e.target as HTMLInputElement).blur();
-                const path = repoPathDraft.trim();
-                // Ensure repo info is loaded for the committed path.
-                commitRepoPath(path);
-                void runAnalysis(path);
-              }
-            }}
-          />
-          <button
-            className="btn"
-            onClick={() => { void browseForRepository(); }}
-            title="Browse for a repository folder"
-          >
-            Browse
-          </button>
-          <button
-            className="btn"
-            onClick={() => setRepoQuickPickOpen((v) => !v)}
-            title="Quick-pick recent and favorite repositories"
-          >
-            Recent
-          </button>
-          <button
-            className="btn"
-            onClick={() => {
-              const path = repoPathDraft.trim();
-              if (!path) return;
+            onToggleFavorite={(path) => {
               commitRepoPath(path);
               setFavoriteRepoPaths((prev) => (
                 prev.includes(path) ? prev.filter((p) => p !== path) : [path, ...prev]
               ));
             }}
-            title="Pin or unpin current repository"
-          >
-            {favoriteRepoPaths.includes(repoPathDraft.trim()) ? "Unpin" : "Pin"}
-          </button>
+            onBrowse={() => { void browseForRepository(); }}
+            onAnalyze={(path) => { void runAnalysis(path); }}
+          />
 
           {/* Branch comparison: head (source) → base (target) */}
           <div className="branch-comparison">
@@ -275,59 +213,15 @@ export function HeaderBar() {
             )}
           </div>
 
-          {repoQuickPickOpen && (
-            <div className="branch-dropdown" style={{ maxHeight: 220, overflowY: "auto", minWidth: 320 }}>
-              {favoriteRepoPaths.length > 0 && (
-                <>
-                  <li className="branch-option disabled">Favorites</li>
-                  {favoriteRepoPaths.map((path) => (
-                    <li
-                      key={`fav-${path}`}
-                      className="branch-option"
-                      onClick={() => {
-                        setRepoPath(path);
-                        setRepoQuickPickOpen(false);
-                      }}
-                      title={path}
-                    >
-                      <span className="branch-option-name">★ {shortPath(path)}</span>
-                    </li>
-                  ))}
-                </>
-              )}
-              {recentRepoPaths.length > 0 && (
-                <>
-                  <li className="branch-option disabled">Recent</li>
-                  {recentRepoPaths.map((path) => (
-                    <li
-                      key={`recent-${path}`}
-                      className="branch-option"
-                      onClick={() => {
-                        setRepoPath(path);
-                        setRepoQuickPickOpen(false);
-                      }}
-                      title={path}
-                    >
-                      <span className="branch-option-name">{shortPath(path)}</span>
-                    </li>
-                  ))}
-                </>
-              )}
-              {favoriteRepoPaths.length === 0 && recentRepoPaths.length === 0 && (
-                <li className="branch-option disabled">No recent repositories</li>
-              )}
-            </div>
-          )}
-
           <button
             className="btn btn-primary"
             onClick={() => {
-              const path = repoPathDraft.trim();
+              const path = repoPath.trim();
               if (!path) return;
               commitRepoPath(path);
               void runAnalysis(path);
             }}
-            disabled={loading || !repoPathDraft.trim() || comparisonMode === "invalid"}
+            disabled={loading || !repoPath.trim() || comparisonMode === "invalid"}
           >
             {loading ? "Analyzing..." : "Analyze"}
           </button>
