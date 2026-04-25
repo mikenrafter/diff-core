@@ -12,7 +12,10 @@ use crate::ast::{Language, ParsedFile};
 use crate::cluster::ClusterResult;
 use crate::git::DiffResult;
 use crate::rank::is_risk_path;
-use crate::types::{AnalysisOutput, AnalysisSummary, ChangeStats, DiffSource, DiffType, FileChange, FileRole, FlowGroup, InfraSubGroup, InfrastructureGroup, RankedGroup};
+use crate::types::{
+    AnalysisOutput, AnalysisSummary, ChangeStats, DiffSource, DiffType, FileChange, FileRole,
+    FlowGroup, InfraSubGroup, InfrastructureGroup, RankedGroup,
+};
 
 /// Errors from output operations.
 #[derive(Debug, thiserror::Error)]
@@ -67,7 +70,10 @@ pub fn build_analysis_output(
                 .map(|fc| {
                     if let Some(&(additions, deletions)) = diff_stats.get(fc.path.as_str()) {
                         FileChange {
-                            changes: ChangeStats { additions, deletions },
+                            changes: ChangeStats {
+                                additions,
+                                deletions,
+                            },
                             ..fc.clone()
                         }
                     } else {
@@ -103,7 +109,10 @@ pub fn build_analysis_output(
                 path: path.clone(),
                 flow_position: 0,
                 role: FileRole::Infrastructure,
-                changes: ChangeStats { additions, deletions },
+                changes: ChangeStats {
+                    additions,
+                    deletions,
+                },
                 symbols_changed: vec![],
             }
         };
@@ -206,10 +215,7 @@ pub fn diff_source_worktree(
 ///
 /// Used when `include_uncommitted` is enabled: diffs from the base branch tree
 /// directly to the working directory, capturing both committed and uncommitted changes.
-pub fn diff_source_branch_with_worktree(
-    base: &str,
-    base_sha: Option<&str>,
-) -> DiffSource {
+pub fn diff_source_branch_with_worktree(base: &str, base_sha: Option<&str>) -> DiffSource {
     DiffSource {
         diff_type: DiffType::BranchWithWorktree,
         base: Some(base.to_string()),

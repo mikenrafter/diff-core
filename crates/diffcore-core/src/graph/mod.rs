@@ -1268,7 +1268,6 @@ fn collect_ir_extends_edges(
 // Tests
 // ---------------------------------------------------------------------------
 
-
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,

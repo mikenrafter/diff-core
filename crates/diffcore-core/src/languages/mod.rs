@@ -6,19 +6,19 @@
 
 pub(crate) mod common;
 
-pub(crate) mod typescript;
-pub(crate) mod python;
-pub(crate) mod go;
-pub(crate) mod rust;
-pub(crate) mod java;
-pub(crate) mod csharp;
-pub(crate) mod php;
-pub(crate) mod ruby;
-pub(crate) mod kotlin;
-pub(crate) mod swift;
 pub(crate) mod c;
 pub(crate) mod cpp;
+pub(crate) mod csharp;
+pub(crate) mod go;
+pub(crate) mod java;
+pub(crate) mod kotlin;
+pub(crate) mod php;
+pub(crate) mod python;
+pub(crate) mod ruby;
+pub(crate) mod rust;
 pub(crate) mod scala;
+pub(crate) mod swift;
+pub(crate) mod typescript;
 
 // New-language test modules (use generic fallback extractors; tests verify
 // query compilation and symbol extraction for each language's .scm files).

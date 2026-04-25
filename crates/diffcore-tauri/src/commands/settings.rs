@@ -28,8 +28,11 @@ pub fn get_llm_settings(repo_path: Option<String>) -> Result<LlmSettings, Comman
     let configured_provider = config.llm.provider.as_deref();
     let provider =
         super::preferred_provider_for_runtime(configured_provider, &codex_status, &claude_status);
-    let model =
-        super::preferred_model_for_runtime(config.llm.model.clone(), configured_provider, &provider);
+    let model = super::preferred_model_for_runtime(
+        config.llm.model.clone(),
+        configured_provider,
+        &provider,
+    );
 
     let has_api_key = match provider.as_str() {
         "codex" => codex_status.authenticated,

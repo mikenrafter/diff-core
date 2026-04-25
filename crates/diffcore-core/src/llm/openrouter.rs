@@ -377,7 +377,9 @@ mod tests {
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["model"], "anthropic/claude-sonnet-4-6");
         assert_eq!(json["response_format"]["type"], "json_schema");
-        assert!(json["response_format"]["json_schema"]["strict"].as_bool().unwrap());
+        assert!(json["response_format"]["json_schema"]["strict"]
+            .as_bool()
+            .unwrap());
     }
 
     #[test]
@@ -409,24 +411,15 @@ mod tests {
             openrouter_context_window("meta-llama/llama-4-maverick"),
             128_000
         );
-        assert_eq!(
-            openrouter_context_window("deepseek/deepseek-r1"),
-            128_000
-        );
+        assert_eq!(openrouter_context_window("deepseek/deepseek-r1"), 128_000);
         // Unknown model gets safe default
-        assert_eq!(
-            openrouter_context_window("some-unknown/model"),
-            128_000
-        );
+        assert_eq!(openrouter_context_window("some-unknown/model"), 128_000);
     }
 
     #[test]
     fn test_strip_markdown_json() {
         assert_eq!(strip_markdown_json(r#"{"a":1}"#), r#"{"a":1}"#);
-        assert_eq!(
-            strip_markdown_json("```json\n{\"a\":1}\n```"),
-            r#"{"a":1}"#
-        );
+        assert_eq!(strip_markdown_json("```json\n{\"a\":1}\n```"), r#"{"a":1}"#);
         assert_eq!(strip_markdown_json("```\n{\"a\":1}\n```"), r#"{"a":1}"#);
     }
 

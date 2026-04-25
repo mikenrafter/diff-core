@@ -108,11 +108,7 @@ fn push_repaired_warning(
     });
 }
 
-fn push_dropped_warning(
-    warnings: &mut Vec<RefinementWarning>,
-    op: RefinementOp,
-    reason: String,
-) {
+fn push_dropped_warning(warnings: &mut Vec<RefinementWarning>, op: RefinementOp, reason: String) {
     warnings.push(RefinementWarning {
         op: op.clone(),
         action: RefinementWarningAction::Dropped {
@@ -525,8 +521,7 @@ pub fn sanitize_refinement_response(
             );
             return false;
         };
-        let source_files: HashSet<&str> =
-            source.files.iter().map(|f| f.path.as_str()).collect();
+        let source_files: HashSet<&str> = source.files.iter().map(|f| f.path.as_str()).collect();
 
         // Every referenced file must be in the source group.
         for new_group in &split.new_groups {
@@ -896,8 +891,7 @@ pub async fn run_refinement_iterations(
         attempts_used,
         parse_failures,
         fallback_message: Some(
-            "Refinement fell back to deterministic groups without a provider response"
-                .to_string(),
+            "Refinement fell back to deterministic groups without a provider response".to_string(),
         ),
     }
 }
@@ -1070,13 +1064,13 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
 
-    use async_trait::async_trait;
     use crate::llm::schema::{
         JudgeRequest, JudgeResponse, Pass1Request, Pass1Response, Pass2Request, Pass2Response,
         RefinementMerge, RefinementNewGroup, RefinementReRank, RefinementReclassify,
         RefinementSplit,
     };
     use crate::types::{EdgeType, Entrypoint, EntrypointType, FlowEdge, InfraCategory};
+    use async_trait::async_trait;
 
     fn make_file(path: &str, pos: u32) -> FileChange {
         FileChange {
@@ -1641,7 +1635,11 @@ mod tests {
 
     #[test]
     fn test_build_refinement_request_includes_infrastructure_files() {
-        let groups = vec![make_group("g1", "Auth flow", vec![make_file("src/auth.ts", 0)])];
+        let groups = vec![make_group(
+            "g1",
+            "Auth flow",
+            vec![make_file("src/auth.ts", 0)],
+        )];
         let infra = InfrastructureGroup {
             files: vec!["docker-compose.yml".to_string(), "README.md".to_string()],
             sub_groups: vec![],
@@ -1705,7 +1703,10 @@ mod tests {
             unreachable!("Not used by refinement tests")
         }
 
-        async fn evaluate_quality(&self, _request: &JudgeRequest) -> Result<JudgeResponse, LlmError> {
+        async fn evaluate_quality(
+            &self,
+            _request: &JudgeRequest,
+        ) -> Result<JudgeResponse, LlmError> {
             unreachable!("Not used by refinement tests")
         }
 
@@ -1723,9 +1724,10 @@ mod tests {
             match call {
                 MockRefinementCall::Ok(response) => Ok(response),
                 MockRefinementCall::ParseError(message) => Err(LlmError::ParseResponse(message)),
-                MockRefinementCall::ProviderError(message) => {
-                    Err(LlmError::ApiError { status: 500, message })
-                }
+                MockRefinementCall::ProviderError(message) => Err(LlmError::ApiError {
+                    status: 500,
+                    message,
+                }),
             }
         }
     }
@@ -1800,7 +1802,10 @@ mod tests {
                 3,
             ));
 
-        assert_eq!(outcome.stop_reason, RefinementIterationStopReason::NoScoreGain);
+        assert_eq!(
+            outcome.stop_reason,
+            RefinementIterationStopReason::NoScoreGain
+        );
         assert!(outcome.had_changes);
         assert_eq!(outcome.attempts_used, 2);
         assert!(outcome.fallback_message.is_none());
@@ -1892,7 +1897,10 @@ mod tests {
                 3,
             ));
 
-        assert_eq!(outcome.stop_reason, RefinementIterationStopReason::ProviderFailure);
+        assert_eq!(
+            outcome.stop_reason,
+            RefinementIterationStopReason::ProviderFailure
+        );
         assert!(!outcome.had_changes);
         assert_eq!(outcome.attempts_used, 1);
         assert!(outcome.fallback_message.is_some());
@@ -2403,7 +2411,10 @@ mod tests {
             make_group(
                 "group_1",
                 "monthly credits usage repository",
-                vec![make_file("packages/infra/db/src/repositories/monthly-credits-usage.ts", 0)],
+                vec![make_file(
+                    "packages/infra/db/src/repositories/monthly-credits-usage.ts",
+                    0,
+                )],
             ),
             make_group(
                 "group_2",
@@ -2446,7 +2457,11 @@ mod tests {
     #[test]
     fn test_repair_is_case_and_whitespace_insensitive() {
         let groups = vec![
-            make_group("g1", "Media Asset Upload Pipeline", vec![make_file("a.ts", 0)]),
+            make_group(
+                "g1",
+                "Media Asset Upload Pipeline",
+                vec![make_file("a.ts", 0)],
+            ),
             make_group("g2", "User Auth Middleware", vec![make_file("b.ts", 0)]),
         ];
 
@@ -2621,7 +2636,11 @@ mod tests {
         // same response. The merge must still apply; the reclassify must be
         // dropped with a warning instead of aborting the whole refinement.
         let groups = vec![
-            make_group("group_1", "G1", vec![make_file("a.ts", 0), make_file("b.ts", 1)]),
+            make_group(
+                "group_1",
+                "G1",
+                vec![make_file("a.ts", 0), make_file("b.ts", 1)],
+            ),
             make_group("group_2", "G2", vec![make_file("c.ts", 0)]),
             make_group("group_3", "G3", vec![make_file("d.ts", 0)]),
         ];

@@ -193,8 +193,8 @@ fn find_binary_in_path(binary: &str) -> Option<PathBuf> {
 
     #[cfg(windows)]
     {
-        let pathext = std::env::var("PATHEXT")
-            .unwrap_or_else(|_| ".EXE;.CMD;.BAT;.COM;.PS1".to_string());
+        let pathext =
+            std::env::var("PATHEXT").unwrap_or_else(|_| ".EXE;.CMD;.BAT;.COM;.PS1".to_string());
         for entry in std::env::split_paths(&path_var) {
             // Try bare name first
             let bare = entry.join(binary);
@@ -204,7 +204,9 @@ fn find_binary_in_path(binary: &str) -> Option<PathBuf> {
             // Then try with each PATHEXT extension
             for ext in pathext.split(';') {
                 let ext = ext.trim();
-                if ext.is_empty() { continue; }
+                if ext.is_empty() {
+                    continue;
+                }
                 let with_ext = entry.join(format!("{binary}{ext}"));
                 if is_executable_file(&with_ext) {
                     return Some(with_ext);
@@ -240,13 +242,26 @@ fn candidate_cli_paths(binary: &str) -> Vec<PathBuf> {
     {
         if let Some(profile) = std::env::var_os("USERPROFILE") {
             let home = PathBuf::from(profile);
-            let pathext = std::env::var("PATHEXT")
-                .unwrap_or_else(|_| ".EXE;.CMD;.BAT;.COM;.PS1".to_string());
-            let exts: Vec<&str> = pathext.split(';').map(str::trim).filter(|e| !e.is_empty()).collect();
-            for rel in [".npm-global/bin", ".npm/bin", ".local/bin", ".cargo/bin", "bin"] {
+            let pathext =
+                std::env::var("PATHEXT").unwrap_or_else(|_| ".EXE;.CMD;.BAT;.COM;.PS1".to_string());
+            let exts: Vec<&str> = pathext
+                .split(';')
+                .map(str::trim)
+                .filter(|e| !e.is_empty())
+                .collect();
+            for rel in [
+                ".npm-global/bin",
+                ".npm/bin",
+                ".local/bin",
+                ".cargo/bin",
+                "bin",
+            ] {
                 for ext in &exts {
                     candidates.push(home.join(rel).join(format!("{binary}{ext}")));
-                    candidates.push(home.join(rel).join(format!("{binary}{}", ext.to_lowercase())));
+                    candidates.push(
+                        home.join(rel)
+                            .join(format!("{binary}{}", ext.to_lowercase())),
+                    );
                 }
             }
         }
@@ -419,7 +434,10 @@ pub(crate) fn strip_markdown_json(text: &str) -> String {
 
 fn extract_markdown_json_blocks(text: &str) -> impl Iterator<Item = &str> {
     let trimmed = text.trim();
-    MarkdownJsonBlockIter { text: trimmed, pos: 0 }
+    MarkdownJsonBlockIter {
+        text: trimmed,
+        pos: 0,
+    }
 }
 
 struct MarkdownJsonBlockIter<'a> {
@@ -1083,9 +1101,11 @@ This request always contains:\n\
     // Include infrastructure/ungrouped files so the LLM can consider promoting them
     if !request.infrastructure_files.is_empty() {
         prompt.push_str("\n## Ungrouped / Infrastructure Files\n");
-        prompt.push_str("These files were not assigned to any flow group by static analysis. \
+        prompt.push_str(
+            "These files were not assigned to any flow group by static analysis. \
                          Consider whether any should be reclassified into an existing group \
-                         (use from_group_id='infrastructure') or form a new group via splits.\n\n");
+                         (use from_group_id='infrastructure') or form a new group via splits.\n\n",
+        );
         for file in &request.infrastructure_files {
             prompt.push_str(&format!("- {}\n", file));
         }

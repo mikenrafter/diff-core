@@ -65,8 +65,9 @@ pub async fn fetch_provider_models(
     let api_key = match provider {
         "openrouter" => resolve_api_key(&config.llm, "openrouter").ok(),
         "anthropic" | "openai" | "gemini" => {
-            let key = resolve_api_key(&config.llm, provider)
-                .map_err(|e| ModelListError::Config(format!("No API key for {}: {}", provider, e)))?;
+            let key = resolve_api_key(&config.llm, provider).map_err(|e| {
+                ModelListError::Config(format!("No API key for {}: {}", provider, e))
+            })?;
             Some(key)
         }
         other => return Err(ModelListError::UnknownProvider(other.to_string())),
@@ -194,9 +195,7 @@ fn models_cache_dir() -> PathBuf {
 fn read_models_cache(cache_file: &std::path::Path) -> Option<Vec<ModelInfo>> {
     let metadata = std::fs::metadata(cache_file).ok()?;
     let modified = metadata.modified().ok()?;
-    let age = std::time::SystemTime::now()
-        .duration_since(modified)
-        .ok()?;
+    let age = std::time::SystemTime::now().duration_since(modified).ok()?;
 
     // 24-hour TTL
     if age.as_secs() > 86_400 {
@@ -264,9 +263,7 @@ async fn fetch_anthropic_models(api_key: &str) -> Result<Vec<ModelInfo>, ModelLi
     Ok(models)
 }
 
-async fn fetch_openrouter_models(
-    api_key: Option<&str>,
-) -> Result<Vec<ModelInfo>, ModelListError> {
+async fn fetch_openrouter_models(api_key: Option<&str>) -> Result<Vec<ModelInfo>, ModelListError> {
     let client = reqwest::Client::new();
     let mut request = client.get("https://openrouter.ai/api/v1/models");
     if let Some(key) = api_key {
@@ -389,10 +386,7 @@ async fn fetch_gemini_models(api_key: &str) -> Result<Vec<ModelInfo>, ModelListE
         .filter_map(|m| {
             let full_name = m["name"].as_str()?;
             let id = full_name.strip_prefix("models/").unwrap_or(full_name);
-            let display_name = m["displayName"]
-                .as_str()
-                .unwrap_or(id)
-                .to_string();
+            let display_name = m["displayName"].as_str().unwrap_or(id).to_string();
             let methods = m["supportedGenerationMethods"].as_array()?;
             let supports_content = methods
                 .iter()

@@ -1,569 +1,569 @@
-    use super::*;
-    use crate::ast::{self, ParsedFile};
+use super::*;
+use crate::ast::{self, ParsedFile};
 
-    /// Helper: parse a file and detect heuristic patterns.
-    fn detect_patterns(path: &str, source: &str) -> Vec<HeuristicEdge> {
-        let parsed = ast::parse_file(path, source).unwrap();
-        detect_heuristic_patterns(&parsed)
-    }
+/// Helper: parse a file and detect heuristic patterns.
+fn detect_patterns(path: &str, source: &str) -> Vec<HeuristicEdge> {
+    let parsed = ast::parse_file(path, source).unwrap();
+    detect_heuristic_patterns(&parsed)
+}
 
-    /// Helper: parse multiple files and run full flow analysis.
-    fn analyze_files(files: &[(&str, &str)]) -> FlowAnalysis {
-        let parsed: Vec<ParsedFile> = files
-            .iter()
-            .map(|(path, source)| ast::parse_file(path, source).unwrap())
-            .collect();
-        analyze_data_flow(&parsed, &FlowConfig::default())
-    }
+/// Helper: parse multiple files and run full flow analysis.
+fn analyze_files(files: &[(&str, &str)]) -> FlowAnalysis {
+    let parsed: Vec<ParsedFile> = files
+        .iter()
+        .map(|(path, source)| ast::parse_file(path, source).unwrap())
+        .collect();
+    analyze_data_flow(&parsed, &FlowConfig::default())
+}
 
-    /// Helper: detect frameworks from files.
-    fn detect_fw(files: &[(&str, &str)]) -> Vec<String> {
-        let parsed: Vec<ParsedFile> = files
-            .iter()
-            .map(|(path, source)| ast::parse_file(path, source).unwrap())
-            .collect();
-        detect_frameworks(&parsed)
-    }
+/// Helper: detect frameworks from files.
+fn detect_fw(files: &[(&str, &str)]) -> Vec<String> {
+    let parsed: Vec<ParsedFile> = files
+        .iter()
+        .map(|(path, source)| ast::parse_file(path, source).unwrap())
+        .collect();
+    detect_frameworks(&parsed)
+}
 
-    /// Helper: build graph, enrich, and return it.
-    fn build_and_enrich(files: &[(&str, &str)]) -> SymbolGraph {
-        let parsed: Vec<ParsedFile> = files
-            .iter()
-            .map(|(path, source)| ast::parse_file(path, source).unwrap())
-            .collect();
-        let mut graph = SymbolGraph::build(&parsed);
-        let analysis = analyze_data_flow(&parsed, &FlowConfig::default());
-        enrich_graph(&mut graph, &analysis);
-        graph
-    }
+/// Helper: build graph, enrich, and return it.
+fn build_and_enrich(files: &[(&str, &str)]) -> SymbolGraph {
+    let parsed: Vec<ParsedFile> = files
+        .iter()
+        .map(|(path, source)| ast::parse_file(path, source).unwrap())
+        .collect();
+    let mut graph = SymbolGraph::build(&parsed);
+    let analysis = analyze_data_flow(&parsed, &FlowConfig::default());
+    enrich_graph(&mut graph, &analysis);
+    graph
+}
 
-    // ========================================================================
-    // Heuristic: Database writes (Persistence)
-    // ========================================================================
+// ========================================================================
+// Heuristic: Database writes (Persistence)
+// ========================================================================
 
-    #[test]
-    fn test_heuristic_db_write_save() {
-        let edges = detect_patterns(
-            "src/service.ts",
-            r#"
+#[test]
+fn test_heuristic_db_write_save() {
+    let edges = detect_patterns(
+        "src/service.ts",
+        r#"
 function createUser(data: any) {
     return db.save(data);
 }
 "#,
-        );
+    );
 
-        let persistence: Vec<_> = edges
-            .iter()
-            .filter(|e| e.pattern == FlowPattern::Persistence)
-            .collect();
-        assert_eq!(persistence.len(), 1);
-        assert_eq!(persistence[0].evidence, "db.save");
-        assert_eq!(persistence[0].from_symbol, "src/service.ts::createUser");
-        assert!(persistence[0].confidence >= 0.7);
-    }
+    let persistence: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::Persistence)
+        .collect();
+    assert_eq!(persistence.len(), 1);
+    assert_eq!(persistence[0].evidence, "db.save");
+    assert_eq!(persistence[0].from_symbol, "src/service.ts::createUser");
+    assert!(persistence[0].confidence >= 0.7);
+}
 
-    #[test]
-    fn test_heuristic_db_write_insert() {
-        let edges = detect_patterns(
-            "src/repo.ts",
-            r#"
+#[test]
+fn test_heuristic_db_write_insert() {
+    let edges = detect_patterns(
+        "src/repo.ts",
+        r#"
 function addItem(item: any) {
     return collection.insert(item);
 }
 "#,
-        );
+    );
 
-        let persistence: Vec<_> = edges
-            .iter()
-            .filter(|e| e.pattern == FlowPattern::Persistence)
-            .collect();
-        assert_eq!(persistence.len(), 1);
-        assert_eq!(persistence[0].evidence, "collection.insert");
-    }
+    let persistence: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::Persistence)
+        .collect();
+    assert_eq!(persistence.len(), 1);
+    assert_eq!(persistence[0].evidence, "collection.insert");
+}
 
-    #[test]
-    fn test_heuristic_db_write_create() {
-        let edges = detect_patterns(
-            "src/service.ts",
-            r#"
+#[test]
+fn test_heuristic_db_write_create() {
+    let edges = detect_patterns(
+        "src/service.ts",
+        r#"
 function register(data: any) {
     return prisma.user.create(data);
 }
 "#,
-        );
+    );
 
-        let persistence: Vec<_> = edges
-            .iter()
-            .filter(|e| e.pattern == FlowPattern::Persistence)
-            .collect();
-        assert!(
-            !persistence.is_empty(),
-            "should detect prisma.user.create as persistence"
-        );
-    }
+    let persistence: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::Persistence)
+        .collect();
+    assert!(
+        !persistence.is_empty(),
+        "should detect prisma.user.create as persistence"
+    );
+}
 
-    #[test]
-    fn test_heuristic_db_write_delete() {
-        let edges = detect_patterns(
-            "src/service.ts",
-            r#"
+#[test]
+fn test_heuristic_db_write_delete() {
+    let edges = detect_patterns(
+        "src/service.ts",
+        r#"
 function removeUser(id: string) {
     return userRepo.delete(id);
 }
 "#,
-        );
+    );
 
-        let persistence: Vec<_> = edges
-            .iter()
-            .filter(|e| e.pattern == FlowPattern::Persistence)
-            .collect();
-        assert_eq!(persistence.len(), 1);
-        assert_eq!(persistence[0].evidence, "userRepo.delete");
-    }
+    let persistence: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::Persistence)
+        .collect();
+    assert_eq!(persistence.len(), 1);
+    assert_eq!(persistence[0].evidence, "userRepo.delete");
+}
 
-    #[test]
-    fn test_heuristic_db_write_update() {
-        let edges = detect_patterns(
-            "src/service.ts",
-            r#"
+#[test]
+fn test_heuristic_db_write_update() {
+    let edges = detect_patterns(
+        "src/service.ts",
+        r#"
 function updateProfile(id: string, data: any) {
     return db.update(data);
 }
 "#,
-        );
+    );
 
-        let persistence: Vec<_> = edges
-            .iter()
-            .filter(|e| e.pattern == FlowPattern::Persistence)
-            .collect();
-        assert_eq!(persistence.len(), 1);
-    }
+    let persistence: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::Persistence)
+        .collect();
+    assert_eq!(persistence.len(), 1);
+}
 
-    #[test]
-    fn test_heuristic_db_write_python() {
-        let edges = detect_patterns(
-            "src/service.py",
-            r#"
+#[test]
+fn test_heuristic_db_write_python() {
+    let edges = detect_patterns(
+        "src/service.py",
+        r#"
 def create_user(data):
     session.flush()
     return session.execute(query)
 "#,
-        );
+    );
 
-        let persistence: Vec<_> = edges
-            .iter()
-            .filter(|e| e.pattern == FlowPattern::Persistence)
-            .collect();
-        assert!(
-            persistence.len() >= 1,
-            "should detect session.flush/execute"
-        );
-    }
+    let persistence: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::Persistence)
+        .collect();
+    assert!(
+        persistence.len() >= 1,
+        "should detect session.flush/execute"
+    );
+}
 
-    #[test]
-    fn test_heuristic_db_write_multiple_in_one_function() {
-        let edges = detect_patterns(
-            "src/service.ts",
-            r#"
+#[test]
+fn test_heuristic_db_write_multiple_in_one_function() {
+    let edges = detect_patterns(
+        "src/service.ts",
+        r#"
 function transferFunds(from: string, to: string, amount: number) {
     db.update({ id: from, balance: -amount });
     db.update({ id: to, balance: amount });
     auditStore.insert({ from, to, amount });
 }
 "#,
-        );
+    );
 
-        let persistence: Vec<_> = edges
-            .iter()
-            .filter(|e| e.pattern == FlowPattern::Persistence)
-            .collect();
-        assert_eq!(
-            persistence.len(),
-            3,
-            "should detect all 3 DB write calls in one function"
-        );
-    }
+    let persistence: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::Persistence)
+        .collect();
+    assert_eq!(
+        persistence.len(),
+        3,
+        "should detect all 3 DB write calls in one function"
+    );
+}
 
-    // ========================================================================
-    // Heuristic: Database reads
-    // ========================================================================
+// ========================================================================
+// Heuristic: Database reads
+// ========================================================================
 
-    #[test]
-    fn test_heuristic_db_read_find() {
-        let edges = detect_patterns(
-            "src/service.ts",
-            r#"
+#[test]
+fn test_heuristic_db_read_find() {
+    let edges = detect_patterns(
+        "src/service.ts",
+        r#"
 function getUser(id: string) {
     return userRepo.findOne(id);
 }
 "#,
-        );
+    );
 
-        let reads: Vec<_> = edges
-            .iter()
-            .filter(|e| e.pattern == FlowPattern::DatabaseRead)
-            .collect();
-        assert_eq!(reads.len(), 1);
-        assert_eq!(reads[0].evidence, "userRepo.findOne");
-    }
+    let reads: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::DatabaseRead)
+        .collect();
+    assert_eq!(reads.len(), 1);
+    assert_eq!(reads[0].evidence, "userRepo.findOne");
+}
 
-    #[test]
-    fn test_heuristic_db_read_query() {
-        let edges = detect_patterns(
-            "src/repo.ts",
-            r#"
+#[test]
+fn test_heuristic_db_read_query() {
+    let edges = detect_patterns(
+        "src/repo.ts",
+        r#"
 function listUsers() {
     return db.query("SELECT * FROM users");
 }
 "#,
-        );
+    );
 
-        let reads: Vec<_> = edges
-            .iter()
-            .filter(|e| e.pattern == FlowPattern::DatabaseRead)
-            .collect();
-        assert!(!reads.is_empty(), "should detect db.query as database read");
-    }
+    let reads: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::DatabaseRead)
+        .collect();
+    assert!(!reads.is_empty(), "should detect db.query as database read");
+}
 
-    #[test]
-    fn test_heuristic_db_read_find_many() {
-        let edges = detect_patterns(
-            "src/service.ts",
-            r#"
+#[test]
+fn test_heuristic_db_read_find_many() {
+    let edges = detect_patterns(
+        "src/service.ts",
+        r#"
 function getActiveUsers() {
     return prisma.user.findMany({ where: { active: true } });
 }
 "#,
-        );
+    );
 
-        let reads: Vec<_> = edges
-            .iter()
-            .filter(|e| e.pattern == FlowPattern::DatabaseRead)
-            .collect();
-        assert!(!reads.is_empty());
-    }
+    let reads: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::DatabaseRead)
+        .collect();
+    assert!(!reads.is_empty());
+}
 
-    // ========================================================================
-    // Heuristic: Event emission
-    // ========================================================================
+// ========================================================================
+// Heuristic: Event emission
+// ========================================================================
 
-    #[test]
-    fn test_heuristic_event_emission() {
-        let edges = detect_patterns(
-            "src/handler.ts",
-            r#"
+#[test]
+fn test_heuristic_event_emission() {
+    let edges = detect_patterns(
+        "src/handler.ts",
+        r#"
 function onUserCreated(user: any) {
     eventBus.emit('user:created', user);
 }
 "#,
-        );
+    );
 
-        let emissions: Vec<_> = edges
-            .iter()
-            .filter(|e| e.pattern == FlowPattern::EventEmission)
-            .collect();
-        assert_eq!(emissions.len(), 1);
-        assert_eq!(emissions[0].evidence, "eventBus.emit");
-    }
+    let emissions: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::EventEmission)
+        .collect();
+    assert_eq!(emissions.len(), 1);
+    assert_eq!(emissions[0].evidence, "eventBus.emit");
+}
 
-    #[test]
-    fn test_heuristic_event_publish() {
-        let edges = detect_patterns(
-            "src/service.ts",
-            r#"
+#[test]
+fn test_heuristic_event_publish() {
+    let edges = detect_patterns(
+        "src/service.ts",
+        r#"
 function notifySubscribers(data: any) {
     queue.publish(data);
 }
 "#,
-        );
+    );
 
-        let emissions: Vec<_> = edges
-            .iter()
-            .filter(|e| e.pattern == FlowPattern::EventEmission)
-            .collect();
-        assert_eq!(emissions.len(), 1);
-        assert_eq!(emissions[0].evidence, "queue.publish");
-    }
+    let emissions: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::EventEmission)
+        .collect();
+    assert_eq!(emissions.len(), 1);
+    assert_eq!(emissions[0].evidence, "queue.publish");
+}
 
-    #[test]
-    fn test_heuristic_event_dispatch() {
-        let edges = detect_patterns(
-            "src/handler.ts",
-            r#"
+#[test]
+fn test_heuristic_event_dispatch() {
+    let edges = detect_patterns(
+        "src/handler.ts",
+        r#"
 function handleClick() {
     store.dispatch({ type: 'CLICK' });
 }
 "#,
-        );
+    );
 
-        let emissions: Vec<_> = edges
-            .iter()
-            .filter(|e| e.pattern == FlowPattern::EventEmission)
-            .collect();
-        assert_eq!(emissions.len(), 1);
-    }
+    let emissions: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::EventEmission)
+        .collect();
+    assert_eq!(emissions.len(), 1);
+}
 
-    #[test]
-    fn test_heuristic_event_send() {
-        let edges = detect_patterns(
-            "src/worker.ts",
-            r#"
+#[test]
+fn test_heuristic_event_send() {
+    let edges = detect_patterns(
+        "src/worker.ts",
+        r#"
 function processJob(job: any) {
     channel.send(result);
 }
 "#,
-        );
+    );
 
-        let emissions: Vec<_> = edges
-            .iter()
-            .filter(|e| e.pattern == FlowPattern::EventEmission)
-            .collect();
-        assert_eq!(emissions.len(), 1);
-    }
+    let emissions: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::EventEmission)
+        .collect();
+    assert_eq!(emissions.len(), 1);
+}
 
-    // ========================================================================
-    // Heuristic: Event handling
-    // ========================================================================
+// ========================================================================
+// Heuristic: Event handling
+// ========================================================================
 
-    #[test]
-    fn test_heuristic_event_handling_on() {
-        let edges = detect_patterns(
-            "src/listener.ts",
-            r#"
+#[test]
+fn test_heuristic_event_handling_on() {
+    let edges = detect_patterns(
+        "src/listener.ts",
+        r#"
 function setupListeners() {
     emitter.on('data', handleData);
 }
 "#,
-        );
+    );
 
-        let handlers: Vec<_> = edges
-            .iter()
-            .filter(|e| e.pattern == FlowPattern::EventHandling)
-            .collect();
-        assert_eq!(handlers.len(), 1);
-        assert_eq!(handlers[0].evidence, "emitter.on");
-    }
+    let handlers: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::EventHandling)
+        .collect();
+    assert_eq!(handlers.len(), 1);
+    assert_eq!(handlers[0].evidence, "emitter.on");
+}
 
-    #[test]
-    fn test_heuristic_event_subscribe() {
-        let edges = detect_patterns(
-            "src/consumer.ts",
-            r#"
+#[test]
+fn test_heuristic_event_subscribe() {
+    let edges = detect_patterns(
+        "src/consumer.ts",
+        r#"
 function init() {
     topic.subscribe(processMessage);
 }
 "#,
-        );
+    );
 
-        let handlers: Vec<_> = edges
-            .iter()
-            .filter(|e| e.pattern == FlowPattern::EventHandling)
-            .collect();
-        assert_eq!(handlers.len(), 1);
-    }
+    let handlers: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::EventHandling)
+        .collect();
+    assert_eq!(handlers.len(), 1);
+}
 
-    #[test]
-    fn test_heuristic_event_listen() {
-        let edges = detect_patterns(
-            "src/server.ts",
-            r#"
+#[test]
+fn test_heuristic_event_listen() {
+    let edges = detect_patterns(
+        "src/server.ts",
+        r#"
 function start() {
     server.listen(3000);
 }
 "#,
-        );
+    );
 
-        let handlers: Vec<_> = edges
-            .iter()
-            .filter(|e| e.pattern == FlowPattern::EventHandling)
-            .collect();
-        assert_eq!(handlers.len(), 1);
-    }
+    let handlers: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::EventHandling)
+        .collect();
+    assert_eq!(handlers.len(), 1);
+}
 
-    // ========================================================================
-    // Heuristic: Config reads
-    // ========================================================================
+// ========================================================================
+// Heuristic: Config reads
+// ========================================================================
 
-    #[test]
-    fn test_heuristic_config_read_process_env() {
-        // Note: `process.env.DATABASE_URL` is a member access, not a function call,
-        // so tree-sitter won't capture it as a call site. We test with a function
-        // call pattern like `process.env.get()` or via direct classifier.
-        let call = crate::ast::CallSite {
-            callee: "process.env.DATABASE_URL".to_string(),
-            line: 3,
-            containing_function: Some("getDbUrl".to_string()),
-        };
-        let edge = classify_call_site(&call, "src/config.ts");
-        assert!(edge.is_some(), "should detect process.env as config read");
-        assert_eq!(edge.unwrap().pattern, FlowPattern::ConfigRead);
-    }
+#[test]
+fn test_heuristic_config_read_process_env() {
+    // Note: `process.env.DATABASE_URL` is a member access, not a function call,
+    // so tree-sitter won't capture it as a call site. We test with a function
+    // call pattern like `process.env.get()` or via direct classifier.
+    let call = crate::ast::CallSite {
+        callee: "process.env.DATABASE_URL".to_string(),
+        line: 3,
+        containing_function: Some("getDbUrl".to_string()),
+    };
+    let edge = classify_call_site(&call, "src/config.ts");
+    assert!(edge.is_some(), "should detect process.env as config read");
+    assert_eq!(edge.unwrap().pattern, FlowPattern::ConfigRead);
+}
 
-    #[test]
-    fn test_heuristic_config_read_python_environ() {
-        let edges = detect_patterns(
-            "src/config.py",
-            r#"
+#[test]
+fn test_heuristic_config_read_python_environ() {
+    let edges = detect_patterns(
+        "src/config.py",
+        r#"
 def get_db_url():
     return os.environ.get("DATABASE_URL")
 "#,
-        );
+    );
 
-        // os.environ should be detected (os.environ matches the prefix)
-        let configs: Vec<_> = edges
-            .iter()
-            .filter(|e| e.pattern == FlowPattern::ConfigRead)
-            .collect();
-        assert!(
-            !configs.is_empty(),
-            "should detect os.environ as config read"
-        );
-    }
+    // os.environ should be detected (os.environ matches the prefix)
+    let configs: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::ConfigRead)
+        .collect();
+    assert!(
+        !configs.is_empty(),
+        "should detect os.environ as config read"
+    );
+}
 
-    #[test]
-    fn test_heuristic_config_read_python_getenv() {
-        let edges = detect_patterns(
-            "src/config.py",
-            r#"
+#[test]
+fn test_heuristic_config_read_python_getenv() {
+    let edges = detect_patterns(
+        "src/config.py",
+        r#"
 def get_secret():
     return os.getenv("SECRET_KEY")
 "#,
-        );
+    );
 
-        let configs: Vec<_> = edges
-            .iter()
-            .filter(|e| e.pattern == FlowPattern::ConfigRead)
-            .collect();
-        assert!(!configs.is_empty());
-    }
+    let configs: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::ConfigRead)
+        .collect();
+    assert!(!configs.is_empty());
+}
 
-    // ========================================================================
-    // Heuristic: HTTP calls
-    // ========================================================================
+// ========================================================================
+// Heuristic: HTTP calls
+// ========================================================================
 
-    #[test]
-    fn test_heuristic_http_call_fetch() {
-        let edges = detect_patterns(
-            "src/client.ts",
-            r#"
+#[test]
+fn test_heuristic_http_call_fetch() {
+    let edges = detect_patterns(
+        "src/client.ts",
+        r#"
 function getData() {
     return fetch('/api/data');
 }
 "#,
-        );
+    );
 
-        let http: Vec<_> = edges
-            .iter()
-            .filter(|e| e.pattern == FlowPattern::HttpCall)
-            .collect();
-        assert_eq!(http.len(), 1);
-        assert_eq!(http[0].evidence, "fetch");
-    }
+    let http: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::HttpCall)
+        .collect();
+    assert_eq!(http.len(), 1);
+    assert_eq!(http[0].evidence, "fetch");
+}
 
-    #[test]
-    fn test_heuristic_http_call_axios() {
-        let edges = detect_patterns(
-            "src/api.ts",
-            r#"
+#[test]
+fn test_heuristic_http_call_axios() {
+    let edges = detect_patterns(
+        "src/api.ts",
+        r#"
 function fetchUsers() {
     return axios.get('/users');
 }
 "#,
-        );
+    );
 
-        let http: Vec<_> = edges
-            .iter()
-            .filter(|e| e.pattern == FlowPattern::HttpCall)
-            .collect();
-        assert_eq!(http.len(), 1);
-    }
+    let http: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::HttpCall)
+        .collect();
+    assert_eq!(http.len(), 1);
+}
 
-    #[test]
-    fn test_heuristic_http_call_python_requests() {
-        let edges = detect_patterns(
-            "src/client.py",
-            r#"
+#[test]
+fn test_heuristic_http_call_python_requests() {
+    let edges = detect_patterns(
+        "src/client.py",
+        r#"
 def get_data():
     return requests.get("https://api.example.com/data")
 "#,
-        );
+    );
 
-        let http: Vec<_> = edges
-            .iter()
-            .filter(|e| e.pattern == FlowPattern::HttpCall)
-            .collect();
-        assert_eq!(http.len(), 1);
-    }
+    let http: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::HttpCall)
+        .collect();
+    assert_eq!(http.len(), 1);
+}
 
-    // ========================================================================
-    // Heuristic: Logging
-    // ========================================================================
+// ========================================================================
+// Heuristic: Logging
+// ========================================================================
 
-    #[test]
-    fn test_heuristic_logging_console() {
-        let edges = detect_patterns(
-            "src/service.ts",
-            r#"
+#[test]
+fn test_heuristic_logging_console() {
+    let edges = detect_patterns(
+        "src/service.ts",
+        r#"
 function process(data: any) {
     console.log('processing', data);
     console.error('failed');
 }
 "#,
-        );
+    );
 
-        let logs: Vec<_> = edges
-            .iter()
-            .filter(|e| e.pattern == FlowPattern::Logging)
-            .collect();
-        assert_eq!(logs.len(), 2);
-    }
+    let logs: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::Logging)
+        .collect();
+    assert_eq!(logs.len(), 2);
+}
 
-    #[test]
-    fn test_heuristic_logging_logger() {
-        let edges = detect_patterns(
-            "src/service.ts",
-            r#"
+#[test]
+fn test_heuristic_logging_logger() {
+    let edges = detect_patterns(
+        "src/service.ts",
+        r#"
 function handleRequest(req: any) {
     logger.info('handling request');
     logger.error('failed');
 }
 "#,
-        );
+    );
 
-        let logs: Vec<_> = edges
-            .iter()
-            .filter(|e| e.pattern == FlowPattern::Logging)
-            .collect();
-        assert_eq!(logs.len(), 2);
-    }
+    let logs: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::Logging)
+        .collect();
+    assert_eq!(logs.len(), 2);
+}
 
-    #[test]
-    fn test_heuristic_logging_python() {
-        let edges = detect_patterns(
-            "src/handler.py",
-            r#"
+#[test]
+fn test_heuristic_logging_python() {
+    let edges = detect_patterns(
+        "src/handler.py",
+        r#"
 def process(data):
     logging.info("processing")
     logging.error("failed")
 "#,
-        );
+    );
 
-        let logs: Vec<_> = edges
-            .iter()
-            .filter(|e| e.pattern == FlowPattern::Logging)
-            .collect();
-        assert_eq!(logs.len(), 2);
-    }
+    let logs: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::Logging)
+        .collect();
+    assert_eq!(logs.len(), 2);
+}
 
-    // ========================================================================
-    // False positive guards
-    // ========================================================================
+// ========================================================================
+// False positive guards
+// ========================================================================
 
-    #[test]
-    fn test_no_false_positive_array_methods() {
-        let edges = detect_patterns(
-            "src/utils.ts",
-            r#"
+#[test]
+fn test_no_false_positive_array_methods() {
+    let edges = detect_patterns(
+        "src/utils.ts",
+        r#"
 function process(items: any[]) {
     const found = items.find(x => x.id === 1);
     items.push(newItem);
@@ -575,26 +575,24 @@ function process(items: any[]) {
     items.reverse();
 }
 "#,
-        );
+    );
 
-        let db_patterns: Vec<_> = edges
-            .iter()
-            .filter(|e| {
-                e.pattern == FlowPattern::Persistence || e.pattern == FlowPattern::DatabaseRead
-            })
-            .collect();
-        assert!(
-            db_patterns.is_empty(),
-            "array methods should not trigger DB patterns, got: {:?}",
-            db_patterns
-        );
-    }
+    let db_patterns: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::Persistence || e.pattern == FlowPattern::DatabaseRead)
+        .collect();
+    assert!(
+        db_patterns.is_empty(),
+        "array methods should not trigger DB patterns, got: {:?}",
+        db_patterns
+    );
+}
 
-    #[test]
-    fn test_no_false_positive_map_set_methods() {
-        let edges = detect_patterns(
-            "src/utils.ts",
-            r#"
+#[test]
+fn test_no_false_positive_map_set_methods() {
+    let edges = detect_patterns(
+        "src/utils.ts",
+        r#"
 function process() {
     const m = new Map();
     m.get('key');
@@ -607,304 +605,296 @@ function process() {
     s.has(1);
 }
 "#,
-        );
+    );
 
-        // These should be filtered out as common collection operations
-        let db_patterns: Vec<_> = edges
-            .iter()
-            .filter(|e| {
-                e.pattern == FlowPattern::Persistence || e.pattern == FlowPattern::DatabaseRead
-            })
-            .collect();
-        assert!(
-            db_patterns.is_empty(),
-            "Map/Set methods should not trigger DB patterns, got: {:?}",
-            db_patterns
-        );
-    }
+    // These should be filtered out as common collection operations
+    let db_patterns: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::Persistence || e.pattern == FlowPattern::DatabaseRead)
+        .collect();
+    assert!(
+        db_patterns.is_empty(),
+        "Map/Set methods should not trigger DB patterns, got: {:?}",
+        db_patterns
+    );
+}
 
-    #[test]
-    fn test_no_false_positive_console_as_db() {
-        let edges = detect_patterns(
-            "src/utils.ts",
-            r#"
+#[test]
+fn test_no_false_positive_console_as_db() {
+    let edges = detect_patterns(
+        "src/utils.ts",
+        r#"
 function debug(msg: string) {
     console.log(msg);
 }
 "#,
-        );
+    );
 
-        // console.log should be Logging, not Persistence/DatabaseRead
-        let db_patterns: Vec<_> = edges
-            .iter()
-            .filter(|e| {
-                e.pattern == FlowPattern::Persistence || e.pattern == FlowPattern::DatabaseRead
-            })
-            .collect();
-        assert!(db_patterns.is_empty());
+    // console.log should be Logging, not Persistence/DatabaseRead
+    let db_patterns: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::Persistence || e.pattern == FlowPattern::DatabaseRead)
+        .collect();
+    assert!(db_patterns.is_empty());
 
-        let logs: Vec<_> = edges
-            .iter()
-            .filter(|e| e.pattern == FlowPattern::Logging)
-            .collect();
-        assert_eq!(logs.len(), 1);
-    }
+    let logs: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::Logging)
+        .collect();
+    assert_eq!(logs.len(), 1);
+}
 
-    #[test]
-    fn test_no_false_positive_json_parse() {
-        let edges = detect_patterns(
-            "src/utils.ts",
-            r#"
+#[test]
+fn test_no_false_positive_json_parse() {
+    let edges = detect_patterns(
+        "src/utils.ts",
+        r#"
 function parse(data: string) {
     return JSON.parse(data);
 }
 "#,
-        );
+    );
 
-        let db_patterns: Vec<_> = edges
-            .iter()
-            .filter(|e| {
-                e.pattern == FlowPattern::Persistence || e.pattern == FlowPattern::DatabaseRead
-            })
-            .collect();
-        assert!(db_patterns.is_empty());
-    }
+    let db_patterns: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::Persistence || e.pattern == FlowPattern::DatabaseRead)
+        .collect();
+    assert!(db_patterns.is_empty());
+}
 
-    #[test]
-    fn test_no_false_positive_promise_resolve() {
-        let edges = detect_patterns(
-            "src/utils.ts",
-            r#"
+#[test]
+fn test_no_false_positive_promise_resolve() {
+    let edges = detect_patterns(
+        "src/utils.ts",
+        r#"
 function wrap(value: any) {
     return Promise.resolve(value);
 }
 "#,
-        );
+    );
 
-        // Should not be detected as any pattern (Promise is filtered)
-        assert!(
-            edges.is_empty(),
-            "Promise.resolve should not trigger any pattern"
-        );
-    }
+    // Should not be detected as any pattern (Promise is filtered)
+    assert!(
+        edges.is_empty(),
+        "Promise.resolve should not trigger any pattern"
+    );
+}
 
-    #[test]
-    fn test_no_false_positive_localstorage() {
-        let edges = detect_patterns(
-            "src/store.ts",
-            r#"
+#[test]
+fn test_no_false_positive_localstorage() {
+    let edges = detect_patterns(
+        "src/store.ts",
+        r#"
 function savePreference(key: string, value: string) {
     localStorage.set(key, value);
     localStorage.get(key);
 }
 "#,
-        );
+    );
 
-        // localStorage operations should be filtered
-        let db_patterns: Vec<_> = edges
-            .iter()
-            .filter(|e| {
-                e.pattern == FlowPattern::Persistence || e.pattern == FlowPattern::DatabaseRead
-            })
-            .collect();
-        assert!(
-            db_patterns.is_empty(),
-            "localStorage should not trigger DB patterns"
-        );
-    }
+    // localStorage operations should be filtered
+    let db_patterns: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::Persistence || e.pattern == FlowPattern::DatabaseRead)
+        .collect();
+    assert!(
+        db_patterns.is_empty(),
+        "localStorage should not trigger DB patterns"
+    );
+}
 
-    // ========================================================================
-    // Framework detection
-    // ========================================================================
+// ========================================================================
+// Framework detection
+// ========================================================================
 
-    #[test]
-    fn test_detect_express() {
-        let frameworks = detect_fw(&[(
-            "src/app.ts",
-            r#"
+#[test]
+fn test_detect_express() {
+    let frameworks = detect_fw(&[(
+        "src/app.ts",
+        r#"
 import express from 'express';
 const app = express();
 "#,
-        )]);
-        assert!(frameworks.contains(&"Express".to_string()));
-    }
+    )]);
+    assert!(frameworks.contains(&"Express".to_string()));
+}
 
-    #[test]
-    fn test_detect_nextjs_from_imports() {
-        let frameworks = detect_fw(&[(
-            "src/page.tsx",
-            r#"
+#[test]
+fn test_detect_nextjs_from_imports() {
+    let frameworks = detect_fw(&[(
+        "src/page.tsx",
+        r#"
 import { useRouter } from 'next/router';
 import Head from 'next/head';
 "#,
-        )]);
-        assert!(frameworks.contains(&"Next.js".to_string()));
-    }
+    )]);
+    assert!(frameworks.contains(&"Next.js".to_string()));
+}
 
-    #[test]
-    fn test_detect_nextjs_from_file_structure() {
-        let parsed = vec![ParsedFile {
-            path: "app/dashboard/page.tsx".to_string(),
-            language: crate::ast::Language::TypeScript,
-            definitions: vec![],
-            imports: vec![],
-            exports: vec![],
-            call_sites: vec![],
-        }];
-        let frameworks = detect_frameworks(&parsed);
-        assert!(frameworks.contains(&"Next.js".to_string()));
-    }
+#[test]
+fn test_detect_nextjs_from_file_structure() {
+    let parsed = vec![ParsedFile {
+        path: "app/dashboard/page.tsx".to_string(),
+        language: crate::ast::Language::TypeScript,
+        definitions: vec![],
+        imports: vec![],
+        exports: vec![],
+        call_sites: vec![],
+    }];
+    let frameworks = detect_frameworks(&parsed);
+    assert!(frameworks.contains(&"Next.js".to_string()));
+}
 
-    #[test]
-    fn test_detect_react() {
-        let frameworks = detect_fw(&[(
-            "src/App.tsx",
-            r#"
+#[test]
+fn test_detect_react() {
+    let frameworks = detect_fw(&[(
+        "src/App.tsx",
+        r#"
 import React from 'react';
 import { useState } from 'react';
 "#,
-        )]);
-        assert!(frameworks.contains(&"React".to_string()));
-    }
+    )]);
+    assert!(frameworks.contains(&"React".to_string()));
+}
 
-    #[test]
-    fn test_detect_fastapi() {
-        let frameworks = detect_fw(&[(
-            "src/main.py",
-            r#"
+#[test]
+fn test_detect_fastapi() {
+    let frameworks = detect_fw(&[(
+        "src/main.py",
+        r#"
 from fastapi import FastAPI
 app = FastAPI()
 "#,
-        )]);
-        assert!(frameworks.contains(&"FastAPI".to_string()));
-    }
+    )]);
+    assert!(frameworks.contains(&"FastAPI".to_string()));
+}
 
-    #[test]
-    fn test_detect_flask() {
-        let frameworks = detect_fw(&[(
-            "src/app.py",
-            r#"
+#[test]
+fn test_detect_flask() {
+    let frameworks = detect_fw(&[(
+        "src/app.py",
+        r#"
 from flask import Flask
 app = Flask(__name__)
 "#,
-        )]);
-        assert!(frameworks.contains(&"Flask".to_string()));
-    }
+    )]);
+    assert!(frameworks.contains(&"Flask".to_string()));
+}
 
-    #[test]
-    fn test_detect_django() {
-        let frameworks = detect_fw(&[(
-            "src/views.py",
-            r#"
+#[test]
+fn test_detect_django() {
+    let frameworks = detect_fw(&[(
+        "src/views.py",
+        r#"
 from django.http import HttpResponse
 from django.views import View
 "#,
-        )]);
-        assert!(frameworks.contains(&"Django".to_string()));
-    }
+    )]);
+    assert!(frameworks.contains(&"Django".to_string()));
+}
 
-    #[test]
-    fn test_detect_prisma() {
-        let frameworks = detect_fw(&[(
-            "src/db.ts",
-            r#"
+#[test]
+fn test_detect_prisma() {
+    let frameworks = detect_fw(&[(
+        "src/db.ts",
+        r#"
 import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 "#,
-        )]);
-        assert!(frameworks.contains(&"Prisma".to_string()));
-    }
+    )]);
+    assert!(frameworks.contains(&"Prisma".to_string()));
+}
 
-    #[test]
-    fn test_detect_effect_ts() {
-        let frameworks = detect_fw(&[(
-            "src/service.ts",
-            r#"
+#[test]
+fn test_detect_effect_ts() {
+    let frameworks = detect_fw(&[(
+        "src/service.ts",
+        r#"
 import { Effect } from 'effect';
 import { HttpApi } from '@effect/platform';
 "#,
-        )]);
-        assert!(frameworks.contains(&"Effect.ts".to_string()));
-    }
+    )]);
+    assert!(frameworks.contains(&"Effect.ts".to_string()));
+}
 
-    #[test]
-    fn test_detect_multiple_frameworks() {
-        let frameworks = detect_fw(&[
-            (
-                "src/app.ts",
-                r#"
+#[test]
+fn test_detect_multiple_frameworks() {
+    let frameworks = detect_fw(&[
+        (
+            "src/app.ts",
+            r#"
 import express from 'express';
 import { PrismaClient } from '@prisma/client';
 "#,
-            ),
-            (
-                "src/App.tsx",
-                r#"
+        ),
+        (
+            "src/App.tsx",
+            r#"
 import React from 'react';
 "#,
-            ),
-        ]);
-        assert!(frameworks.contains(&"Express".to_string()));
-        assert!(frameworks.contains(&"Prisma".to_string()));
-        assert!(frameworks.contains(&"React".to_string()));
-    }
+        ),
+    ]);
+    assert!(frameworks.contains(&"Express".to_string()));
+    assert!(frameworks.contains(&"Prisma".to_string()));
+    assert!(frameworks.contains(&"React".to_string()));
+}
 
-    #[test]
-    fn test_detect_no_frameworks() {
-        let frameworks = detect_fw(&[(
-            "src/utils.ts",
-            r#"
+#[test]
+fn test_detect_no_frameworks() {
+    let frameworks = detect_fw(&[(
+        "src/utils.ts",
+        r#"
 function add(a: number, b: number) { return a + b; }
 "#,
-        )]);
-        assert!(frameworks.is_empty());
-    }
+    )]);
+    assert!(frameworks.is_empty());
+}
 
-    #[test]
-    fn test_detect_frameworks_sorted() {
-        let frameworks = detect_fw(&[(
-            "src/app.ts",
-            r#"
+#[test]
+fn test_detect_frameworks_sorted() {
+    let frameworks = detect_fw(&[(
+        "src/app.ts",
+        r#"
 import { z } from 'zod';
 import express from 'express';
 import { PrismaClient } from '@prisma/client';
 "#,
-        )]);
-        // Should be sorted alphabetically
-        let is_sorted = frameworks.windows(2).all(|w| w[0] <= w[1]);
-        assert!(is_sorted, "frameworks should be sorted: {:?}", frameworks);
-    }
+    )]);
+    // Should be sorted alphabetically
+    let is_sorted = frameworks.windows(2).all(|w| w[0] <= w[1]);
+    assert!(is_sorted, "frameworks should be sorted: {:?}", frameworks);
+}
 
-    #[test]
-    fn test_detect_frameworks_deduplicated() {
-        let frameworks = detect_fw(&[
-            (
-                "src/a.ts",
-                r#"
+#[test]
+fn test_detect_frameworks_deduplicated() {
+    let frameworks = detect_fw(&[
+        (
+            "src/a.ts",
+            r#"
 import React from 'react';
 "#,
-            ),
-            (
-                "src/b.ts",
-                r#"
+        ),
+        (
+            "src/b.ts",
+            r#"
 import { useState } from 'react';
 import { useEffect } from 'react';
 "#,
-            ),
-        ]);
-        let react_count = frameworks.iter().filter(|f| *f == "React").count();
-        assert_eq!(react_count, 1, "React should appear exactly once");
-    }
+        ),
+    ]);
+    let react_count = frameworks.iter().filter(|f| *f == "React").count();
+    assert_eq!(react_count, 1, "React should appear exactly once");
+}
 
-    // ========================================================================
-    // Go framework detection
-    // ========================================================================
+// ========================================================================
+// Go framework detection
+// ========================================================================
 
-    #[test]
-    fn test_detect_go_gin_framework() {
-        let frameworks = detect_fw(&[(
-            "main.go",
-            r#"
+#[test]
+fn test_detect_go_gin_framework() {
+    let frameworks = detect_fw(&[(
+        "main.go",
+        r#"
 package main
 
 import "github.com/gin-gonic/gin"
@@ -914,19 +904,19 @@ func main() {
     r.Run(":8080")
 }
 "#,
-        )]);
-        assert!(
-            frameworks.contains(&"Gin".to_string()),
-            "should detect Gin framework, got: {:?}",
-            frameworks,
-        );
-    }
+    )]);
+    assert!(
+        frameworks.contains(&"Gin".to_string()),
+        "should detect Gin framework, got: {:?}",
+        frameworks,
+    );
+}
 
-    #[test]
-    fn test_detect_go_multiple_frameworks() {
-        let frameworks = detect_fw(&[(
-            "main.go",
-            r#"
+#[test]
+fn test_detect_go_multiple_frameworks() {
+    let frameworks = detect_fw(&[(
+        "main.go",
+        r#"
 package main
 
 import (
@@ -939,17 +929,17 @@ func main() {
     http.ListenAndServe(":8080", nil)
 }
 "#,
-        )]);
-        assert!(frameworks.contains(&"Go net/http".to_string()));
-        assert!(frameworks.contains(&"Cobra".to_string()));
-        assert!(frameworks.contains(&"GORM".to_string()));
-    }
+    )]);
+    assert!(frameworks.contains(&"Go net/http".to_string()));
+    assert!(frameworks.contains(&"Cobra".to_string()));
+    assert!(frameworks.contains(&"GORM".to_string()));
+}
 
-    #[test]
-    fn test_detect_go_grpc_framework() {
-        let frameworks = detect_fw(&[(
-            "server.go",
-            r#"
+#[test]
+fn test_detect_go_grpc_framework() {
+    let frameworks = detect_fw(&[(
+        "server.go",
+        r#"
 package main
 
 import "google.golang.org/grpc"
@@ -958,23 +948,23 @@ func main() {
     s := grpc.NewServer()
 }
 "#,
-        )]);
-        assert!(
-            frameworks.contains(&"gRPC".to_string()),
-            "should detect gRPC framework, got: {:?}",
-            frameworks,
-        );
-    }
+    )]);
+    assert!(
+        frameworks.contains(&"gRPC".to_string()),
+        "should detect gRPC framework, got: {:?}",
+        frameworks,
+    );
+}
 
-    // ========================================================================
-    // Full flow analysis integration
-    // ========================================================================
+// ========================================================================
+// Full flow analysis integration
+// ========================================================================
 
-    #[test]
-    fn test_analyze_full_flow_mixed_patterns() {
-        let analysis = analyze_files(&[(
-            "src/handler.ts",
-            r#"
+#[test]
+fn test_analyze_full_flow_mixed_patterns() {
+    let analysis = analyze_files(&[(
+        "src/handler.ts",
+        r#"
 import { validate } from './validator';
 
 function handleCreateUser(req: any) {
@@ -985,645 +975,645 @@ function handleCreateUser(req: any) {
     return user;
 }
 "#,
-        )]);
+    )]);
 
-        let patterns: Vec<&FlowPattern> = analysis
-            .heuristic_edges
-            .iter()
-            .map(|e| &e.pattern)
-            .collect();
+    let patterns: Vec<&FlowPattern> = analysis
+        .heuristic_edges
+        .iter()
+        .map(|e| &e.pattern)
+        .collect();
 
-        assert!(
-            patterns.contains(&&FlowPattern::Logging),
-            "should detect console.log"
-        );
-        assert!(
-            patterns.contains(&&FlowPattern::Persistence),
-            "should detect db.save"
-        );
-        assert!(
-            patterns.contains(&&FlowPattern::EventEmission),
-            "should detect eventBus.emit"
-        );
-    }
+    assert!(
+        patterns.contains(&&FlowPattern::Logging),
+        "should detect console.log"
+    );
+    assert!(
+        patterns.contains(&&FlowPattern::Persistence),
+        "should detect db.save"
+    );
+    assert!(
+        patterns.contains(&&FlowPattern::EventEmission),
+        "should detect eventBus.emit"
+    );
+}
 
-    #[test]
-    fn test_analyze_empty_files() {
-        let analysis = analyze_files(&[]);
-        assert!(analysis.heuristic_edges.is_empty());
-        assert!(analysis.frameworks_detected.is_empty());
-    }
+#[test]
+fn test_analyze_empty_files() {
+    let analysis = analyze_files(&[]);
+    assert!(analysis.heuristic_edges.is_empty());
+    assert!(analysis.frameworks_detected.is_empty());
+}
 
-    #[test]
-    fn test_analyze_no_patterns() {
-        let analysis = analyze_files(&[(
-            "src/utils.ts",
-            r#"
+#[test]
+fn test_analyze_no_patterns() {
+    let analysis = analyze_files(&[(
+        "src/utils.ts",
+        r#"
 function add(a: number, b: number): number {
     return a + b;
 }
 "#,
-        )]);
-        assert!(analysis.heuristic_edges.is_empty());
-    }
+    )]);
+    assert!(analysis.heuristic_edges.is_empty());
+}
 
-    // ========================================================================
-    // Graph enrichment
-    // ========================================================================
+// ========================================================================
+// Graph enrichment
+// ========================================================================
 
-    #[test]
-    fn test_enrich_graph_adds_writes_edge() {
-        let graph = build_and_enrich(&[
-            (
-                "src/db.ts",
-                r#"
+#[test]
+fn test_enrich_graph_adds_writes_edge() {
+    let graph = build_and_enrich(&[
+        (
+            "src/db.ts",
+            r#"
 export function save(data: any) { return data; }
 "#,
-            ),
-            (
-                "src/service.ts",
-                r#"
+        ),
+        (
+            "src/service.ts",
+            r#"
 import { save } from './db';
 function createUser(data: any) {
     return db.save(data);
 }
 "#,
-            ),
-        ]);
+        ),
+    ]);
 
-        let writes_edges: Vec<_> = graph
-            .edges()
-            .into_iter()
-            .filter(|(_, _, et)| **et == EdgeType::Writes)
-            .collect();
+    let writes_edges: Vec<_> = graph
+        .edges()
+        .into_iter()
+        .filter(|(_, _, et)| **et == EdgeType::Writes)
+        .collect();
 
-        // There should be a Writes edge from createUser (or the service module)
-        assert!(
-            !writes_edges.is_empty(),
-            "should have Writes edge from heuristic inference"
-        );
-    }
+    // There should be a Writes edge from createUser (or the service module)
+    assert!(
+        !writes_edges.is_empty(),
+        "should have Writes edge from heuristic inference"
+    );
+}
 
-    #[test]
-    fn test_enrich_graph_adds_emits_edge() {
-        let graph = build_and_enrich(&[(
-            "src/handler.ts",
-            r#"
+#[test]
+fn test_enrich_graph_adds_emits_edge() {
+    let graph = build_and_enrich(&[(
+        "src/handler.ts",
+        r#"
 function notify(data: any) {
     eventBus.emit('event', data);
 }
 "#,
-        )]);
+    )]);
 
-        let emits_edges: Vec<_> = graph
-            .edges()
-            .into_iter()
-            .filter(|(_, _, et)| **et == EdgeType::Emits)
-            .collect();
+    let emits_edges: Vec<_> = graph
+        .edges()
+        .into_iter()
+        .filter(|(_, _, et)| **et == EdgeType::Emits)
+        .collect();
 
-        // Emits edge should exist (from notify to module node)
-        // Note: won't exist if from_symbol == module node (self-edge guard)
-        // The function node should have an Emits edge
-        assert!(
-            !emits_edges.is_empty(),
-            "should have Emits edge from heuristic inference"
-        );
-    }
+    // Emits edge should exist (from notify to module node)
+    // Note: won't exist if from_symbol == module node (self-edge guard)
+    // The function node should have an Emits edge
+    assert!(
+        !emits_edges.is_empty(),
+        "should have Emits edge from heuristic inference"
+    );
+}
 
-    #[test]
-    fn test_enrich_graph_no_logging_edges() {
-        let graph = build_and_enrich(&[(
-            "src/service.ts",
-            r#"
+#[test]
+fn test_enrich_graph_no_logging_edges() {
+    let graph = build_and_enrich(&[(
+        "src/service.ts",
+        r#"
 function process(data: any) {
     console.log('processing');
     return data;
 }
 "#,
-        )]);
+    )]);
 
-        // Logging should NOT create graph edges
-        let all_edges = graph.edges();
-        let logging_related: Vec<_> = all_edges
-            .iter()
-            .filter(|(f, _, _)| f.contains("process"))
-            .collect();
-        // process should have no outgoing edges (console.log is filtered from graph)
-        assert!(
-            logging_related.is_empty(),
-            "logging should not create graph edges"
-        );
-    }
+    // Logging should NOT create graph edges
+    let all_edges = graph.edges();
+    let logging_related: Vec<_> = all_edges
+        .iter()
+        .filter(|(f, _, _)| f.contains("process"))
+        .collect();
+    // process should have no outgoing edges (console.log is filtered from graph)
+    assert!(
+        logging_related.is_empty(),
+        "logging should not create graph edges"
+    );
+}
 
-    // ========================================================================
-    // Call chain tracing
-    // ========================================================================
+// ========================================================================
+// Call chain tracing
+// ========================================================================
 
-    #[test]
-    fn test_trace_call_chain_simple() {
-        let parsed: Vec<ParsedFile> = [
-            (
-                "src/a.ts",
-                r#"
+#[test]
+fn test_trace_call_chain_simple() {
+    let parsed: Vec<ParsedFile> = [
+        (
+            "src/a.ts",
+            r#"
 import { funcB } from './b';
 export function funcA() { funcB(); }
 "#,
-            ),
-            (
-                "src/b.ts",
-                r#"
+        ),
+        (
+            "src/b.ts",
+            r#"
 import { funcC } from './c';
 export function funcB() { funcC(); }
 "#,
-            ),
-            (
-                "src/c.ts",
-                r#"
+        ),
+        (
+            "src/c.ts",
+            r#"
 export function funcC() { return 42; }
 "#,
-            ),
-        ]
-        .iter()
-        .map(|(path, source)| ast::parse_file(path, source).unwrap())
-        .collect();
+        ),
+    ]
+    .iter()
+    .map(|(path, source)| ast::parse_file(path, source).unwrap())
+    .collect();
 
-        let graph = SymbolGraph::build(&parsed);
-        let chain = trace_call_chain(&graph, "src/a.ts::funcA", 10);
+    let graph = SymbolGraph::build(&parsed);
+    let chain = trace_call_chain(&graph, "src/a.ts::funcA", 10);
 
-        assert!(
-            chain.contains(&"src/b.ts::funcB".to_string()),
-            "should reach funcB from funcA"
-        );
-        assert!(
-            chain.contains(&"src/c.ts::funcC".to_string()),
-            "should reach funcC from funcA through funcB"
-        );
-    }
+    assert!(
+        chain.contains(&"src/b.ts::funcB".to_string()),
+        "should reach funcB from funcA"
+    );
+    assert!(
+        chain.contains(&"src/c.ts::funcC".to_string()),
+        "should reach funcC from funcA through funcB"
+    );
+}
 
-    #[test]
-    fn test_trace_call_chain_depth_limit() {
-        let parsed: Vec<ParsedFile> = [
-            (
-                "src/a.ts",
-                r#"
+#[test]
+fn test_trace_call_chain_depth_limit() {
+    let parsed: Vec<ParsedFile> = [
+        (
+            "src/a.ts",
+            r#"
 import { funcB } from './b';
 export function funcA() { funcB(); }
 "#,
-            ),
-            (
-                "src/b.ts",
-                r#"
+        ),
+        (
+            "src/b.ts",
+            r#"
 import { funcC } from './c';
 export function funcB() { funcC(); }
 "#,
-            ),
-            (
-                "src/c.ts",
-                r#"
+        ),
+        (
+            "src/c.ts",
+            r#"
 export function funcC() { return 42; }
 "#,
-            ),
-        ]
-        .iter()
-        .map(|(path, source)| ast::parse_file(path, source).unwrap())
-        .collect();
+        ),
+    ]
+    .iter()
+    .map(|(path, source)| ast::parse_file(path, source).unwrap())
+    .collect();
 
-        let graph = SymbolGraph::build(&parsed);
+    let graph = SymbolGraph::build(&parsed);
 
-        // Depth 1 should only reach direct callees
-        let chain = trace_call_chain(&graph, "src/a.ts::funcA", 1);
-        assert!(
-            chain.contains(&"src/b.ts::funcB".to_string()),
-            "depth 1 should reach funcB"
-        );
-        assert!(
-            !chain.contains(&"src/c.ts::funcC".to_string()),
-            "depth 1 should NOT reach funcC"
-        );
-    }
+    // Depth 1 should only reach direct callees
+    let chain = trace_call_chain(&graph, "src/a.ts::funcA", 1);
+    assert!(
+        chain.contains(&"src/b.ts::funcB".to_string()),
+        "depth 1 should reach funcB"
+    );
+    assert!(
+        !chain.contains(&"src/c.ts::funcC".to_string()),
+        "depth 1 should NOT reach funcC"
+    );
+}
 
-    #[test]
-    fn test_trace_call_chain_nonexistent_start() {
-        let parsed: Vec<ParsedFile> = [(
-            "src/a.ts",
-            r#"
+#[test]
+fn test_trace_call_chain_nonexistent_start() {
+    let parsed: Vec<ParsedFile> = [(
+        "src/a.ts",
+        r#"
 export function funcA() { return 1; }
 "#,
-        )]
-        .iter()
-        .map(|(path, source)| ast::parse_file(path, source).unwrap())
-        .collect();
+    )]
+    .iter()
+    .map(|(path, source)| ast::parse_file(path, source).unwrap())
+    .collect();
 
-        let graph = SymbolGraph::build(&parsed);
-        let chain = trace_call_chain(&graph, "nonexistent::func", 10);
-        assert!(chain.is_empty());
-    }
+    let graph = SymbolGraph::build(&parsed);
+    let chain = trace_call_chain(&graph, "nonexistent::func", 10);
+    assert!(chain.is_empty());
+}
 
-    #[test]
-    fn test_trace_call_chain_no_calls() {
-        let parsed: Vec<ParsedFile> = [(
-            "src/a.ts",
-            r#"
+#[test]
+fn test_trace_call_chain_no_calls() {
+    let parsed: Vec<ParsedFile> = [(
+        "src/a.ts",
+        r#"
 export function funcA() { return 1; }
 "#,
-        )]
-        .iter()
-        .map(|(path, source)| ast::parse_file(path, source).unwrap())
-        .collect();
+    )]
+    .iter()
+    .map(|(path, source)| ast::parse_file(path, source).unwrap())
+    .collect();
 
-        let graph = SymbolGraph::build(&parsed);
-        let chain = trace_call_chain(&graph, "src/a.ts::funcA", 10);
-        assert!(chain.is_empty());
-    }
+    let graph = SymbolGraph::build(&parsed);
+    let chain = trace_call_chain(&graph, "src/a.ts::funcA", 10);
+    assert!(chain.is_empty());
+}
 
-    #[test]
-    fn test_trace_call_chain_cyclic() {
-        let parsed: Vec<ParsedFile> = [
-            (
-                "src/a.ts",
-                r#"
+#[test]
+fn test_trace_call_chain_cyclic() {
+    let parsed: Vec<ParsedFile> = [
+        (
+            "src/a.ts",
+            r#"
 import { funcB } from './b';
 export function funcA() { funcB(); }
 "#,
-            ),
-            (
-                "src/b.ts",
-                r#"
+        ),
+        (
+            "src/b.ts",
+            r#"
 import { funcA } from './a';
 export function funcB() { funcA(); }
 "#,
-            ),
-        ]
-        .iter()
-        .map(|(path, source)| ast::parse_file(path, source).unwrap())
-        .collect();
+        ),
+    ]
+    .iter()
+    .map(|(path, source)| ast::parse_file(path, source).unwrap())
+    .collect();
 
-        let graph = SymbolGraph::build(&parsed);
-        // Should not infinite loop
-        let chain = trace_call_chain(&graph, "src/a.ts::funcA", 10);
-        assert!(
-            chain.contains(&"src/b.ts::funcB".to_string()),
-            "should reach funcB despite cycle"
-        );
-        // funcA should not appear in chain (it's the start)
-        // funcB should appear exactly once
-        let funcb_count = chain.iter().filter(|s| *s == "src/b.ts::funcB").count();
-        assert_eq!(funcb_count, 1, "funcB should appear exactly once");
-    }
+    let graph = SymbolGraph::build(&parsed);
+    // Should not infinite loop
+    let chain = trace_call_chain(&graph, "src/a.ts::funcA", 10);
+    assert!(
+        chain.contains(&"src/b.ts::funcB".to_string()),
+        "should reach funcB despite cycle"
+    );
+    // funcA should not appear in chain (it's the start)
+    // funcB should appear exactly once
+    let funcb_count = chain.iter().filter(|s| *s == "src/b.ts::funcB").count();
+    assert_eq!(funcb_count, 1, "funcB should appear exactly once");
+}
 
-    // ========================================================================
-    // Confidence scoring
-    // ========================================================================
+// ========================================================================
+// Confidence scoring
+// ========================================================================
 
-    #[test]
-    fn test_confidence_orm_specific_high() {
-        let c = confidence_for_db_pattern("prisma.user.create");
-        assert!(
-            c >= 0.9,
-            "ORM-specific patterns should have high confidence"
-        );
-    }
+#[test]
+fn test_confidence_orm_specific_high() {
+    let c = confidence_for_db_pattern("prisma.user.create");
+    assert!(
+        c >= 0.9,
+        "ORM-specific patterns should have high confidence"
+    );
+}
 
-    #[test]
-    fn test_confidence_db_receiver_high() {
-        let c = confidence_for_db_pattern("db.save");
-        assert!(c >= 0.9, "db.* patterns should have high confidence");
-    }
+#[test]
+fn test_confidence_db_receiver_high() {
+    let c = confidence_for_db_pattern("db.save");
+    assert!(c >= 0.9, "db.* patterns should have high confidence");
+}
 
-    #[test]
-    fn test_confidence_repo_receiver_high() {
-        let c = confidence_for_db_pattern("userRepo.save");
-        assert!(c >= 0.9, "repo.* patterns should have high confidence");
-    }
+#[test]
+fn test_confidence_repo_receiver_high() {
+    let c = confidence_for_db_pattern("userRepo.save");
+    assert!(c >= 0.9, "repo.* patterns should have high confidence");
+}
 
-    #[test]
-    fn test_confidence_generic_medium() {
-        let c = confidence_for_db_pattern("service.save");
-        assert!(
-            c < 0.9 && c >= 0.5,
-            "generic patterns should have medium confidence: {}",
-            c
-        );
-    }
+#[test]
+fn test_confidence_generic_medium() {
+    let c = confidence_for_db_pattern("service.save");
+    assert!(
+        c < 0.9 && c >= 0.5,
+        "generic patterns should have medium confidence: {}",
+        c
+    );
+}
 
-    // ========================================================================
-    // Edge cases
-    // ========================================================================
+// ========================================================================
+// Edge cases
+// ========================================================================
 
-    #[test]
-    fn test_module_level_call() {
-        let edges = detect_patterns(
-            "src/setup.ts",
-            r#"
+#[test]
+fn test_module_level_call() {
+    let edges = detect_patterns(
+        "src/setup.ts",
+        r#"
 db.save({ init: true });
 "#,
-        );
+    );
 
-        let persistence: Vec<_> = edges
-            .iter()
-            .filter(|e| e.pattern == FlowPattern::Persistence)
-            .collect();
-        assert_eq!(persistence.len(), 1);
-        // Module-level calls use the file path as from_symbol
-        assert_eq!(persistence[0].from_symbol, "src/setup.ts");
-    }
+    let persistence: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::Persistence)
+        .collect();
+    assert_eq!(persistence.len(), 1);
+    // Module-level calls use the file path as from_symbol
+    assert_eq!(persistence[0].from_symbol, "src/setup.ts");
+}
 
-    #[test]
-    fn test_line_numbers_preserved() {
-        let edges = detect_patterns(
-            "src/service.ts",
-            r#"
+#[test]
+fn test_line_numbers_preserved() {
+    let edges = detect_patterns(
+        "src/service.ts",
+        r#"
 function handler() {
     console.log('start');
     db.save(data);
     eventBus.emit('done');
 }
 "#,
-        );
+    );
 
-        assert!(!edges.is_empty());
-        // All edges should have valid line numbers
-        for edge in &edges {
-            assert!(edge.line > 0, "line number should be positive");
-        }
+    assert!(!edges.is_empty());
+    // All edges should have valid line numbers
+    for edge in &edges {
+        assert!(edge.line > 0, "line number should be positive");
     }
+}
 
-    #[test]
-    fn test_pattern_in_nested_function() {
-        let edges = detect_patterns(
-            "src/handler.ts",
-            r#"
+#[test]
+fn test_pattern_in_nested_function() {
+    let edges = detect_patterns(
+        "src/handler.ts",
+        r#"
 function outer() {
     function inner() {
         db.save(data);
     }
 }
 "#,
-        );
+    );
 
-        let persistence: Vec<_> = edges
-            .iter()
-            .filter(|e| e.pattern == FlowPattern::Persistence)
-            .collect();
-        assert_eq!(persistence.len(), 1);
-        // Should attribute to the innermost containing function
-        assert!(persistence[0].from_symbol.contains("inner"));
+    let persistence: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::Persistence)
+        .collect();
+    assert_eq!(persistence.len(), 1);
+    // Should attribute to the innermost containing function
+    assert!(persistence[0].from_symbol.contains("inner"));
+}
+
+// ========================================================================
+// Property-based tests
+// ========================================================================
+
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// Generate a random callee string.
+    fn callee_strategy() -> impl Strategy<Value = String> {
+        prop_oneof![
+            // Normal function calls
+            "[a-z][a-zA-Z0-9]{0,15}".prop_map(|s| s),
+            // Method calls
+            "[a-z][a-zA-Z0-9]{0,10}\\.[a-z][a-zA-Z0-9]{0,10}".prop_map(|s| s),
+            // Known DB methods
+            Just("db.save".to_string()),
+            Just("db.find".to_string()),
+            Just("db.delete".to_string()),
+            // Known event methods
+            Just("emitter.emit".to_string()),
+            Just("bus.publish".to_string()),
+            // Known config
+            Just("process.env".to_string()),
+            // Known logging
+            Just("console.log".to_string()),
+            Just("logger.info".to_string()),
+            // Known HTTP
+            Just("fetch".to_string()),
+            Just("axios.get".to_string()),
+        ]
     }
 
-    // ========================================================================
-    // Property-based tests
-    // ========================================================================
-
-    mod proptests {
-        use super::*;
-        use proptest::prelude::*;
-
-        /// Generate a random callee string.
-        fn callee_strategy() -> impl Strategy<Value = String> {
-            prop_oneof![
-                // Normal function calls
-                "[a-z][a-zA-Z0-9]{0,15}".prop_map(|s| s),
-                // Method calls
-                "[a-z][a-zA-Z0-9]{0,10}\\.[a-z][a-zA-Z0-9]{0,10}".prop_map(|s| s),
-                // Known DB methods
-                Just("db.save".to_string()),
-                Just("db.find".to_string()),
-                Just("db.delete".to_string()),
-                // Known event methods
-                Just("emitter.emit".to_string()),
-                Just("bus.publish".to_string()),
-                // Known config
-                Just("process.env".to_string()),
-                // Known logging
-                Just("console.log".to_string()),
-                Just("logger.info".to_string()),
-                // Known HTTP
-                Just("fetch".to_string()),
-                Just("axios.get".to_string()),
-            ]
+    proptest! {
+        #[test]
+        fn prop_classify_never_panics(callee in callee_strategy()) {
+            let call = CallSite {
+                callee,
+                line: 1,
+                containing_function: Some("testFunc".to_string()),
+            };
+            // Should never panic regardless of input
+            let _ = classify_call_site(&call, "test.ts");
         }
 
-        proptest! {
-            #[test]
-            fn prop_classify_never_panics(callee in callee_strategy()) {
-                let call = CallSite {
-                    callee,
-                    line: 1,
-                    containing_function: Some("testFunc".to_string()),
-                };
-                // Should never panic regardless of input
-                let _ = classify_call_site(&call, "test.ts");
+        #[test]
+        fn prop_confidence_in_range(callee in "[a-z][a-zA-Z0-9.]{0,30}") {
+            let c = confidence_for_db_pattern(&callee);
+            prop_assert!(c >= 0.0 && c <= 1.0,
+                "confidence {} for '{}' should be in [0.0, 1.0]", c, callee);
+        }
+
+        #[test]
+        fn prop_heuristic_edge_has_valid_fields(
+            func_name in "[a-z][a-zA-Z0-9]{0,10}",
+            callee in callee_strategy()
+        ) {
+            let call = CallSite {
+                callee: callee.clone(),
+                line: 42,
+                containing_function: Some(func_name),
+            };
+            if let Some(edge) = classify_call_site(&call, "src/test.ts") {
+                prop_assert!(!edge.from_symbol.is_empty());
+                prop_assert!(!edge.file.is_empty());
+                prop_assert!(!edge.evidence.is_empty());
+                prop_assert!(edge.confidence > 0.0 && edge.confidence <= 1.0);
+                prop_assert!(edge.line == 42);
             }
+        }
 
-            #[test]
-            fn prop_confidence_in_range(callee in "[a-z][a-zA-Z0-9.]{0,30}") {
-                let c = confidence_for_db_pattern(&callee);
-                prop_assert!(c >= 0.0 && c <= 1.0,
-                    "confidence {} for '{}' should be in [0.0, 1.0]", c, callee);
-            }
-
-            #[test]
-            fn prop_heuristic_edge_has_valid_fields(
-                func_name in "[a-z][a-zA-Z0-9]{0,10}",
-                callee in callee_strategy()
-            ) {
-                let call = CallSite {
-                    callee: callee.clone(),
-                    line: 42,
-                    containing_function: Some(func_name),
-                };
-                if let Some(edge) = classify_call_site(&call, "src/test.ts") {
-                    prop_assert!(!edge.from_symbol.is_empty());
-                    prop_assert!(!edge.file.is_empty());
-                    prop_assert!(!edge.evidence.is_empty());
-                    prop_assert!(edge.confidence > 0.0 && edge.confidence <= 1.0);
-                    prop_assert!(edge.line == 42);
-                }
-            }
-
-            #[test]
-            fn prop_frameworks_always_sorted(
-                imports in prop::collection::vec(
-                    prop_oneof![
-                        Just("react"),
-                        Just("express"),
-                        Just("next/router"),
-                        Just("vue"),
-                        Just("fastapi"),
-                        Just("django"),
-                        Just("./local"),
-                        Just("unknown-pkg"),
-                    ],
-                    0..10
-                )
-            ) {
-                let files: Vec<ParsedFile> = imports.iter().enumerate().map(|(i, imp)| {
-                    ParsedFile {
-                        path: format!("src/file{}.ts", i),
-                        language: crate::ast::Language::TypeScript,
-                        definitions: vec![],
-                        imports: vec![crate::ast::ImportInfo {
-                            source: imp.to_string(),
-                            names: vec![],
-                            is_default: false,
-                            is_namespace: false,
-                            line: 1,
-                        }],
-                        exports: vec![],
-                        call_sites: vec![],
-                    }
-                }).collect();
-
-                let frameworks = detect_frameworks(&files);
-                let is_sorted = frameworks.windows(2).all(|w| w[0] <= w[1]);
-                prop_assert!(is_sorted, "frameworks should be sorted: {:?}", frameworks);
-
-                // No duplicates
-                let unique: HashSet<_> = frameworks.iter().collect();
-                prop_assert_eq!(unique.len(), frameworks.len(),
-                    "frameworks should have no duplicates: {:?}", frameworks);
-            }
-
-            #[test]
-            fn prop_analyze_empty_input_empty_output(_dummy in 0u32..1) {
-                let analysis = analyze_data_flow(&[], &FlowConfig::default());
-                prop_assert!(analysis.heuristic_edges.is_empty());
-                prop_assert!(analysis.frameworks_detected.is_empty());
-            }
-
-            #[test]
-            fn prop_deterministic_analysis(callee in callee_strategy()) {
-                let file = ParsedFile {
-                    path: "src/test.ts".to_string(),
+        #[test]
+        fn prop_frameworks_always_sorted(
+            imports in prop::collection::vec(
+                prop_oneof![
+                    Just("react"),
+                    Just("express"),
+                    Just("next/router"),
+                    Just("vue"),
+                    Just("fastapi"),
+                    Just("django"),
+                    Just("./local"),
+                    Just("unknown-pkg"),
+                ],
+                0..10
+            )
+        ) {
+            let files: Vec<ParsedFile> = imports.iter().enumerate().map(|(i, imp)| {
+                ParsedFile {
+                    path: format!("src/file{}.ts", i),
                     language: crate::ast::Language::TypeScript,
                     definitions: vec![],
-                    imports: vec![],
-                    exports: vec![],
-                    call_sites: vec![CallSite {
-                        callee,
+                    imports: vec![crate::ast::ImportInfo {
+                        source: imp.to_string(),
+                        names: vec![],
+                        is_default: false,
+                        is_namespace: false,
                         line: 1,
-                        containing_function: Some("test".to_string()),
                     }],
-                };
+                    exports: vec![],
+                    call_sites: vec![],
+                }
+            }).collect();
 
-                let a1 = analyze_data_flow(&[file.clone()], &FlowConfig::default());
-                let a2 = analyze_data_flow(&[file], &FlowConfig::default());
-                prop_assert_eq!(a1.heuristic_edges.len(), a2.heuristic_edges.len());
-                prop_assert_eq!(a1.frameworks_detected, a2.frameworks_detected);
-            }
+            let frameworks = detect_frameworks(&files);
+            let is_sorted = frameworks.windows(2).all(|w| w[0] <= w[1]);
+            prop_assert!(is_sorted, "frameworks should be sorted: {:?}", frameworks);
+
+            // No duplicates
+            let unique: HashSet<_> = frameworks.iter().collect();
+            prop_assert_eq!(unique.len(), frameworks.len(),
+                "frameworks should have no duplicates: {:?}", frameworks);
+        }
+
+        #[test]
+        fn prop_analyze_empty_input_empty_output(_dummy in 0u32..1) {
+            let analysis = analyze_data_flow(&[], &FlowConfig::default());
+            prop_assert!(analysis.heuristic_edges.is_empty());
+            prop_assert!(analysis.frameworks_detected.is_empty());
+        }
+
+        #[test]
+        fn prop_deterministic_analysis(callee in callee_strategy()) {
+            let file = ParsedFile {
+                path: "src/test.ts".to_string(),
+                language: crate::ast::Language::TypeScript,
+                definitions: vec![],
+                imports: vec![],
+                exports: vec![],
+                call_sites: vec![CallSite {
+                    callee,
+                    line: 1,
+                    containing_function: Some("test".to_string()),
+                }],
+            };
+
+            let a1 = analyze_data_flow(&[file.clone()], &FlowConfig::default());
+            let a2 = analyze_data_flow(&[file], &FlowConfig::default());
+            prop_assert_eq!(a1.heuristic_edges.len(), a2.heuristic_edges.len());
+            prop_assert_eq!(a1.frameworks_detected, a2.frameworks_detected);
         }
     }
+}
 
-    // ========================================================================
-    // §13.3 spec-required tests
-    // ========================================================================
+// ========================================================================
+// §13.3 spec-required tests
+// ========================================================================
 
-    /// §13.3: Traces a parameter from function A through call to function B.
-    #[test]
-    fn test_trace_param_flow() {
-        let edges = trace_data_flow(&[(
-            "src/handler.ts",
-            r#"
+/// §13.3: Traces a parameter from function A through call to function B.
+#[test]
+fn test_trace_param_flow() {
+    let edges = trace_data_flow(&[(
+        "src/handler.ts",
+        r#"
 function handler(req: any) {
     const body = parseRequest(req);
     const result = processData(body);
     return sendResponse(result);
 }
 "#,
-        )]);
+    )]);
 
-        // parseRequest → processData via "body"
-        let e1 = edges
-            .iter()
-            .find(|e| e.producer == "parseRequest" && e.consumer == "processData");
-        assert!(
-            e1.is_some(),
-            "should trace parameter flow: parseRequest → processData via body"
-        );
-        assert_eq!(e1.unwrap().via, "body");
+    // parseRequest → processData via "body"
+    let e1 = edges
+        .iter()
+        .find(|e| e.producer == "parseRequest" && e.consumer == "processData");
+    assert!(
+        e1.is_some(),
+        "should trace parameter flow: parseRequest → processData via body"
+    );
+    assert_eq!(e1.unwrap().via, "body");
 
-        // processData → sendResponse via "result"
-        let e2 = edges
-            .iter()
-            .find(|e| e.producer == "processData" && e.consumer == "sendResponse");
-        assert!(
-            e2.is_some(),
-            "should trace parameter flow: processData → sendResponse via result"
-        );
-        assert_eq!(e2.unwrap().via, "result");
-    }
+    // processData → sendResponse via "result"
+    let e2 = edges
+        .iter()
+        .find(|e| e.producer == "processData" && e.consumer == "sendResponse");
+    assert!(
+        e2.is_some(),
+        "should trace parameter flow: processData → sendResponse via result"
+    );
+    assert_eq!(e2.unwrap().via, "result");
+}
 
-    /// §13.3: Tracks return value from callee back to caller.
-    #[test]
-    fn test_trace_return_value() {
-        let edges = trace_data_flow(&[(
-            "src/service.ts",
-            r#"
+/// §13.3: Tracks return value from callee back to caller.
+#[test]
+fn test_trace_return_value() {
+    let edges = trace_data_flow(&[(
+        "src/service.ts",
+        r#"
 function getUser(id: string) {
     const user = fetchFromDb(id);
     return validateUser(user);
 }
 "#,
-        )]);
+    )]);
 
-        // fetchFromDb's return value is stored in `user`, then passed to validateUser
-        assert_eq!(edges.len(), 1);
-        assert_eq!(edges[0].producer, "fetchFromDb");
-        assert_eq!(edges[0].consumer, "validateUser");
-        assert_eq!(edges[0].via, "user");
-    }
+    // fetchFromDb's return value is stored in `user`, then passed to validateUser
+    assert_eq!(edges.len(), 1);
+    assert_eq!(edges[0].producer, "fetchFromDb");
+    assert_eq!(edges[0].consumer, "validateUser");
+    assert_eq!(edges[0].via, "user");
+}
 
-    /// §13.3: Follows `const x = foo(); bar(x)` chains.
-    #[test]
-    fn test_trace_variable_assignment() {
-        let edges = trace_data_flow(&[(
-            "src/process.ts",
-            r#"
+/// §13.3: Follows `const x = foo(); bar(x)` chains.
+#[test]
+fn test_trace_variable_assignment() {
+    let edges = trace_data_flow(&[(
+        "src/process.ts",
+        r#"
 function main() {
     const x = foo();
     bar(x);
 }
 "#,
-        )]);
+    )]);
 
-        assert_eq!(edges.len(), 1);
-        assert_eq!(edges[0].producer, "foo");
-        assert_eq!(edges[0].consumer, "bar");
-        assert_eq!(edges[0].via, "x");
-        assert_eq!(edges[0].containing_function, "src/process.ts::main");
-    }
+    assert_eq!(edges.len(), 1);
+    assert_eq!(edges[0].producer, "foo");
+    assert_eq!(edges[0].consumer, "bar");
+    assert_eq!(edges[0].via, "x");
+    assert_eq!(edges[0].containing_function, "src/process.ts::main");
+}
 
-    /// §13.3: Detects Express `app.get()`, FastAPI `@app.route` as HTTP handler heuristics.
-    #[test]
-    fn test_heuristic_http_handler() {
-        // Express-style route handler registration: app.get() should be detected
-        // as EventHandling (route binding is analogous to event registration)
-        let edges = detect_patterns(
-            "src/routes.ts",
-            r#"
+/// §13.3: Detects Express `app.get()`, FastAPI `@app.route` as HTTP handler heuristics.
+#[test]
+fn test_heuristic_http_handler() {
+    // Express-style route handler registration: app.get() should be detected
+    // as EventHandling (route binding is analogous to event registration)
+    let edges = detect_patterns(
+        "src/routes.ts",
+        r#"
 function setupRoutes(app: any) {
     app.on('request', handleRequest);
     app.listen(3000);
 }
 "#,
-        );
+    );
 
-        let handlers: Vec<_> = edges
-            .iter()
-            .filter(|e| e.pattern == FlowPattern::EventHandling)
-            .collect();
-        assert!(
-            !handlers.is_empty(),
-            "should detect app.on/app.listen as event handling (HTTP handler registration)"
-        );
-    }
+    let handlers: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::EventHandling)
+        .collect();
+    assert!(
+        !handlers.is_empty(),
+        "should detect app.on/app.listen as event handling (HTTP handler registration)"
+    );
+}
 
-    /// §13.3: Common patterns that look like but aren't DB writes/handlers.
-    #[test]
-    fn test_no_false_positive_heuristics() {
-        let edges = detect_patterns(
-            "src/utils.ts",
-            r#"
+/// §13.3: Common patterns that look like but aren't DB writes/handlers.
+#[test]
+fn test_no_false_positive_heuristics() {
+    let edges = detect_patterns(
+        "src/utils.ts",
+        r#"
 function processItems(items: any[]) {
     // Array methods should not be DB patterns
     const found = items.find(x => x.active);
@@ -1645,115 +1635,113 @@ function processItems(items: any[]) {
     localStorage.set('pref', 'dark');
 }
 "#,
-        );
+    );
 
-        let db_patterns: Vec<_> = edges
-            .iter()
-            .filter(|e| {
-                e.pattern == FlowPattern::Persistence || e.pattern == FlowPattern::DatabaseRead
-            })
-            .collect();
-        assert!(
-            db_patterns.is_empty(),
-            "common collection/utility patterns should not trigger DB heuristics, got: {:?}",
-            db_patterns
-        );
-    }
+    let db_patterns: Vec<_> = edges
+        .iter()
+        .filter(|e| e.pattern == FlowPattern::Persistence || e.pattern == FlowPattern::DatabaseRead)
+        .collect();
+    assert!(
+        db_patterns.is_empty(),
+        "common collection/utility patterns should not trigger DB heuristics, got: {:?}",
+        db_patterns
+    );
+}
 
-    /// §13.3: Tracing stops at configurable depth to prevent runaway.
-    #[test]
-    fn test_flow_depth_limit() {
-        // Build a chain: funcA → funcB → funcC → funcD
-        let parsed: Vec<ParsedFile> = [
-            (
-                "src/a.ts",
-                r#"
+/// §13.3: Tracing stops at configurable depth to prevent runaway.
+#[test]
+fn test_flow_depth_limit() {
+    // Build a chain: funcA → funcB → funcC → funcD
+    let parsed: Vec<ParsedFile> = [
+        (
+            "src/a.ts",
+            r#"
 import { funcB } from './b';
 export function funcA() { funcB(); }
 "#,
-            ),
-            (
-                "src/b.ts",
-                r#"
+        ),
+        (
+            "src/b.ts",
+            r#"
 import { funcC } from './c';
 export function funcB() { funcC(); }
 "#,
-            ),
-            (
-                "src/c.ts",
-                r#"
+        ),
+        (
+            "src/c.ts",
+            r#"
 import { funcD } from './d';
 export function funcC() { funcD(); }
 "#,
-            ),
-            (
-                "src/d.ts",
-                r#"
+        ),
+        (
+            "src/d.ts",
+            r#"
 export function funcD() { return 42; }
 "#,
-            ),
-        ]
-        .iter()
-        .map(|(path, source)| crate::ast::parse_file(path, source).unwrap())
-        .collect();
+        ),
+    ]
+    .iter()
+    .map(|(path, source)| crate::ast::parse_file(path, source).unwrap())
+    .collect();
 
-        let graph = SymbolGraph::build(&parsed);
+    let graph = SymbolGraph::build(&parsed);
 
-        // Depth 1: only direct callees (funcB)
-        let depth1 = trace_call_chain(&graph, "src/a.ts::funcA", 1);
-        assert!(depth1.contains(&"src/b.ts::funcB".to_string()));
-        assert!(
-            !depth1.contains(&"src/c.ts::funcC".to_string()),
-            "depth=1 should NOT reach funcC"
-        );
+    // Depth 1: only direct callees (funcB)
+    let depth1 = trace_call_chain(&graph, "src/a.ts::funcA", 1);
+    assert!(depth1.contains(&"src/b.ts::funcB".to_string()));
+    assert!(
+        !depth1.contains(&"src/c.ts::funcC".to_string()),
+        "depth=1 should NOT reach funcC"
+    );
 
-        // Depth 2: funcB and funcC
-        let depth2 = trace_call_chain(&graph, "src/a.ts::funcA", 2);
-        assert!(depth2.contains(&"src/b.ts::funcB".to_string()));
-        assert!(depth2.contains(&"src/c.ts::funcC".to_string()));
-        assert!(
-            !depth2.contains(&"src/d.ts::funcD".to_string()),
-            "depth=2 should NOT reach funcD"
-        );
+    // Depth 2: funcB and funcC
+    let depth2 = trace_call_chain(&graph, "src/a.ts::funcA", 2);
+    assert!(depth2.contains(&"src/b.ts::funcB".to_string()));
+    assert!(depth2.contains(&"src/c.ts::funcC".to_string()));
+    assert!(
+        !depth2.contains(&"src/d.ts::funcD".to_string()),
+        "depth=2 should NOT reach funcD"
+    );
 
-        // Depth 10: all reachable
-        let deep = trace_call_chain(&graph, "src/a.ts::funcA", 10);
-        assert!(
-            deep.contains(&"src/d.ts::funcD".to_string()),
-            "large depth should reach funcD"
-        );
-    }
+    // Depth 10: all reachable
+    let deep = trace_call_chain(&graph, "src/a.ts::funcA", 10);
+    assert!(
+        deep.contains(&"src/d.ts::funcD".to_string()),
+        "large depth should reach funcD"
+    );
+}
 
-    // ========================================================================
-    // Full data flow tracing — unit tests
-    // ========================================================================
+// ========================================================================
+// Full data flow tracing — unit tests
+// ========================================================================
 
-    #[test]
-    fn test_data_flow_simple_variable_chain() {
-        let edges = trace_data_flow(&[(
-            "src/handler.ts",
-            r#"
+#[test]
+fn test_data_flow_simple_variable_chain() {
+    let edges = trace_data_flow(&[(
+        "src/handler.ts",
+        r#"
 function handler(req: any) {
     const data = parseBody(req);
     return respond(data);
 }
 "#,
-        )]);
+    )]);
 
-        // parseBody produces `data`, respond consumes `data`
-        assert_eq!(edges.len(), 1);
-        assert_eq!(edges[0].producer, "parseBody");
-        assert_eq!(edges[0].consumer, "respond");
-        assert_eq!(edges[0].via, "data");
-        assert_eq!(edges[0].containing_function, "src/handler.ts::handler");
-        assert_eq!(edges[0].file, "src/handler.ts");
-    }
+    // parseBody produces `data`, respond consumes `data`
+    assert_eq!(edges.len(), 1);
+    assert_eq!(edges[0].producer, "parseBody");
+    assert_eq!(edges[0].consumer, "respond");
+    assert_eq!(edges[0].via, "data");
+    assert_eq!(edges[0].containing_function, "src/handler.ts::handler");
+    assert_eq!(edges[0].file, "src/handler.ts");
+}
 
-    #[test]
-    fn test_data_flow_chained_pipeline() {
-        let edges = trace_data_flow(&[(
-            "src/pipeline.ts",
-            r#"
+#[test]
+fn test_data_flow_chained_pipeline() {
+    let edges = trace_data_flow(&[(
+        "src/pipeline.ts",
+        r#"
 function pipeline(input: any) {
     const validated = validate(input);
     const processed = transform(validated);
@@ -1761,30 +1749,30 @@ function pipeline(input: any) {
     return result;
 }
 "#,
-        )]);
+    )]);
 
-        // validate → transform via "validated"
-        let e1 = edges
-            .iter()
-            .find(|e| e.producer == "validate" && e.consumer == "transform")
-            .expect("should have validate → transform edge");
-        assert_eq!(e1.via, "validated");
+    // validate → transform via "validated"
+    let e1 = edges
+        .iter()
+        .find(|e| e.producer == "validate" && e.consumer == "transform")
+        .expect("should have validate → transform edge");
+    assert_eq!(e1.via, "validated");
 
-        // transform → save via "processed"
-        let e2 = edges
-            .iter()
-            .find(|e| e.producer == "transform" && e.consumer == "save")
-            .expect("should have transform → save edge");
-        assert_eq!(e2.via, "processed");
+    // transform → save via "processed"
+    let e2 = edges
+        .iter()
+        .find(|e| e.producer == "transform" && e.consumer == "save")
+        .expect("should have transform → save edge");
+    assert_eq!(e2.via, "processed");
 
-        assert_eq!(edges.len(), 2);
-    }
+    assert_eq!(edges.len(), 2);
+}
 
-    #[test]
-    fn test_data_flow_multiple_consumers() {
-        let edges = trace_data_flow(&[(
-            "src/process.ts",
-            r#"
+#[test]
+fn test_data_flow_multiple_consumers() {
+    let edges = trace_data_flow(&[(
+        "src/process.ts",
+        r#"
 function process() {
     const data = fetchData();
     validate(data);
@@ -1792,113 +1780,113 @@ function process() {
     save(data);
 }
 "#,
-        )]);
+    )]);
 
-        // fetchData → validate, transform, save (all via "data")
-        assert_eq!(edges.len(), 3);
-        for edge in &edges {
-            assert_eq!(edge.producer, "fetchData");
-            assert_eq!(edge.via, "data");
-        }
-        let consumers: Vec<&str> = edges.iter().map(|e| e.consumer.as_str()).collect();
-        assert!(consumers.contains(&"validate"));
-        assert!(consumers.contains(&"transform"));
-        assert!(consumers.contains(&"save"));
+    // fetchData → validate, transform, save (all via "data")
+    assert_eq!(edges.len(), 3);
+    for edge in &edges {
+        assert_eq!(edge.producer, "fetchData");
+        assert_eq!(edge.via, "data");
     }
+    let consumers: Vec<&str> = edges.iter().map(|e| e.consumer.as_str()).collect();
+    assert!(consumers.contains(&"validate"));
+    assert!(consumers.contains(&"transform"));
+    assert!(consumers.contains(&"save"));
+}
 
-    #[test]
-    fn test_data_flow_no_variable_sharing() {
-        let edges = trace_data_flow(&[(
-            "src/independent.ts",
-            r#"
+#[test]
+fn test_data_flow_no_variable_sharing() {
+    let edges = trace_data_flow(&[(
+        "src/independent.ts",
+        r#"
 function handler() {
     funcA();
     funcB();
     funcC();
 }
 "#,
-        )]);
+    )]);
 
-        assert!(
-            edges.is_empty(),
-            "independent calls with no shared variables should produce no edges"
-        );
-    }
+    assert!(
+        edges.is_empty(),
+        "independent calls with no shared variables should produce no edges"
+    );
+}
 
-    #[test]
-    fn test_data_flow_module_level() {
-        let edges = trace_data_flow(&[(
-            "src/main.ts",
-            r#"
+#[test]
+fn test_data_flow_module_level() {
+    let edges = trace_data_flow(&[(
+        "src/main.ts",
+        r#"
 const config = loadConfig();
 startServer(config);
 "#,
-        )]);
+    )]);
 
-        assert_eq!(edges.len(), 1);
-        assert_eq!(edges[0].producer, "loadConfig");
-        assert_eq!(edges[0].consumer, "startServer");
-        assert_eq!(edges[0].via, "config");
-        assert_eq!(edges[0].containing_function, "src/main.ts");
-    }
+    assert_eq!(edges.len(), 1);
+    assert_eq!(edges[0].producer, "loadConfig");
+    assert_eq!(edges[0].consumer, "startServer");
+    assert_eq!(edges[0].via, "config");
+    assert_eq!(edges[0].containing_function, "src/main.ts");
+}
 
-    #[test]
-    fn test_data_flow_python_simple() {
-        let edges = trace_data_flow(&[(
-            "src/handler.py",
-            r#"
+#[test]
+fn test_data_flow_python_simple() {
+    let edges = trace_data_flow(&[(
+        "src/handler.py",
+        r#"
 def handler(req):
     data = parse_body(req)
     return respond(data)
 "#,
-        )]);
+    )]);
 
-        assert_eq!(edges.len(), 1);
-        assert_eq!(edges[0].producer, "parse_body");
-        assert_eq!(edges[0].consumer, "respond");
-        assert_eq!(edges[0].via, "data");
-    }
+    assert_eq!(edges.len(), 1);
+    assert_eq!(edges[0].producer, "parse_body");
+    assert_eq!(edges[0].consumer, "respond");
+    assert_eq!(edges[0].via, "data");
+}
 
-    #[test]
-    fn test_data_flow_python_chained() {
-        let edges = trace_data_flow(&[(
-            "src/pipeline.py",
-            r#"
+#[test]
+fn test_data_flow_python_chained() {
+    let edges = trace_data_flow(&[(
+        "src/pipeline.py",
+        r#"
 def pipeline(raw):
     validated = validate(raw)
     processed = transform(validated)
     save(processed)
 "#,
-        )]);
+    )]);
 
-        let e1 = edges
-            .iter()
-            .find(|e| e.producer == "validate" && e.consumer == "transform");
-        assert!(e1.is_some(), "should have validate → transform edge");
+    let e1 = edges
+        .iter()
+        .find(|e| e.producer == "validate" && e.consumer == "transform");
+    assert!(e1.is_some(), "should have validate → transform edge");
 
-        let e2 = edges
-            .iter()
-            .find(|e| e.producer == "transform" && e.consumer == "save");
-        assert!(e2.is_some(), "should have transform → save edge");
-    }
+    let e2 = edges
+        .iter()
+        .find(|e| e.producer == "transform" && e.consumer == "save");
+    assert!(e2.is_some(), "should have transform → save edge");
+}
 
-    #[test]
-    fn test_data_flow_empty_input() {
-        let edges = trace_data_flow(&[]);
-        assert!(edges.is_empty());
-    }
+#[test]
+fn test_data_flow_empty_input() {
+    let edges = trace_data_flow(&[]);
+    assert!(edges.is_empty());
+}
 
-    #[test]
-    fn test_data_flow_unknown_language() {
-        let edges = trace_data_flow(&[("main.go", "package main")]);
-        assert!(edges.is_empty());
-    }
+#[test]
+fn test_data_flow_unknown_language() {
+    let edges = trace_data_flow(&[("main.go", "package main")]);
+    assert!(edges.is_empty());
+}
 
-    #[test]
-    fn test_data_flow_cross_scope_no_leaking() {
-        let edges = trace_data_flow(&[(
-            "src/service.ts",
-            r#"
+#[test]
+fn test_data_flow_cross_scope_no_leaking() {
+    let edges = trace_data_flow(&[(
+        "src/service.ts",
+        r#"
 function funcA() {
     const x = getX();
     return x;
@@ -1907,394 +1895,394 @@ function funcB() {
     useX(x);
 }
 "#,
-        )]);
+    )]);
 
-        // `x` in funcA is not the same scope as `x` in funcB
-        // funcA has assignment x=getX() but funcB's call useX(x)
-        // is in a different scope, so no data flow edge should be created.
-        assert!(
-            edges.is_empty(),
-            "variables in different function scopes should not create edges"
-        );
-    }
+    // `x` in funcA is not the same scope as `x` in funcB
+    // funcA has assignment x=getX() but funcB's call useX(x)
+    // is in a different scope, so no data flow edge should be created.
+    assert!(
+        edges.is_empty(),
+        "variables in different function scopes should not create edges"
+    );
+}
 
-    #[test]
-    fn test_data_flow_same_producer_consumer_ignored() {
-        let edges = trace_data_flow(&[(
-            "src/recursive.ts",
-            r#"
+#[test]
+fn test_data_flow_same_producer_consumer_ignored() {
+    let edges = trace_data_flow(&[(
+        "src/recursive.ts",
+        r#"
 function process() {
     const result = transform(input);
     transform(result);
 }
 "#,
-        )]);
+    )]);
 
-        // transform → transform would be a self-edge, should be excluded
-        assert!(
-            edges.is_empty(),
-            "same producer and consumer should not create an edge"
-        );
-    }
+    // transform → transform would be a self-edge, should be excluded
+    assert!(
+        edges.is_empty(),
+        "same producer and consumer should not create an edge"
+    );
+}
 
-    #[test]
-    fn test_data_flow_multiple_files() {
-        let edges = trace_data_flow(&[
-            (
-                "src/a.ts",
-                r#"
+#[test]
+fn test_data_flow_multiple_files() {
+    let edges = trace_data_flow(&[
+        (
+            "src/a.ts",
+            r#"
 function handleA() {
     const x = getA();
     processA(x);
 }
 "#,
-            ),
-            (
-                "src/b.ts",
-                r#"
+        ),
+        (
+            "src/b.ts",
+            r#"
 function handleB() {
     const y = getB();
     processB(y);
 }
 "#,
-            ),
-        ]);
+        ),
+    ]);
 
-        assert_eq!(edges.len(), 2);
-        assert!(edges.iter().any(|e| e.file == "src/a.ts"));
-        assert!(edges.iter().any(|e| e.file == "src/b.ts"));
-    }
+    assert_eq!(edges.len(), 2);
+    assert!(edges.iter().any(|e| e.file == "src/a.ts"));
+    assert!(edges.iter().any(|e| e.file == "src/b.ts"));
+}
 
-    #[test]
-    fn test_data_flow_deterministic() {
-        let source = r#"
+#[test]
+fn test_data_flow_deterministic() {
+    let source = r#"
 function handler() {
     const data = fetch();
     process(data);
 }
 "#;
-        let e1 = trace_data_flow(&[("src/a.ts", source)]);
-        let e2 = trace_data_flow(&[("src/a.ts", source)]);
-        assert_eq!(e1, e2, "data flow tracing should be deterministic");
+    let e1 = trace_data_flow(&[("src/a.ts", source)]);
+    let e2 = trace_data_flow(&[("src/a.ts", source)]);
+    assert_eq!(e1, e2, "data flow tracing should be deterministic");
+}
+
+// ========================================================================
+// Full data flow tracing — property-based tests
+// ========================================================================
+
+mod data_flow_proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn func_name() -> impl Strategy<Value = String> {
+        "[a-z][a-zA-Z]{0,8}".prop_map(|s| s)
     }
 
-    // ========================================================================
-    // Full data flow tracing — property-based tests
-    // ========================================================================
-
-    mod data_flow_proptests {
-        use super::*;
-        use proptest::prelude::*;
-
-        fn func_name() -> impl Strategy<Value = String> {
-            "[a-z][a-zA-Z]{0,8}".prop_map(|s| s)
-        }
-
-        proptest! {
-            #[test]
-            fn prop_trace_never_panics(
-                func in func_name(),
-                var in func_name(),
-                callee1 in func_name(),
-                callee2 in func_name()
-            ) {
-                let source = format!(
-                    "function {}() {{\n  const {} = {}();\n  {}({});\n}}\n",
-                    func, var, callee1, callee2, var
-                );
-                // Should never panic
-                let _ = trace_data_flow(&[("test.ts", &source)]);
-            }
-
-            #[test]
-            fn prop_edges_have_valid_fields(
-                func in func_name(),
-                var in func_name(),
-                callee1 in func_name(),
-                callee2 in func_name()
-            ) {
-                let source = format!(
-                    "function {}() {{\n  const {} = {}();\n  {}({});\n}}\n",
-                    func, var, callee1, callee2, var
-                );
-                let edges = trace_data_flow(&[("test.ts", &source)]);
-                for edge in &edges {
-                    prop_assert!(!edge.producer.is_empty(), "producer should not be empty");
-                    prop_assert!(!edge.consumer.is_empty(), "consumer should not be empty");
-                    prop_assert!(!edge.via.is_empty(), "via should not be empty");
-                    prop_assert!(!edge.file.is_empty(), "file should not be empty");
-                    prop_assert!(edge.line > 0, "line should be positive");
-                    prop_assert!(!edge.containing_function.is_empty());
-                }
-            }
-
-            #[test]
-            fn prop_no_self_edges(
-                func in func_name(),
-                var in func_name(),
-                callee in func_name()
-            ) {
-                let source = format!(
-                    "function {}() {{\n  const {} = {}();\n  {}({});\n}}\n",
-                    func, var, callee, callee, var
-                );
-                let edges = trace_data_flow(&[("test.ts", &source)]);
-                for edge in &edges {
-                    prop_assert!(
-                        edge.producer != edge.consumer,
-                        "self-edge detected: {} → {}",
-                        edge.producer, edge.consumer
-                    );
-                }
-            }
-
-            #[test]
-            fn prop_via_matches_variable(
-                func in func_name(),
-                var in func_name(),
-                callee1 in func_name(),
-                callee2 in func_name()
-            ) {
-                let source = format!(
-                    "function {}() {{\n  const {} = {}();\n  {}({});\n}}\n",
-                    func, var, callee1, callee2, var
-                );
-                let edges = trace_data_flow(&[("test.ts", &source)]);
-                for edge in &edges {
-                    // The via field should be a variable that was assigned in the same scope
-                    prop_assert_eq!(&edge.via, &var,
-                        "via should match the variable name");
-                }
-            }
-
-            #[test]
-            fn prop_deterministic(
-                func in func_name(),
-                var in func_name(),
-                callee1 in func_name(),
-                callee2 in func_name()
-            ) {
-                let source = format!(
-                    "function {}() {{\n  const {} = {}();\n  {}({});\n}}\n",
-                    func, var, callee1, callee2, var
-                );
-                let e1 = trace_data_flow(&[("test.ts", &source)]);
-                let e2 = trace_data_flow(&[("test.ts", &source)]);
-                prop_assert_eq!(e1, e2, "should be deterministic");
-            }
-
-            #[test]
-            fn prop_empty_input_empty_output(_dummy in 0u32..1) {
-                let edges = trace_data_flow(&[]);
-                prop_assert!(edges.is_empty());
-            }
-        }
-    }
-
-    // =======================================================================
-    // IR-based flow parity tests
-    // =======================================================================
-
-    mod ir_parity {
-        use super::*;
-        use crate::ir::IrFile;
-
-        /// Helper: run heuristic analysis via both paths.
-        fn analyze_both(files: &[(&str, &str)]) -> (FlowAnalysis, FlowAnalysis) {
-            let parsed: Vec<ParsedFile> = files
-                .iter()
-                .map(|(path, source)| ast::parse_file(path, source).unwrap())
-                .collect();
-            let ir_files: Vec<IrFile> = parsed.iter().map(IrFile::from_parsed_file).collect();
-            let config = FlowConfig::default();
-
-            let from_parsed = analyze_data_flow(&parsed, &config);
-            let from_ir = analyze_data_flow_ir(&ir_files, &config);
-            (from_parsed, from_ir)
+    proptest! {
+        #[test]
+        fn prop_trace_never_panics(
+            func in func_name(),
+            var in func_name(),
+            callee1 in func_name(),
+            callee2 in func_name()
+        ) {
+            let source = format!(
+                "function {}() {{\n  const {} = {}();\n  {}({});\n}}\n",
+                func, var, callee1, callee2, var
+            );
+            // Should never panic
+            let _ = trace_data_flow(&[("test.ts", &source)]);
         }
 
         #[test]
-        fn test_ir_parity_heuristic_db_write() {
-            let (fp, fi) = analyze_both(&[(
-                "src/repo.ts",
-                r#"
+        fn prop_edges_have_valid_fields(
+            func in func_name(),
+            var in func_name(),
+            callee1 in func_name(),
+            callee2 in func_name()
+        ) {
+            let source = format!(
+                "function {}() {{\n  const {} = {}();\n  {}({});\n}}\n",
+                func, var, callee1, callee2, var
+            );
+            let edges = trace_data_flow(&[("test.ts", &source)]);
+            for edge in &edges {
+                prop_assert!(!edge.producer.is_empty(), "producer should not be empty");
+                prop_assert!(!edge.consumer.is_empty(), "consumer should not be empty");
+                prop_assert!(!edge.via.is_empty(), "via should not be empty");
+                prop_assert!(!edge.file.is_empty(), "file should not be empty");
+                prop_assert!(edge.line > 0, "line should be positive");
+                prop_assert!(!edge.containing_function.is_empty());
+            }
+        }
+
+        #[test]
+        fn prop_no_self_edges(
+            func in func_name(),
+            var in func_name(),
+            callee in func_name()
+        ) {
+            let source = format!(
+                "function {}() {{\n  const {} = {}();\n  {}({});\n}}\n",
+                func, var, callee, callee, var
+            );
+            let edges = trace_data_flow(&[("test.ts", &source)]);
+            for edge in &edges {
+                prop_assert!(
+                    edge.producer != edge.consumer,
+                    "self-edge detected: {} → {}",
+                    edge.producer, edge.consumer
+                );
+            }
+        }
+
+        #[test]
+        fn prop_via_matches_variable(
+            func in func_name(),
+            var in func_name(),
+            callee1 in func_name(),
+            callee2 in func_name()
+        ) {
+            let source = format!(
+                "function {}() {{\n  const {} = {}();\n  {}({});\n}}\n",
+                func, var, callee1, callee2, var
+            );
+            let edges = trace_data_flow(&[("test.ts", &source)]);
+            for edge in &edges {
+                // The via field should be a variable that was assigned in the same scope
+                prop_assert_eq!(&edge.via, &var,
+                    "via should match the variable name");
+            }
+        }
+
+        #[test]
+        fn prop_deterministic(
+            func in func_name(),
+            var in func_name(),
+            callee1 in func_name(),
+            callee2 in func_name()
+        ) {
+            let source = format!(
+                "function {}() {{\n  const {} = {}();\n  {}({});\n}}\n",
+                func, var, callee1, callee2, var
+            );
+            let e1 = trace_data_flow(&[("test.ts", &source)]);
+            let e2 = trace_data_flow(&[("test.ts", &source)]);
+            prop_assert_eq!(e1, e2, "should be deterministic");
+        }
+
+        #[test]
+        fn prop_empty_input_empty_output(_dummy in 0u32..1) {
+            let edges = trace_data_flow(&[]);
+            prop_assert!(edges.is_empty());
+        }
+    }
+}
+
+// =======================================================================
+// IR-based flow parity tests
+// =======================================================================
+
+mod ir_parity {
+    use super::*;
+    use crate::ir::IrFile;
+
+    /// Helper: run heuristic analysis via both paths.
+    fn analyze_both(files: &[(&str, &str)]) -> (FlowAnalysis, FlowAnalysis) {
+        let parsed: Vec<ParsedFile> = files
+            .iter()
+            .map(|(path, source)| ast::parse_file(path, source).unwrap())
+            .collect();
+        let ir_files: Vec<IrFile> = parsed.iter().map(IrFile::from_parsed_file).collect();
+        let config = FlowConfig::default();
+
+        let from_parsed = analyze_data_flow(&parsed, &config);
+        let from_ir = analyze_data_flow_ir(&ir_files, &config);
+        (from_parsed, from_ir)
+    }
+
+    #[test]
+    fn test_ir_parity_heuristic_db_write() {
+        let (fp, fi) = analyze_both(&[(
+            "src/repo.ts",
+            r#"
 import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 async function createUser(data: any) {
     await prisma.user.create({ data });
 }
 "#,
-            )]);
+        )]);
 
-            assert_eq!(
-                fp.heuristic_edges.len(),
-                fi.heuristic_edges.len(),
-                "heuristic edge count should match for DB write"
-            );
-            for (a, b) in fp.heuristic_edges.iter().zip(fi.heuristic_edges.iter()) {
-                assert_eq!(a.pattern, b.pattern);
-                assert_eq!(a.file, b.file);
-            }
+        assert_eq!(
+            fp.heuristic_edges.len(),
+            fi.heuristic_edges.len(),
+            "heuristic edge count should match for DB write"
+        );
+        for (a, b) in fp.heuristic_edges.iter().zip(fi.heuristic_edges.iter()) {
+            assert_eq!(a.pattern, b.pattern);
+            assert_eq!(a.file, b.file);
         }
+    }
 
-        #[test]
-        fn test_ir_parity_heuristic_event_emission() {
-            let (fp, fi) = analyze_both(&[(
-                "src/events.ts",
-                r#"
+    #[test]
+    fn test_ir_parity_heuristic_event_emission() {
+        let (fp, fi) = analyze_both(&[(
+            "src/events.ts",
+            r#"
 import { EventEmitter } from 'events';
 const emitter = new EventEmitter();
 function notifyUser() {
     emitter.emit('user:created');
 }
 "#,
-            )]);
+        )]);
 
-            assert_eq!(fp.heuristic_edges.len(), fi.heuristic_edges.len());
-        }
+        assert_eq!(fp.heuristic_edges.len(), fi.heuristic_edges.len());
+    }
 
-        #[test]
-        fn test_ir_parity_framework_detection() {
-            let files = &[
-                (
-                    "src/app.ts",
-                    r#"
+    #[test]
+    fn test_ir_parity_framework_detection() {
+        let files = &[
+            (
+                "src/app.ts",
+                r#"
 import express from 'express';
 import { PrismaClient } from '@prisma/client';
 "#,
-                ),
-                (
-                    "src/views.py",
-                    r#"
+            ),
+            (
+                "src/views.py",
+                r#"
 from flask import Flask
 from sqlalchemy import Column
 "#,
-                ),
-            ];
+            ),
+        ];
 
-            let parsed: Vec<ParsedFile> = files
-                .iter()
-                .map(|(path, source)| ast::parse_file(path, source).unwrap())
-                .collect();
-            let ir_files: Vec<IrFile> = parsed.iter().map(IrFile::from_parsed_file).collect();
+        let parsed: Vec<ParsedFile> = files
+            .iter()
+            .map(|(path, source)| ast::parse_file(path, source).unwrap())
+            .collect();
+        let ir_files: Vec<IrFile> = parsed.iter().map(IrFile::from_parsed_file).collect();
 
-            let from_parsed = detect_frameworks(&parsed);
-            let from_ir = detect_frameworks_ir(&ir_files);
+        let from_parsed = detect_frameworks(&parsed);
+        let from_ir = detect_frameworks_ir(&ir_files);
 
-            assert_eq!(
-                from_parsed, from_ir,
-                "framework detection should match: {:?} vs {:?}",
-                from_parsed, from_ir
-            );
-        }
+        assert_eq!(
+            from_parsed, from_ir,
+            "framework detection should match: {:?} vs {:?}",
+            from_parsed, from_ir
+        );
+    }
 
-        #[test]
-        fn test_ir_parity_empty() {
-            let (fp, fi) = analyze_both(&[]);
-            assert_eq!(fp.heuristic_edges.len(), fi.heuristic_edges.len());
-            assert_eq!(fp.frameworks_detected, fi.frameworks_detected);
-        }
+    #[test]
+    fn test_ir_parity_empty() {
+        let (fp, fi) = analyze_both(&[]);
+        assert_eq!(fp.heuristic_edges.len(), fi.heuristic_edges.len());
+        assert_eq!(fp.frameworks_detected, fi.frameworks_detected);
+    }
 
-        #[test]
-        fn test_ir_parity_logging_detection() {
-            let (fp, fi) = analyze_both(&[(
-                "src/utils.ts",
-                r#"
+    #[test]
+    fn test_ir_parity_logging_detection() {
+        let (fp, fi) = analyze_both(&[(
+            "src/utils.ts",
+            r#"
 function doStuff() {
     console.log('doing stuff');
     console.error('oops');
 }
 "#,
-            )]);
+        )]);
 
-            assert_eq!(fp.heuristic_edges.len(), fi.heuristic_edges.len());
-            for (a, b) in fp.heuristic_edges.iter().zip(fi.heuristic_edges.iter()) {
-                assert_eq!(a.pattern, b.pattern);
-            }
+        assert_eq!(fp.heuristic_edges.len(), fi.heuristic_edges.len());
+        for (a, b) in fp.heuristic_edges.iter().zip(fi.heuristic_edges.iter()) {
+            assert_eq!(a.pattern, b.pattern);
         }
     }
+}
 
-    // =======================================================================
-    // IR-based data flow edge tests
-    // =======================================================================
+// =======================================================================
+// IR-based data flow edge tests
+// =======================================================================
 
-    mod ir_data_flow {
-        use super::*;
-        use crate::ast;
-        use crate::ir::IrFile;
+mod ir_data_flow {
+    use super::*;
+    use crate::ast;
+    use crate::ir::IrFile;
 
-        /// Helper: parse a file to IR and build data flow edges.
-        fn ir_edges(path: &str, source: &str) -> Vec<DataFlowEdge> {
-            let parsed = ast::parse_file(path, source).unwrap();
-            let data_flow = ast::extract_data_flow_info(path, source).unwrap();
-            let mut ir = IrFile::from_parsed_file(&parsed);
-            ir.enrich_with_data_flow(&data_flow);
-            build_data_flow_edges_from_ir(&ir)
-        }
+    /// Helper: parse a file to IR and build data flow edges.
+    fn ir_edges(path: &str, source: &str) -> Vec<DataFlowEdge> {
+        let parsed = ast::parse_file(path, source).unwrap();
+        let data_flow = ast::extract_data_flow_info(path, source).unwrap();
+        let mut ir = IrFile::from_parsed_file(&parsed);
+        ir.enrich_with_data_flow(&data_flow);
+        build_data_flow_edges_from_ir(&ir)
+    }
 
-        #[test]
-        fn test_ir_data_flow_simple_chain() {
-            let edges = ir_edges(
-                "src/handler.ts",
-                r#"
+    #[test]
+    fn test_ir_data_flow_simple_chain() {
+        let edges = ir_edges(
+            "src/handler.ts",
+            r#"
 function handler() {
     const data = fetchData();
     process(data);
 }
 "#,
-            );
+        );
 
-            assert_eq!(edges.len(), 1, "should find one data flow edge");
-            assert_eq!(edges[0].producer, "fetchData");
-            assert_eq!(edges[0].consumer, "process");
-            assert_eq!(edges[0].via, "data");
-        }
+        assert_eq!(edges.len(), 1, "should find one data flow edge");
+        assert_eq!(edges[0].producer, "fetchData");
+        assert_eq!(edges[0].consumer, "process");
+        assert_eq!(edges[0].via, "data");
+    }
 
-        #[test]
-        fn test_ir_data_flow_multiple_consumers() {
-            let edges = ir_edges(
-                "src/handler.ts",
-                r#"
+    #[test]
+    fn test_ir_data_flow_multiple_consumers() {
+        let edges = ir_edges(
+            "src/handler.ts",
+            r#"
 function handler() {
     const data = fetchData();
     validate(data);
     transform(data);
 }
 "#,
-            );
+        );
 
-            assert_eq!(edges.len(), 2, "should find two data flow edges");
-            assert!(edges.iter().any(|e| e.consumer == "validate"));
-            assert!(edges.iter().any(|e| e.consumer == "transform"));
-        }
+        assert_eq!(edges.len(), 2, "should find two data flow edges");
+        assert!(edges.iter().any(|e| e.consumer == "validate"));
+        assert!(edges.iter().any(|e| e.consumer == "transform"));
+    }
 
-        #[test]
-        fn test_ir_data_flow_pipeline() {
-            let edges = ir_edges(
-                "src/handler.ts",
-                r#"
+    #[test]
+    fn test_ir_data_flow_pipeline() {
+        let edges = ir_edges(
+            "src/handler.ts",
+            r#"
 function handler() {
     const raw = fetch();
     const clean = sanitize(raw);
     save(clean);
 }
 "#,
-            );
+        );
 
-            assert!(edges.len() >= 2, "should find pipeline edges");
-            assert!(edges
-                .iter()
-                .any(|e| e.producer == "fetch" && e.consumer == "sanitize" && e.via == "raw"));
-            assert!(edges
-                .iter()
-                .any(|e| e.producer == "sanitize" && e.consumer == "save" && e.via == "clean"));
-        }
+        assert!(edges.len() >= 2, "should find pipeline edges");
+        assert!(edges
+            .iter()
+            .any(|e| e.producer == "fetch" && e.consumer == "sanitize" && e.via == "raw"));
+        assert!(edges
+            .iter()
+            .any(|e| e.producer == "sanitize" && e.consumer == "save" && e.via == "clean"));
+    }
 
-        #[test]
-        fn test_ir_data_flow_scope_isolation() {
-            let edges = ir_edges(
-                "src/app.ts",
-                r#"
+    #[test]
+    fn test_ir_data_flow_scope_isolation() {
+        let edges = ir_edges(
+            "src/app.ts",
+            r#"
 function funcA() {
     const x = fetch();
     process(x);
@@ -2304,263 +2292,263 @@ function funcB() {
     transform(x);
 }
 "#,
-            );
+        );
 
-            // Should not cross function boundaries
-            for edge in &edges {
-                if edge.producer == "fetch" {
-                    assert_eq!(edge.consumer, "process");
-                }
-                if edge.producer == "other" {
-                    assert_eq!(edge.consumer, "transform");
-                }
+        // Should not cross function boundaries
+        for edge in &edges {
+            if edge.producer == "fetch" {
+                assert_eq!(edge.consumer, "process");
+            }
+            if edge.producer == "other" {
+                assert_eq!(edge.consumer, "transform");
             }
         }
+    }
 
-        #[test]
-        fn test_ir_data_flow_no_self_edge() {
-            let edges = ir_edges(
-                "src/app.ts",
-                r#"
+    #[test]
+    fn test_ir_data_flow_no_self_edge() {
+        let edges = ir_edges(
+            "src/app.ts",
+            r#"
 function handler() {
     const data = fetch();
     fetch(data);
 }
 "#,
+        );
+
+        for edge in &edges {
+            assert_ne!(
+                edge.producer, edge.consumer,
+                "should not produce self-edges"
             );
-
-            for edge in &edges {
-                assert_ne!(
-                    edge.producer, edge.consumer,
-                    "should not produce self-edges"
-                );
-            }
         }
+    }
 
-        #[test]
-        fn test_ir_data_flow_empty() {
-            let edges = ir_edges(
-                "src/empty.ts",
-                r#"
+    #[test]
+    fn test_ir_data_flow_empty() {
+        let edges = ir_edges(
+            "src/empty.ts",
+            r#"
 function handler() {
     console.log('hello');
 }
 "#,
-            );
+        );
 
-            assert!(edges.is_empty(), "no data flow edges in simple code");
-        }
+        assert!(edges.is_empty(), "no data flow edges in simple code");
+    }
 
-        #[test]
-        fn test_ir_data_flow_parity_with_parsed() {
-            let source = r#"
+    #[test]
+    fn test_ir_data_flow_parity_with_parsed() {
+        let source = r#"
 function handler() {
     const data = fetchData();
     process(data);
 }
 "#;
-            let path = "src/handler.ts";
+        let path = "src/handler.ts";
 
-            // ParsedFile path
-            let data_flow_info = ast::extract_data_flow_info(path, source).unwrap();
-            let edges_parsed = build_data_flow_edges(&data_flow_info, path);
+        // ParsedFile path
+        let data_flow_info = ast::extract_data_flow_info(path, source).unwrap();
+        let edges_parsed = build_data_flow_edges(&data_flow_info, path);
 
-            // IR path
-            let edges_ir = ir_edges(path, source);
+        // IR path
+        let edges_ir = ir_edges(path, source);
 
-            assert_eq!(
-                edges_parsed.len(),
-                edges_ir.len(),
-                "edge count should match: parsed={}, ir={}",
-                edges_parsed.len(),
-                edges_ir.len()
-            );
+        assert_eq!(
+            edges_parsed.len(),
+            edges_ir.len(),
+            "edge count should match: parsed={}, ir={}",
+            edges_parsed.len(),
+            edges_ir.len()
+        );
 
-            for (a, b) in edges_parsed.iter().zip(edges_ir.iter()) {
-                assert_eq!(a.producer, b.producer);
-                assert_eq!(a.consumer, b.consumer);
-                assert_eq!(a.via, b.via);
-                assert_eq!(a.file, b.file);
-            }
+        for (a, b) in edges_parsed.iter().zip(edges_ir.iter()) {
+            assert_eq!(a.producer, b.producer);
+            assert_eq!(a.consumer, b.consumer);
+            assert_eq!(a.via, b.via);
+            assert_eq!(a.file, b.file);
         }
+    }
 
-        #[test]
-        fn test_trace_data_flow_ir_empty() {
-            let edges = trace_data_flow_ir(&[]);
-            assert!(edges.is_empty());
-        }
+    #[test]
+    fn test_trace_data_flow_ir_empty() {
+        let edges = trace_data_flow_ir(&[]);
+        assert!(edges.is_empty());
+    }
 
-        #[test]
-        fn test_trace_data_flow_ir_multiple_files() {
-            let files: Vec<(&str, &str)> = vec![
-                (
-                    "src/a.ts",
-                    r#"
+    #[test]
+    fn test_trace_data_flow_ir_multiple_files() {
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/a.ts",
+                r#"
 function processA() {
     const x = fetchA();
     saveA(x);
 }
 "#,
-                ),
-                (
-                    "src/b.ts",
-                    r#"
+            ),
+            (
+                "src/b.ts",
+                r#"
 function processB() {
     const y = fetchB();
     saveB(y);
 }
 "#,
-                ),
-            ];
+            ),
+        ];
 
-            let ir_files: Vec<IrFile> = files
-                .iter()
-                .map(|(path, source)| {
-                    let parsed = ast::parse_file(path, source).unwrap();
-                    let data_flow = ast::extract_data_flow_info(path, source).unwrap();
-                    let mut ir = IrFile::from_parsed_file(&parsed);
-                    ir.enrich_with_data_flow(&data_flow);
-                    ir
-                })
-                .collect();
+        let ir_files: Vec<IrFile> = files
+            .iter()
+            .map(|(path, source)| {
+                let parsed = ast::parse_file(path, source).unwrap();
+                let data_flow = ast::extract_data_flow_info(path, source).unwrap();
+                let mut ir = IrFile::from_parsed_file(&parsed);
+                ir.enrich_with_data_flow(&data_flow);
+                ir
+            })
+            .collect();
 
-            let edges = trace_data_flow_ir(&ir_files);
-            assert!(
-                edges.len() >= 2,
-                "should find edges from both files, got {}",
-                edges.len()
+        let edges = trace_data_flow_ir(&ir_files);
+        assert!(
+            edges.len() >= 2,
+            "should find edges from both files, got {}",
+            edges.len()
+        );
+        assert!(edges.iter().any(|e| e.file == "src/a.ts"));
+        assert!(edges.iter().any(|e| e.file == "src/b.ts"));
+    }
+}
+
+// =======================================================================
+// IR-based flow property-based tests
+// =======================================================================
+
+mod ir_proptests {
+    use super::*;
+    use crate::ast;
+    use crate::ir::IrFile;
+    use proptest::prelude::*;
+
+    fn func_name() -> impl Strategy<Value = String> {
+        "[a-z][a-zA-Z]{0,8}".prop_map(|s| s)
+    }
+
+    proptest! {
+        #[test]
+        fn prop_ir_data_flow_never_panics(
+            func in func_name(),
+            var in func_name(),
+            callee1 in func_name(),
+            callee2 in func_name()
+        ) {
+            let source = format!(
+                "function {}() {{\n  const {} = {}();\n  {}({});\n}}\n",
+                func, var, callee1, callee2, var
             );
-            assert!(edges.iter().any(|e| e.file == "src/a.ts"));
-            assert!(edges.iter().any(|e| e.file == "src/b.ts"));
+            let parsed = ast::parse_file("test.ts", &source).unwrap();
+            let data_flow = ast::extract_data_flow_info("test.ts", &source).unwrap();
+            let mut ir = IrFile::from_parsed_file(&parsed);
+            ir.enrich_with_data_flow(&data_flow);
+            let _ = build_data_flow_edges_from_ir(&ir);
+        }
+
+        #[test]
+        fn prop_ir_data_flow_no_self_edges(
+            func in func_name(),
+            var in func_name(),
+            callee in func_name()
+        ) {
+            let source = format!(
+                "function {}() {{\n  const {} = {}();\n  {}({});\n}}\n",
+                func, var, callee, callee, var
+            );
+            let parsed = ast::parse_file("test.ts", &source).unwrap();
+            let data_flow = ast::extract_data_flow_info("test.ts", &source).unwrap();
+            let mut ir = IrFile::from_parsed_file(&parsed);
+            ir.enrich_with_data_flow(&data_flow);
+            let edges = build_data_flow_edges_from_ir(&ir);
+            for edge in &edges {
+                prop_assert!(edge.producer != edge.consumer,
+                    "self-edge: {} → {}", edge.producer, edge.consumer);
+            }
+        }
+
+        #[test]
+        fn prop_ir_data_flow_valid_fields(
+            func in func_name(),
+            var in func_name(),
+            callee1 in func_name(),
+            callee2 in func_name()
+        ) {
+            let source = format!(
+                "function {}() {{\n  const {} = {}();\n  {}({});\n}}\n",
+                func, var, callee1, callee2, var
+            );
+            let parsed = ast::parse_file("test.ts", &source).unwrap();
+            let data_flow = ast::extract_data_flow_info("test.ts", &source).unwrap();
+            let mut ir = IrFile::from_parsed_file(&parsed);
+            ir.enrich_with_data_flow(&data_flow);
+            let edges = build_data_flow_edges_from_ir(&ir);
+            for edge in &edges {
+                prop_assert!(!edge.producer.is_empty());
+                prop_assert!(!edge.consumer.is_empty());
+                prop_assert!(!edge.via.is_empty());
+                prop_assert!(!edge.file.is_empty());
+                prop_assert!(edge.line > 0);
+            }
+        }
+
+        #[test]
+        fn prop_ir_data_flow_deterministic(
+            func in func_name(),
+            var in func_name(),
+            callee1 in func_name(),
+            callee2 in func_name()
+        ) {
+            let source = format!(
+                "function {}() {{\n  const {} = {}();\n  {}({});\n}}\n",
+                func, var, callee1, callee2, var
+            );
+            let parsed = ast::parse_file("test.ts", &source).unwrap();
+            let data_flow = ast::extract_data_flow_info("test.ts", &source).unwrap();
+            let mut ir1 = IrFile::from_parsed_file(&parsed);
+            ir1.enrich_with_data_flow(&data_flow);
+            let mut ir2 = IrFile::from_parsed_file(&parsed);
+            ir2.enrich_with_data_flow(&data_flow);
+            let e1 = build_data_flow_edges_from_ir(&ir1);
+            let e2 = build_data_flow_edges_from_ir(&ir2);
+            prop_assert_eq!(e1, e2);
+        }
+
+        #[test]
+        fn prop_ir_heuristic_parity(
+            func in func_name(),
+            callee1 in func_name()
+        ) {
+            // Build a simple file and check that heuristic analysis matches
+            let source = format!(
+                "function {}() {{\n  {}();\n}}\n",
+                func, callee1
+            );
+            let parsed: Vec<ParsedFile> = vec![ast::parse_file("test.ts", &source).unwrap()];
+            let ir_files: Vec<IrFile> = parsed.iter().map(IrFile::from_parsed_file).collect();
+            let config = FlowConfig::default();
+
+            let fp = analyze_data_flow(&parsed, &config);
+            let fi = analyze_data_flow_ir(&ir_files, &config);
+
+            prop_assert_eq!(fp.heuristic_edges.len(), fi.heuristic_edges.len());
+            prop_assert_eq!(fp.frameworks_detected, fi.frameworks_detected);
+        }
+
+        #[test]
+        fn prop_ir_trace_empty(_dummy in 0u32..1) {
+            let edges = trace_data_flow_ir(&[]);
+            prop_assert!(edges.is_empty());
         }
     }
-
-    // =======================================================================
-    // IR-based flow property-based tests
-    // =======================================================================
-
-    mod ir_proptests {
-        use super::*;
-        use crate::ast;
-        use crate::ir::IrFile;
-        use proptest::prelude::*;
-
-        fn func_name() -> impl Strategy<Value = String> {
-            "[a-z][a-zA-Z]{0,8}".prop_map(|s| s)
-        }
-
-        proptest! {
-            #[test]
-            fn prop_ir_data_flow_never_panics(
-                func in func_name(),
-                var in func_name(),
-                callee1 in func_name(),
-                callee2 in func_name()
-            ) {
-                let source = format!(
-                    "function {}() {{\n  const {} = {}();\n  {}({});\n}}\n",
-                    func, var, callee1, callee2, var
-                );
-                let parsed = ast::parse_file("test.ts", &source).unwrap();
-                let data_flow = ast::extract_data_flow_info("test.ts", &source).unwrap();
-                let mut ir = IrFile::from_parsed_file(&parsed);
-                ir.enrich_with_data_flow(&data_flow);
-                let _ = build_data_flow_edges_from_ir(&ir);
-            }
-
-            #[test]
-            fn prop_ir_data_flow_no_self_edges(
-                func in func_name(),
-                var in func_name(),
-                callee in func_name()
-            ) {
-                let source = format!(
-                    "function {}() {{\n  const {} = {}();\n  {}({});\n}}\n",
-                    func, var, callee, callee, var
-                );
-                let parsed = ast::parse_file("test.ts", &source).unwrap();
-                let data_flow = ast::extract_data_flow_info("test.ts", &source).unwrap();
-                let mut ir = IrFile::from_parsed_file(&parsed);
-                ir.enrich_with_data_flow(&data_flow);
-                let edges = build_data_flow_edges_from_ir(&ir);
-                for edge in &edges {
-                    prop_assert!(edge.producer != edge.consumer,
-                        "self-edge: {} → {}", edge.producer, edge.consumer);
-                }
-            }
-
-            #[test]
-            fn prop_ir_data_flow_valid_fields(
-                func in func_name(),
-                var in func_name(),
-                callee1 in func_name(),
-                callee2 in func_name()
-            ) {
-                let source = format!(
-                    "function {}() {{\n  const {} = {}();\n  {}({});\n}}\n",
-                    func, var, callee1, callee2, var
-                );
-                let parsed = ast::parse_file("test.ts", &source).unwrap();
-                let data_flow = ast::extract_data_flow_info("test.ts", &source).unwrap();
-                let mut ir = IrFile::from_parsed_file(&parsed);
-                ir.enrich_with_data_flow(&data_flow);
-                let edges = build_data_flow_edges_from_ir(&ir);
-                for edge in &edges {
-                    prop_assert!(!edge.producer.is_empty());
-                    prop_assert!(!edge.consumer.is_empty());
-                    prop_assert!(!edge.via.is_empty());
-                    prop_assert!(!edge.file.is_empty());
-                    prop_assert!(edge.line > 0);
-                }
-            }
-
-            #[test]
-            fn prop_ir_data_flow_deterministic(
-                func in func_name(),
-                var in func_name(),
-                callee1 in func_name(),
-                callee2 in func_name()
-            ) {
-                let source = format!(
-                    "function {}() {{\n  const {} = {}();\n  {}({});\n}}\n",
-                    func, var, callee1, callee2, var
-                );
-                let parsed = ast::parse_file("test.ts", &source).unwrap();
-                let data_flow = ast::extract_data_flow_info("test.ts", &source).unwrap();
-                let mut ir1 = IrFile::from_parsed_file(&parsed);
-                ir1.enrich_with_data_flow(&data_flow);
-                let mut ir2 = IrFile::from_parsed_file(&parsed);
-                ir2.enrich_with_data_flow(&data_flow);
-                let e1 = build_data_flow_edges_from_ir(&ir1);
-                let e2 = build_data_flow_edges_from_ir(&ir2);
-                prop_assert_eq!(e1, e2);
-            }
-
-            #[test]
-            fn prop_ir_heuristic_parity(
-                func in func_name(),
-                callee1 in func_name()
-            ) {
-                // Build a simple file and check that heuristic analysis matches
-                let source = format!(
-                    "function {}() {{\n  {}();\n}}\n",
-                    func, callee1
-                );
-                let parsed: Vec<ParsedFile> = vec![ast::parse_file("test.ts", &source).unwrap()];
-                let ir_files: Vec<IrFile> = parsed.iter().map(IrFile::from_parsed_file).collect();
-                let config = FlowConfig::default();
-
-                let fp = analyze_data_flow(&parsed, &config);
-                let fi = analyze_data_flow_ir(&ir_files, &config);
-
-                prop_assert_eq!(fp.heuristic_edges.len(), fi.heuristic_edges.len());
-                prop_assert_eq!(fp.frameworks_detected, fi.frameworks_detected);
-            }
-
-            #[test]
-            fn prop_ir_trace_empty(_dummy in 0u32..1) {
-                let edges = trace_data_flow_ir(&[]);
-                prop_assert!(edges.is_empty());
-            }
-        }
-    }
+}

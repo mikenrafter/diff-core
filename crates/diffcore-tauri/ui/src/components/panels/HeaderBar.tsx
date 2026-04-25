@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { useAppContext } from "../../hooks/AppContext";
 import { shortPath } from "../../utils/pathUtils";
 import { COMPARE_TARGET_STAGED, COMPARE_TARGET_UNSTAGED } from "../../utils/gitUtils";
@@ -28,6 +29,20 @@ export function HeaderBar() {
     analysis, reviewedGroupIds, sortedGroups,
   } = useAppContext();
 
+  // Local draft state so we don't run repo probes on every keystroke.
+  const [repoPathDraft, setRepoPathDraft] = useState(repoPath);
+  const commitTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    setRepoPathDraft(repoPath);
+  }, [repoPath]);
+
+  const commitRepoPath = (nextRaw: string) => {
+    const next = nextRaw.trim();
+    if (next === repoPath) return;
+    setRepoPath(next);
+  };
+
   return (
       <header className="top-bar">
         <div className="top-bar-left">
@@ -39,12 +54,42 @@ export function HeaderBar() {
             className="input repo-input"
             type="text"
             placeholder="Repository path..."
-            value={repoPath}
-            onChange={(e) => setRepoPath(e.target.value)}
+            value={repoPathDraft}
+            onChange={(e) => {
+              const next = e.target.value;
+              setRepoPathDraft(next);
+
+              if (commitTimerRef.current) {
+                window.clearTimeout(commitTimerRef.current);
+                commitTimerRef.current = null;
+              }
+
+              // If user clears the input, commit immediately (so UI resets).
+              if (next.trim().length === 0) {
+                setRepoPath("");
+                return;
+              }
+
+              // Debounce committing to app state so expensive repo checks run after idle.
+              commitTimerRef.current = window.setTimeout(() => {
+                commitRepoPath(next);
+                commitTimerRef.current = null;
+              }, 450);
+            }}
+            onBlur={() => {
+              if (commitTimerRef.current) {
+                window.clearTimeout(commitTimerRef.current);
+                commitTimerRef.current = null;
+              }
+              commitRepoPath(repoPathDraft);
+            }}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && repoPath && !loading) {
+              if (e.key === "Enter" && repoPathDraft.trim() && !loading) {
                 (e.target as HTMLInputElement).blur();
-                runAnalysis();
+                const path = repoPathDraft.trim();
+                // Ensure repo info is loaded for the committed path.
+                commitRepoPath(path);
+                void runAnalysis(path);
               }
             }}
           />
@@ -65,15 +110,16 @@ export function HeaderBar() {
           <button
             className="btn"
             onClick={() => {
-              const path = repoPath.trim();
+              const path = repoPathDraft.trim();
               if (!path) return;
+              commitRepoPath(path);
               setFavoriteRepoPaths((prev) => (
                 prev.includes(path) ? prev.filter((p) => p !== path) : [path, ...prev]
               ));
             }}
             title="Pin or unpin current repository"
           >
-            {favoriteRepoPaths.includes(repoPath.trim()) ? "Unpin" : "Pin"}
+            {favoriteRepoPaths.includes(repoPathDraft.trim()) ? "Unpin" : "Pin"}
           </button>
 
           {/* Branch comparison: head (source) → base (target) */}
@@ -275,8 +321,13 @@ export function HeaderBar() {
 
           <button
             className="btn btn-primary"
-            onClick={runAnalysis}
-            disabled={loading || !repoPath || comparisonMode === "invalid"}
+            onClick={() => {
+              const path = repoPathDraft.trim();
+              if (!path) return;
+              commitRepoPath(path);
+              void runAnalysis(path);
+            }}
+            disabled={loading || !repoPathDraft.trim() || comparisonMode === "invalid"}
           >
             {loading ? "Analyzing..." : "Analyze"}
           </button>

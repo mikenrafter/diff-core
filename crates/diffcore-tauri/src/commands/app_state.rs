@@ -88,4 +88,3 @@ pub fn load_last_app_state() -> Result<Option<serde_json::Value>, CommandError> 
 
     // Ok(Some(payload.snapshot))
 }
-

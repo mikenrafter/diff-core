@@ -65,7 +65,10 @@ class User {
             .iter()
             .filter(|d| d.kind == SymbolKind::Class)
             .collect();
-        assert!(!classes.is_empty(), "expected at least one class definition");
+        assert!(
+            !classes.is_empty(),
+            "expected at least one class definition"
+        );
         assert!(
             classes.iter().any(|d| d.name == "User"),
             "expected 'User' class; got: {:?}",
@@ -98,11 +101,12 @@ class User {
         let src = "enum Color { red, green, blue }\n";
         let result = e().parse_file("color.dart", src).unwrap();
         // Enums map to Struct in the standard convention.
-        let found = result
-            .definitions
-            .iter()
-            .any(|d| d.name == "Color");
-        assert!(found, "expected 'Color' enum; got: {:?}", result.definitions);
+        let found = result.definitions.iter().any(|d| d.name == "Color");
+        assert!(
+            found,
+            "expected 'Color' enum; got: {:?}",
+            result.definitions
+        );
     }
 
     // ── Imports ───────────────────────────────────────────────────────────
@@ -117,7 +121,10 @@ class User {
             "expected 2 imports; got: {:?}",
             result.imports.iter().map(|i| &i.source).collect::<Vec<_>>()
         );
-        assert!(result.imports.iter().any(|i| i.source.contains("dart:core")));
+        assert!(result
+            .imports
+            .iter()
+            .any(|i| i.source.contains("dart:core")));
         assert!(result.imports.iter().any(|i| i.source.contains("http")));
     }
 }

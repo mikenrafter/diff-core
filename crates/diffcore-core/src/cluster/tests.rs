@@ -863,7 +863,11 @@ fn test_group_name_generation() {
         "main CLI"
     );
     assert_eq!(
-        generate_group_name(&ep("src/queue.ts", "processQueue", EntrypointType::QueueConsumer)),
+        generate_group_name(&ep(
+            "src/queue.ts",
+            "processQueue",
+            EntrypointType::QueueConsumer
+        )),
         "processQueue (queue) consumer"
     );
     assert_eq!(
@@ -871,7 +875,11 @@ fn test_group_name_generation() {
         "cleanup scheduled"
     );
     assert_eq!(
-        generate_group_name(&ep("pages/home/HomePage.tsx", "HomePage", EntrypointType::ReactPage)),
+        generate_group_name(&ep(
+            "pages/home/HomePage.tsx",
+            "HomePage",
+            EntrypointType::ReactPage
+        )),
         "HomePage page"
     );
 }
@@ -1333,16 +1341,28 @@ fn test_group_name_all_entrypoint_types() {
     // basename of "tests/suite.test.ts" stripping extension → "suite"
     // but rsplit('.').last() on "suite.test" → "suite"
     assert_eq!(
-        generate_group_name(&ep("tests/suite.test.ts", "TestSuite", EntrypointType::TestFile)),
+        generate_group_name(&ep(
+            "tests/suite.test.ts",
+            "TestSuite",
+            EntrypointType::TestFile
+        )),
         "TestSuite (suite) test"
     );
     assert_eq!(
-        generate_group_name(&ep("src/button.tsx", "onClick", EntrypointType::EventHandler)),
+        generate_group_name(&ep(
+            "src/button.tsx",
+            "onClick",
+            EntrypointType::EventHandler
+        )),
         "onClick (button) event"
     );
     // Symbol matches basename → no parens
     assert_eq!(
-        generate_group_name(&ep("src/services/UserService.ts", "UserService", EntrypointType::EffectService)),
+        generate_group_name(&ep(
+            "src/services/UserService.ts",
+            "UserService",
+            EntrypointType::EffectService
+        )),
         "UserService Effect service"
     );
 }

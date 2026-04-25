@@ -677,8 +677,7 @@ fn extract_diff(
         let head = args.head.as_deref().unwrap_or("HEAD");
         if include_uncommitted {
             let diff = git::diff_branch_to_workdir(repo, base)?;
-            let source =
-                output::diff_source_branch_with_worktree(base, diff.base_sha.as_deref());
+            let source = output::diff_source_branch_with_worktree(base, diff.base_sha.as_deref());
             Ok((diff, source))
         } else {
             let selected = git::diff_refs_with_worktree_fallback(repo, base, head)?;
@@ -776,9 +775,7 @@ async fn run_refinement(
             );
             return Ok(());
         }
-        refinement::RefinementIterationStopReason::MaxIterationsReached
-            if outcome.had_changes =>
-        {
+        refinement::RefinementIterationStopReason::MaxIterationsReached if outcome.had_changes => {
             eprintln!(
                 "refinement reached max iterations ({}) with applied changes",
                 refinement_llm_config.refinement.max_iterations.max(1)

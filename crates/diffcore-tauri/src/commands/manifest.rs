@@ -76,16 +76,12 @@ pub fn watch_manifest(
     // Spawn a background thread that polls the file for changes
     let path = PathBuf::from(manifest_path);
     std::thread::spawn(move || {
-        let mut last_modified = std::fs::metadata(&path)
-            .and_then(|m| m.modified())
-            .ok();
+        let mut last_modified = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
 
         loop {
             std::thread::sleep(std::time::Duration::from_millis(500));
 
-            let current_modified = std::fs::metadata(&path)
-                .and_then(|m| m.modified())
-                .ok();
+            let current_modified = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
 
             if current_modified != last_modified && current_modified.is_some() {
                 last_modified = current_modified;
@@ -100,9 +96,7 @@ pub fn watch_manifest(
 
 /// Stop watching the manifest file.
 #[tauri::command]
-pub fn unwatch_manifest(
-    state: tauri::State<'_, AppState>,
-) -> Result<(), CommandError> {
+pub fn unwatch_manifest(state: tauri::State<'_, AppState>) -> Result<(), CommandError> {
     if let Ok(mut path) = state.watched_manifest_path.lock() {
         *path = None;
     }

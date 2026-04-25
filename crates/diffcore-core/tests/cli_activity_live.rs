@@ -198,16 +198,16 @@ async fn test_live_claude_cli_activity_stream() {
 #[tokio::test]
 async fn test_live_codex_cli_refinement_stream() {
     if !should_run_live() {
-        eprintln!("Skipping live Codex CLI refinement test (set DIFFCORE_RUN_LIVE_LLM_TESTS=1 to run)");
+        eprintln!(
+            "Skipping live Codex CLI refinement test (set DIFFCORE_RUN_LIVE_LLM_TESTS=1 to run)"
+        );
         return;
     }
     load_env();
 
     let status = llm::codex_cli::detect_status();
     if !status.authenticated {
-        eprintln!(
-            "Skipping Codex CLI refinement test (Codex CLI not installed or not logged in)"
-        );
+        eprintln!("Skipping Codex CLI refinement test (Codex CLI not installed or not logged in)");
         return;
     }
 
@@ -241,7 +241,9 @@ async fn test_live_codex_cli_refinement_stream() {
 #[tokio::test]
 async fn test_live_claude_cli_refinement_stream() {
     if !should_run_live() {
-        eprintln!("Skipping live Claude Code refinement test (set DIFFCORE_RUN_LIVE_LLM_TESTS=1 to run)");
+        eprintln!(
+            "Skipping live Claude Code refinement test (set DIFFCORE_RUN_LIVE_LLM_TESTS=1 to run)"
+        );
         return;
     }
     load_env();

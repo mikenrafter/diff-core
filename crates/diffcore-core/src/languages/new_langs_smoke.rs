@@ -45,7 +45,11 @@ mod tests {
         assert!(
             result.definitions.iter().any(|d| d.name == expected_name),
             "{ext}: expected symbol '{expected_name}' in definitions; got: {:?}",
-            result.definitions.iter().map(|d| &d.name).collect::<Vec<_>>()
+            result
+                .definitions
+                .iter()
+                .map(|d| &d.name)
+                .collect::<Vec<_>>()
         );
     }
 

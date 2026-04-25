@@ -501,16 +501,11 @@ fn extract_claude_structured_output(parsed: &serde_json::Value) -> Option<serde_
     content.iter().find_map(|item| {
         let is_structured_tool = item.get("type").and_then(serde_json::Value::as_str)
             == Some("tool_use")
-            && item.get("name").and_then(serde_json::Value::as_str)
-                == Some("structured_output");
+            && item.get("name").and_then(serde_json::Value::as_str) == Some("structured_output");
 
         if is_structured_tool {
             item.get("input").cloned()
-        } else if item
-            .get("type")
-            .and_then(serde_json::Value::as_str)
-            == Some("text")
-        {
+        } else if item.get("type").and_then(serde_json::Value::as_str) == Some("text") {
             item.get("text")
                 .and_then(serde_json::Value::as_str)
                 .and_then(extract_json_from_text)
@@ -610,7 +605,9 @@ mod tests {
         let structured = parse_claude_structured_output(output).expect("structured output");
 
         assert_eq!(
-            structured.get("reasoning").and_then(serde_json::Value::as_str),
+            structured
+                .get("reasoning")
+                .and_then(serde_json::Value::as_str),
             Some("keep current grouping")
         );
     }
@@ -624,7 +621,9 @@ mod tests {
         let structured = parse_claude_structured_output(output).expect("structured output");
 
         assert_eq!(
-            structured.get("reasoning").and_then(serde_json::Value::as_str),
+            structured
+                .get("reasoning")
+                .and_then(serde_json::Value::as_str),
             Some("text fallback")
         );
     }

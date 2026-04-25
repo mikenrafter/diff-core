@@ -77,10 +77,7 @@ pub fn export_manifest(analysis: &AnalysisOutput) -> GroupsManifest {
 /// Preserves file metadata (role, changes, symbols_changed) from the original analysis.
 /// Files not found in the original analysis get default metadata.
 /// Edges are preserved only within groups (cross-group edges are dropped).
-pub fn import_manifest(
-    analysis: &AnalysisOutput,
-    manifest: &GroupsManifest,
-) -> AnalysisOutput {
+pub fn import_manifest(analysis: &AnalysisOutput, manifest: &GroupsManifest) -> AnalysisOutput {
     // Build a lookup: file path → (FileChange, group edges)
     let mut file_lookup: std::collections::HashMap<&str, &FileChange> =
         std::collections::HashMap::new();
@@ -201,18 +198,16 @@ pub fn import_manifest(
 
 /// Read a manifest from a JSON file.
 pub fn read_manifest(path: &Path) -> Result<GroupsManifest, String> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| format!("Failed to read manifest: {}", e))?;
-    serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse manifest JSON: {}", e))
+    let content =
+        std::fs::read_to_string(path).map_err(|e| format!("Failed to read manifest: {}", e))?;
+    serde_json::from_str(&content).map_err(|e| format!("Failed to parse manifest JSON: {}", e))
 }
 
 /// Write a manifest to a JSON file.
 pub fn write_manifest(path: &Path, manifest: &GroupsManifest) -> Result<(), String> {
     let json = serde_json::to_string_pretty(manifest)
         .map_err(|e| format!("Failed to serialize manifest: {}", e))?;
-    std::fs::write(path, json)
-        .map_err(|e| format!("Failed to write manifest: {}", e))
+    std::fs::write(path, json).map_err(|e| format!("Failed to write manifest: {}", e))
 }
 
 #[cfg(test)]
@@ -257,14 +252,20 @@ mod tests {
                             path: "src/auth.ts".to_string(),
                             flow_position: 0,
                             role: FileRole::Entrypoint,
-                            changes: ChangeStats { additions: 10, deletions: 2 },
+                            changes: ChangeStats {
+                                additions: 10,
+                                deletions: 2,
+                            },
                             symbols_changed: vec!["login".to_string()],
                         },
                         FileChange {
                             path: "src/users.ts".to_string(),
                             flow_position: 1,
                             role: FileRole::Service,
-                            changes: ChangeStats { additions: 5, deletions: 0 },
+                            changes: ChangeStats {
+                                additions: 5,
+                                deletions: 0,
+                            },
                             symbols_changed: vec!["getUser".to_string()],
                         },
                     ],
@@ -284,7 +285,10 @@ mod tests {
                         path: "src/config.ts".to_string(),
                         flow_position: 0,
                         role: FileRole::Config,
-                        changes: ChangeStats { additions: 3, deletions: 1 },
+                        changes: ChangeStats {
+                            additions: 3,
+                            deletions: 1,
+                        },
                         symbols_changed: vec![],
                     }],
                     edges: vec![],
@@ -310,7 +314,10 @@ mod tests {
         assert_eq!(manifest.version, "1.0.0");
         assert_eq!(manifest.groups.len(), 2);
         assert_eq!(manifest.groups[0].name, "auth flow");
-        assert_eq!(manifest.groups[0].files, vec!["src/auth.ts", "src/users.ts"]);
+        assert_eq!(
+            manifest.groups[0].files,
+            vec!["src/auth.ts", "src/users.ts"]
+        );
         assert_eq!(manifest.groups[0].review_order, 1);
         assert_eq!(manifest.groups[1].name, "config update");
         assert_eq!(manifest.groups[1].files, vec!["src/config.ts"]);
@@ -391,7 +398,10 @@ mod tests {
         let reimported = import_manifest(&analysis, &manifest);
         assert_eq!(reimported.groups[0].files.len(), 1);
         assert_eq!(reimported.groups[1].files.len(), 2);
-        assert!(reimported.groups[1].files.iter().any(|f| f.path == "src/users.ts"));
+        assert!(reimported.groups[1]
+            .files
+            .iter()
+            .any(|f| f.path == "src/users.ts"));
     }
 
     #[test]
@@ -458,7 +468,10 @@ mod tests {
         let reimported = import_manifest(&analysis, &manifest);
 
         assert!(reimported.groups[0].entrypoint.is_some());
-        assert_eq!(reimported.groups[0].entrypoint.as_ref().unwrap().symbol, "login");
+        assert_eq!(
+            reimported.groups[0].entrypoint.as_ref().unwrap().symbol,
+            "login"
+        );
     }
 
     #[test]
@@ -537,7 +550,10 @@ mod tests {
 
         // 3. Import and verify
         let updated = import_manifest(&analysis, &read_manifest(&path).unwrap());
-        assert_eq!(updated.groups[0].name, "user authentication & token management");
+        assert_eq!(
+            updated.groups[0].name,
+            "user authentication & token management"
+        );
         assert_eq!(updated.groups[1].name, "application configuration");
         assert_eq!(updated.groups[0].review_order, 2);
         assert_eq!(updated.groups[1].review_order, 1);
@@ -555,7 +571,10 @@ mod tests {
 
         let updated = import_manifest(&analysis, &manifest);
         assert_eq!(updated.groups[1].files.len(), 2);
-        assert!(updated.groups[1].files.iter().any(|f| f.path == "package.json"));
+        assert!(updated.groups[1]
+            .files
+            .iter()
+            .any(|f| f.path == "package.json"));
         assert!(updated.infrastructure_group.is_none());
     }
 
@@ -572,16 +591,27 @@ mod tests {
         let updated = import_manifest(&analysis, &manifest);
         assert_eq!(updated.groups[1].files.len(), 0);
         assert!(updated.infrastructure_group.is_some());
-        assert!(updated.infrastructure_group.unwrap().files.contains(&"src/config.ts".to_string()));
+        assert!(updated
+            .infrastructure_group
+            .unwrap()
+            .files
+            .contains(&"src/config.ts".to_string()));
     }
 
     #[test]
     fn integration_merge_all_into_single_group() {
         // Agent merges everything into one group for a simple PR
         let analysis = make_analysis();
-        let all_files: Vec<String> = analysis.groups.iter()
+        let all_files: Vec<String> = analysis
+            .groups
+            .iter()
             .flat_map(|g| g.files.iter().map(|f| f.path.clone()))
-            .chain(analysis.infrastructure_group.iter().flat_map(|ig| ig.files.clone()))
+            .chain(
+                analysis
+                    .infrastructure_group
+                    .iter()
+                    .flat_map(|ig| ig.files.clone()),
+            )
             .collect();
 
         let manifest = GroupsManifest {
@@ -667,7 +697,11 @@ mod tests {
             version: "1.0.0".to_string(),
             groups: vec![ManifestGroup {
                 name: "auth + user service".to_string(),
-                files: vec!["src/auth.ts".to_string(), "src/users.ts".to_string(), "src/config.ts".to_string()],
+                files: vec![
+                    "src/auth.ts".to_string(),
+                    "src/users.ts".to_string(),
+                    "src/config.ts".to_string(),
+                ],
                 review_order: 1,
                 description: None,
             }],
@@ -689,7 +723,9 @@ mod tests {
                 name: "auth flow".to_string(),
                 files: vec!["src/auth.ts".to_string()],
                 review_order: 1,
-                description: Some("Handles login, token refresh, and session management".to_string()),
+                description: Some(
+                    "Handles login, token refresh, and session management".to_string(),
+                ),
             }],
             unassigned_files: vec![],
         };

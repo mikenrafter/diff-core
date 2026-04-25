@@ -3,18 +3,16 @@
 //! Moved from `query_engine.rs` during the per-language module split.
 //! Pure mechanical move — no logic changes.
 
-use crate::ast::{Definition, ImportedName, ImportInfo};
+use crate::ast::{Definition, ImportInfo, ImportedName};
 use crate::languages::common::{
-    collect_matches, hash_str, node_span, node_text,
-    extract_definitions_standard, CollectedMatch,
+    collect_matches, extract_definitions_standard, hash_str, node_span, node_text, CollectedMatch,
 };
 use crate::query_engine::{QueryEngineError, QueryWithCaptures};
 use crate::types::SymbolKind;
 use tree_sitter::{Node, QueryCursor};
 
-
 pub(crate) fn extract_imports(
-root: &Node,
+    root: &Node,
     source: &[u8],
     qwc: &QueryWithCaptures,
 ) -> Result<Vec<ImportInfo>, QueryEngineError> {
@@ -163,66 +161,59 @@ pub(crate) fn extract_definitions(
     definitions: &mut Vec<Definition>,
     seen_nodes: &mut Vec<(usize, usize)>,
 ) {
-    if extract_definitions_standard(
-        matches,
-        source,
-        qwc,
-        definitions,
-        seen_nodes,
-    ) {
+    if extract_definitions_standard(matches, source, qwc, definitions, seen_nodes) {
         // Standard path took over.
     } else {
-    let func_name_idx = qwc.capture_index("func_name");
-    let func_node_idx = qwc.capture_index("func_node");
-    let class_name_idx = qwc.capture_index("class_name");
-    let class_node_idx = qwc.capture_index("class_node");
-    let object_name_idx = qwc.capture_index("object_name");
-    let object_node_idx = qwc.capture_index("object_node");
-    let prop_name_idx = qwc.capture_index("prop_name");
-    let prop_node_idx = qwc.capture_index("prop_node");
-    let typealias_name_idx = qwc.capture_index("typealias_name");
-    let typealias_node_idx = qwc.capture_index("typealias_node");
+        let func_name_idx = qwc.capture_index("func_name");
+        let func_node_idx = qwc.capture_index("func_node");
+        let class_name_idx = qwc.capture_index("class_name");
+        let class_node_idx = qwc.capture_index("class_node");
+        let object_name_idx = qwc.capture_index("object_name");
+        let object_node_idx = qwc.capture_index("object_node");
+        let prop_name_idx = qwc.capture_index("prop_name");
+        let prop_node_idx = qwc.capture_index("prop_node");
+        let typealias_name_idx = qwc.capture_index("typealias_name");
+        let typealias_node_idx = qwc.capture_index("typealias_node");
 
-    let kotlin_def_captures: &[(Option<u32>, Option<u32>, SymbolKind)] = &[
-        (func_name_idx, func_node_idx, SymbolKind::Function),
-        (class_name_idx, class_node_idx, SymbolKind::Class),
-        (object_name_idx, object_node_idx, SymbolKind::Class),
-        (prop_name_idx, prop_node_idx, SymbolKind::Constant),
-        (
-            typealias_name_idx,
-            typealias_node_idx,
-            SymbolKind::TypeAlias,
-        ),
-    ];
+        let kotlin_def_captures: &[(Option<u32>, Option<u32>, SymbolKind)] = &[
+            (func_name_idx, func_node_idx, SymbolKind::Function),
+            (class_name_idx, class_node_idx, SymbolKind::Class),
+            (object_name_idx, object_node_idx, SymbolKind::Class),
+            (prop_name_idx, prop_node_idx, SymbolKind::Constant),
+            (
+                typealias_name_idx,
+                typealias_node_idx,
+                SymbolKind::TypeAlias,
+            ),
+        ];
 
-    for m in matches {
-        for &(name_cap, node_cap, kind) in kotlin_def_captures {
-            if m.has_capture(name_cap) {
-                let name_node = m.get_capture(name_cap);
-                let name_text = name_node
-                    .map(|n| node_text(&n, source).to_string())
-                    .unwrap_or_default();
-                let (start_line, end_line, _node_start) = node_span(m, node_cap);
-                if !name_text.is_empty() {
-                    let name_start = name_node.map(|n| n.start_byte()).unwrap_or(0);
-                    let key = (name_start, hash_str(&name_text));
-                    if !seen_nodes.contains(&key) {
-                        seen_nodes.push(key);
-                        definitions.push(Definition {
-                            name: name_text,
-                            kind,
-                            start_line,
-                            end_line,
-                        });
+        for m in matches {
+            for &(name_cap, node_cap, kind) in kotlin_def_captures {
+                if m.has_capture(name_cap) {
+                    let name_node = m.get_capture(name_cap);
+                    let name_text = name_node
+                        .map(|n| node_text(&n, source).to_string())
+                        .unwrap_or_default();
+                    let (start_line, end_line, _node_start) = node_span(m, node_cap);
+                    if !name_text.is_empty() {
+                        let name_start = name_node.map(|n| n.start_byte()).unwrap_or(0);
+                        let key = (name_start, hash_str(&name_text));
+                        if !seen_nodes.contains(&key) {
+                            seen_nodes.push(key);
+                            definitions.push(Definition {
+                                name: name_text,
+                                kind,
+                                start_line,
+                                end_line,
+                            });
+                        }
                     }
+                    break;
                 }
-                break;
             }
         }
-    }
     } // close `else` opened above for the standard-convention fallback
 }
-
 
 #[cfg(test)]
 #[allow(
@@ -517,5 +508,4 @@ fun Route.userRoutes(userService: UserService) {
             callees
         );
     }
-
 }

@@ -776,4 +776,3 @@ export default app;
         entrypoints
     );
 }
-

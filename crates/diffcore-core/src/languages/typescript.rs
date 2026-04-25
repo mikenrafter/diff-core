@@ -3,18 +3,17 @@
 //! Moved from `query_engine.rs` during the per-language module split.
 //! Pure mechanical move — no logic changes.
 
-use crate::ast::{Definition, ImportedName, ImportInfo};
+use crate::ast::{Definition, ImportInfo, ImportedName};
 use crate::languages::common::{
-    collect_matches, get_or_insert_import, hash_str, node_span, node_text,
-    extract_definitions_standard, CollectedMatch, ImportBuilder,
+    collect_matches, extract_definitions_standard, get_or_insert_import, hash_str, node_span,
+    node_text, CollectedMatch, ImportBuilder,
 };
 use crate::query_engine::{QueryEngineError, QueryWithCaptures};
 use crate::types::SymbolKind;
 use tree_sitter::{Node, QueryCursor};
 
-
 pub(crate) fn extract_imports(
-root: &Node,
+    root: &Node,
     source: &[u8],
     qwc: &QueryWithCaptures,
 ) -> Result<Vec<ImportInfo>, QueryEngineError> {
@@ -117,118 +116,109 @@ pub(crate) fn extract_definitions(
     // Try standard-convention extractor first. When `definitions.scm`
     // has been migrated to use `@definition.<kind>` + `@name`, this
     // takes over and the legacy per-kind dispatch below is skipped.
-    if extract_definitions_standard(
-        matches,
-        source,
-        qwc,
-        definitions,
-        seen_nodes,
-    ) {
+    if extract_definitions_standard(matches, source, qwc, definitions, seen_nodes) {
         // Standard path emitted at least one definition: bespoke
         // dispatch would only re-discover the same nodes (and our
         // dedup would drop them) so we skip it for clarity.
     } else {
-    // TS/JS: each definition kind has a distinct capture name pair
-    let fn_name_idx = qwc.capture_index("fn_name");
-    let fn_node_idx = qwc.capture_index("fn_node");
-    let gen_name_idx = qwc.capture_index("gen_name");
-    let gen_node_idx = qwc.capture_index("gen_node");
-    let class_name_idx = qwc.capture_index("class_name");
-    let class_node_idx = qwc.capture_index("class_node");
-    let abstract_name_idx = qwc.capture_index("abstract_name");
-    let abstract_node_idx = qwc.capture_index("abstract_node");
-    let iface_name_idx = qwc.capture_index("iface_name");
-    let iface_node_idx = qwc.capture_index("iface_node");
-    let type_name_idx = qwc.capture_index("type_name");
-    let type_node_idx = qwc.capture_index("type_node");
-    let arrow_name_idx = qwc.capture_index("arrow_name");
-    let arrow_node_idx = qwc.capture_index("arrow_node");
-    let fn_expr_name_idx = qwc.capture_index("fn_expr_name");
-    let fn_expr_node_idx = qwc.capture_index("fn_expr_node");
-    let const_name_idx = qwc.capture_index("const_name");
-    let const_value_idx = qwc.capture_index("const_value");
-    let const_node_idx = qwc.capture_index("const_node");
-    let method_name_idx = qwc.capture_index("method_name");
-    let method_node_idx = qwc.capture_index("method_node");
+        // TS/JS: each definition kind has a distinct capture name pair
+        let fn_name_idx = qwc.capture_index("fn_name");
+        let fn_node_idx = qwc.capture_index("fn_node");
+        let gen_name_idx = qwc.capture_index("gen_name");
+        let gen_node_idx = qwc.capture_index("gen_node");
+        let class_name_idx = qwc.capture_index("class_name");
+        let class_node_idx = qwc.capture_index("class_node");
+        let abstract_name_idx = qwc.capture_index("abstract_name");
+        let abstract_node_idx = qwc.capture_index("abstract_node");
+        let iface_name_idx = qwc.capture_index("iface_name");
+        let iface_node_idx = qwc.capture_index("iface_node");
+        let type_name_idx = qwc.capture_index("type_name");
+        let type_node_idx = qwc.capture_index("type_node");
+        let arrow_name_idx = qwc.capture_index("arrow_name");
+        let arrow_node_idx = qwc.capture_index("arrow_node");
+        let fn_expr_name_idx = qwc.capture_index("fn_expr_name");
+        let fn_expr_node_idx = qwc.capture_index("fn_expr_node");
+        let const_name_idx = qwc.capture_index("const_name");
+        let const_value_idx = qwc.capture_index("const_value");
+        let const_node_idx = qwc.capture_index("const_node");
+        let method_name_idx = qwc.capture_index("method_name");
+        let method_node_idx = qwc.capture_index("method_node");
 
-    // Ordered list: (name_capture, node_capture, kind).
-    // const_name/const_value is special-cased below.
-    let ts_def_captures: &[(Option<u32>, Option<u32>, SymbolKind)] = &[
-        (fn_name_idx, fn_node_idx, SymbolKind::Function),
-        (gen_name_idx, gen_node_idx, SymbolKind::Function),
-        (class_name_idx, class_node_idx, SymbolKind::Class),
-        (abstract_name_idx, abstract_node_idx, SymbolKind::Class),
-        (iface_name_idx, iface_node_idx, SymbolKind::Interface),
-        (type_name_idx, type_node_idx, SymbolKind::TypeAlias),
-        (arrow_name_idx, arrow_node_idx, SymbolKind::Function),
-        (fn_expr_name_idx, fn_expr_node_idx, SymbolKind::Function),
-        (method_name_idx, method_node_idx, SymbolKind::Function),
-    ];
+        // Ordered list: (name_capture, node_capture, kind).
+        // const_name/const_value is special-cased below.
+        let ts_def_captures: &[(Option<u32>, Option<u32>, SymbolKind)] = &[
+            (fn_name_idx, fn_node_idx, SymbolKind::Function),
+            (gen_name_idx, gen_node_idx, SymbolKind::Function),
+            (class_name_idx, class_node_idx, SymbolKind::Class),
+            (abstract_name_idx, abstract_node_idx, SymbolKind::Class),
+            (iface_name_idx, iface_node_idx, SymbolKind::Interface),
+            (type_name_idx, type_node_idx, SymbolKind::TypeAlias),
+            (arrow_name_idx, arrow_node_idx, SymbolKind::Function),
+            (fn_expr_name_idx, fn_expr_node_idx, SymbolKind::Function),
+            (method_name_idx, method_node_idx, SymbolKind::Function),
+        ];
 
-    for m in matches {
-        // Skip the const_name pattern if the value is an arrow/function
-        // (those are already captured by arrow_name/fn_expr_name patterns)
-        if m.has_capture(const_name_idx) {
-            let has_fn_value = m
-                .get_capture(const_value_idx)
-                .map(|n| {
-                    let k = n.kind();
-                    k == "arrow_function"
-                        || k == "function"
-                        || k == "function_expression"
-                })
-                .unwrap_or(false);
-            if has_fn_value {
-                continue;
-            }
-            // Non-function constant
-            let name_text = m
-                .get_capture(const_name_idx)
-                .map(|n| node_text(&n, source).to_string())
-                .unwrap_or_default();
-            let (start_line, end_line, node_start) = node_span(m, const_node_idx);
-            if !name_text.is_empty() {
-                let key = (node_start, hash_str(&name_text));
-                if !seen_nodes.contains(&key) {
-                    seen_nodes.push(key);
-                    definitions.push(Definition {
-                        name: name_text,
-                        kind: SymbolKind::Constant,
-                        start_line,
-                        end_line,
-                    });
+        for m in matches {
+            // Skip the const_name pattern if the value is an arrow/function
+            // (those are already captured by arrow_name/fn_expr_name patterns)
+            if m.has_capture(const_name_idx) {
+                let has_fn_value = m
+                    .get_capture(const_value_idx)
+                    .map(|n| {
+                        let k = n.kind();
+                        k == "arrow_function" || k == "function" || k == "function_expression"
+                    })
+                    .unwrap_or(false);
+                if has_fn_value {
+                    continue;
                 }
-            }
-            continue;
-        }
-
-        // Check each distinct definition capture
-        for &(name_cap, node_cap, kind) in ts_def_captures {
-            if m.has_capture(name_cap) {
+                // Non-function constant
                 let name_text = m
-                    .get_capture(name_cap)
+                    .get_capture(const_name_idx)
                     .map(|n| node_text(&n, source).to_string())
                     .unwrap_or_default();
-                let (start_line, end_line, node_start) = node_span(m, node_cap);
+                let (start_line, end_line, node_start) = node_span(m, const_node_idx);
                 if !name_text.is_empty() {
                     let key = (node_start, hash_str(&name_text));
                     if !seen_nodes.contains(&key) {
                         seen_nodes.push(key);
                         definitions.push(Definition {
                             name: name_text,
-                            kind,
+                            kind: SymbolKind::Constant,
                             start_line,
                             end_line,
                         });
                     }
                 }
-                break;
+                continue;
+            }
+
+            // Check each distinct definition capture
+            for &(name_cap, node_cap, kind) in ts_def_captures {
+                if m.has_capture(name_cap) {
+                    let name_text = m
+                        .get_capture(name_cap)
+                        .map(|n| node_text(&n, source).to_string())
+                        .unwrap_or_default();
+                    let (start_line, end_line, node_start) = node_span(m, node_cap);
+                    if !name_text.is_empty() {
+                        let key = (node_start, hash_str(&name_text));
+                        if !seen_nodes.contains(&key) {
+                            seen_nodes.push(key);
+                            definitions.push(Definition {
+                                name: name_text,
+                                kind,
+                                start_line,
+                                end_line,
+                            });
+                        }
+                    }
+                    break;
+                }
             }
         }
-    }
     } // close `else` opened above for the standard-convention fallback
 }
-
 
 #[cfg(test)]
 #[allow(
@@ -1237,5 +1227,4 @@ class WithMethod { method() {} }
             "new_expression is not captured as a call site (known gap)"
         );
     }
-
 }

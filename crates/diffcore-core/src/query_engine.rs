@@ -9,12 +9,12 @@
 //! code changes.
 
 use crate::ast::{
-    CallSite, CallWithArgs, DataFlowInfo, Definition, ExportInfo, ImportInfo,
-    Language, ParsedFile, VarCallAssignment,
+    CallSite, CallWithArgs, DataFlowInfo, Definition, ExportInfo, ImportInfo, Language, ParsedFile,
+    VarCallAssignment,
 };
 use crate::languages::common::{
-    collect_matches, extract_arg_texts, extract_definitions_standard,
-    find_containing_function, node_text,
+    collect_matches, extract_arg_texts, extract_definitions_standard, find_containing_function,
+    node_text,
 };
 use crate::types::SymbolKind;
 use once_cell::sync::OnceCell;
@@ -359,7 +359,6 @@ impl QueryWithCaptures {
 /// Owned representation of a single query match.
 /// Extracted from the streaming iterator so we can process after iteration.
 
-
 /// Collect all matches from a streaming iterator into owned data.
 
 // ---------------------------------------------------------------------------
@@ -386,29 +385,52 @@ pub struct QueryEngine {
     cpp_queries: OnceCell<LanguageQueries>,
     scala_queries: OnceCell<LanguageQueries>,
     // Extras — present only when their `lang-*` feature is enabled.
-    #[cfg(feature = "lang-bash")]     bash_queries:     OnceCell<LanguageQueries>,
-    #[cfg(feature = "lang-haskell")]  haskell_queries:  OnceCell<LanguageQueries>,
-    #[cfg(feature = "lang-nix")]      nix_queries:      OnceCell<LanguageQueries>,
-    #[cfg(feature = "lang-lua")]      lua_queries:      OnceCell<LanguageQueries>,
-    #[cfg(feature = "lang-perl")]     perl_queries:     OnceCell<LanguageQueries>,
-    #[cfg(feature = "lang-elixir")]   elixir_queries:   OnceCell<LanguageQueries>,
-    #[cfg(feature = "lang-erlang")]   erlang_queries:   OnceCell<LanguageQueries>,
-    #[cfg(feature = "lang-zig")]      zig_queries:      OnceCell<LanguageQueries>,
-    #[cfg(feature = "lang-ocaml")]    ocaml_queries:    OnceCell<LanguageQueries>,
-    #[cfg(feature = "lang-julia")]    julia_queries:    OnceCell<LanguageQueries>,
-    #[cfg(feature = "lang-dart")]     dart_queries:     OnceCell<LanguageQueries>,
-    #[cfg(feature = "lang-r")]        r_queries:        OnceCell<LanguageQueries>,
-    #[cfg(feature = "lang-fish")]     fish_queries:     OnceCell<LanguageQueries>,
-    #[cfg(feature = "lang-html")]     html_queries:     OnceCell<LanguageQueries>,
-    #[cfg(feature = "lang-css")]      css_queries:      OnceCell<LanguageQueries>,
-    #[cfg(feature = "lang-scss")]     scss_queries:     OnceCell<LanguageQueries>,
-    #[cfg(feature = "lang-json")]     json_queries:     OnceCell<LanguageQueries>,
-    #[cfg(feature = "lang-yaml")]     yaml_queries:     OnceCell<LanguageQueries>,
-    #[cfg(feature = "lang-toml")]     toml_queries:     OnceCell<LanguageQueries>,
-    #[cfg(feature = "lang-markdown")] markdown_queries: OnceCell<LanguageQueries>,
-    #[cfg(feature = "lang-graphql")]  graphql_queries:  OnceCell<LanguageQueries>,
-    #[cfg(feature = "lang-vue")]      vue_queries:      OnceCell<LanguageQueries>,
-    #[cfg(feature = "lang-svelte")]   svelte_queries:   OnceCell<LanguageQueries>,
+    #[cfg(feature = "lang-bash")]
+    bash_queries: OnceCell<LanguageQueries>,
+    #[cfg(feature = "lang-haskell")]
+    haskell_queries: OnceCell<LanguageQueries>,
+    #[cfg(feature = "lang-nix")]
+    nix_queries: OnceCell<LanguageQueries>,
+    #[cfg(feature = "lang-lua")]
+    lua_queries: OnceCell<LanguageQueries>,
+    #[cfg(feature = "lang-perl")]
+    perl_queries: OnceCell<LanguageQueries>,
+    #[cfg(feature = "lang-elixir")]
+    elixir_queries: OnceCell<LanguageQueries>,
+    #[cfg(feature = "lang-erlang")]
+    erlang_queries: OnceCell<LanguageQueries>,
+    #[cfg(feature = "lang-zig")]
+    zig_queries: OnceCell<LanguageQueries>,
+    #[cfg(feature = "lang-ocaml")]
+    ocaml_queries: OnceCell<LanguageQueries>,
+    #[cfg(feature = "lang-julia")]
+    julia_queries: OnceCell<LanguageQueries>,
+    #[cfg(feature = "lang-dart")]
+    dart_queries: OnceCell<LanguageQueries>,
+    #[cfg(feature = "lang-r")]
+    r_queries: OnceCell<LanguageQueries>,
+    #[cfg(feature = "lang-fish")]
+    fish_queries: OnceCell<LanguageQueries>,
+    #[cfg(feature = "lang-html")]
+    html_queries: OnceCell<LanguageQueries>,
+    #[cfg(feature = "lang-css")]
+    css_queries: OnceCell<LanguageQueries>,
+    #[cfg(feature = "lang-scss")]
+    scss_queries: OnceCell<LanguageQueries>,
+    #[cfg(feature = "lang-json")]
+    json_queries: OnceCell<LanguageQueries>,
+    #[cfg(feature = "lang-yaml")]
+    yaml_queries: OnceCell<LanguageQueries>,
+    #[cfg(feature = "lang-toml")]
+    toml_queries: OnceCell<LanguageQueries>,
+    #[cfg(feature = "lang-markdown")]
+    markdown_queries: OnceCell<LanguageQueries>,
+    #[cfg(feature = "lang-graphql")]
+    graphql_queries: OnceCell<LanguageQueries>,
+    #[cfg(feature = "lang-vue")]
+    vue_queries: OnceCell<LanguageQueries>,
+    #[cfg(feature = "lang-svelte")]
+    svelte_queries: OnceCell<LanguageQueries>,
 }
 
 /// Compile all `.scm` queries for a single language into a [`LanguageQueries`].
@@ -453,29 +475,52 @@ impl QueryEngine {
             c_queries: OnceCell::new(),
             cpp_queries: OnceCell::new(),
             scala_queries: OnceCell::new(),
-            #[cfg(feature = "lang-bash")]     bash_queries:     OnceCell::new(),
-            #[cfg(feature = "lang-haskell")]  haskell_queries:  OnceCell::new(),
-            #[cfg(feature = "lang-nix")]      nix_queries:      OnceCell::new(),
-            #[cfg(feature = "lang-lua")]      lua_queries:      OnceCell::new(),
-            #[cfg(feature = "lang-perl")]     perl_queries:     OnceCell::new(),
-            #[cfg(feature = "lang-elixir")]   elixir_queries:   OnceCell::new(),
-            #[cfg(feature = "lang-erlang")]   erlang_queries:   OnceCell::new(),
-            #[cfg(feature = "lang-zig")]      zig_queries:      OnceCell::new(),
-            #[cfg(feature = "lang-ocaml")]    ocaml_queries:    OnceCell::new(),
-            #[cfg(feature = "lang-julia")]    julia_queries:    OnceCell::new(),
-            #[cfg(feature = "lang-dart")]     dart_queries:     OnceCell::new(),
-            #[cfg(feature = "lang-r")]        r_queries:        OnceCell::new(),
-            #[cfg(feature = "lang-fish")]     fish_queries:     OnceCell::new(),
-            #[cfg(feature = "lang-html")]     html_queries:     OnceCell::new(),
-            #[cfg(feature = "lang-css")]      css_queries:      OnceCell::new(),
-            #[cfg(feature = "lang-scss")]     scss_queries:     OnceCell::new(),
-            #[cfg(feature = "lang-json")]     json_queries:     OnceCell::new(),
-            #[cfg(feature = "lang-yaml")]     yaml_queries:     OnceCell::new(),
-            #[cfg(feature = "lang-toml")]     toml_queries:     OnceCell::new(),
-            #[cfg(feature = "lang-markdown")] markdown_queries: OnceCell::new(),
-            #[cfg(feature = "lang-graphql")]  graphql_queries:  OnceCell::new(),
-            #[cfg(feature = "lang-vue")]      vue_queries:      OnceCell::new(),
-            #[cfg(feature = "lang-svelte")]   svelte_queries:   OnceCell::new(),
+            #[cfg(feature = "lang-bash")]
+            bash_queries: OnceCell::new(),
+            #[cfg(feature = "lang-haskell")]
+            haskell_queries: OnceCell::new(),
+            #[cfg(feature = "lang-nix")]
+            nix_queries: OnceCell::new(),
+            #[cfg(feature = "lang-lua")]
+            lua_queries: OnceCell::new(),
+            #[cfg(feature = "lang-perl")]
+            perl_queries: OnceCell::new(),
+            #[cfg(feature = "lang-elixir")]
+            elixir_queries: OnceCell::new(),
+            #[cfg(feature = "lang-erlang")]
+            erlang_queries: OnceCell::new(),
+            #[cfg(feature = "lang-zig")]
+            zig_queries: OnceCell::new(),
+            #[cfg(feature = "lang-ocaml")]
+            ocaml_queries: OnceCell::new(),
+            #[cfg(feature = "lang-julia")]
+            julia_queries: OnceCell::new(),
+            #[cfg(feature = "lang-dart")]
+            dart_queries: OnceCell::new(),
+            #[cfg(feature = "lang-r")]
+            r_queries: OnceCell::new(),
+            #[cfg(feature = "lang-fish")]
+            fish_queries: OnceCell::new(),
+            #[cfg(feature = "lang-html")]
+            html_queries: OnceCell::new(),
+            #[cfg(feature = "lang-css")]
+            css_queries: OnceCell::new(),
+            #[cfg(feature = "lang-scss")]
+            scss_queries: OnceCell::new(),
+            #[cfg(feature = "lang-json")]
+            json_queries: OnceCell::new(),
+            #[cfg(feature = "lang-yaml")]
+            yaml_queries: OnceCell::new(),
+            #[cfg(feature = "lang-toml")]
+            toml_queries: OnceCell::new(),
+            #[cfg(feature = "lang-markdown")]
+            markdown_queries: OnceCell::new(),
+            #[cfg(feature = "lang-graphql")]
+            graphql_queries: OnceCell::new(),
+            #[cfg(feature = "lang-vue")]
+            vue_queries: OnceCell::new(),
+            #[cfg(feature = "lang-svelte")]
+            svelte_queries: OnceCell::new(),
         })
     }
 
@@ -722,188 +767,418 @@ impl QueryEngine {
 
             // ── Extras ────────────────────────────────────────────────
             #[cfg(feature = "lang-bash")]
-            Language::Bash => self.bash_queries.get_or_try_init(|| compile_queries(
-                tree_sitter_bash::LANGUAGE.into(), "bash",
-                queries::bash::IMPORTS, None,
-                queries::bash::DEFINITIONS, queries::bash::CALLS, queries::bash::ASSIGNMENTS,
-            )).map(Some),
-            #[cfg(not(feature = "lang-bash"))] Language::Bash => Ok(None),
+            Language::Bash => self
+                .bash_queries
+                .get_or_try_init(|| {
+                    compile_queries(
+                        tree_sitter_bash::LANGUAGE.into(),
+                        "bash",
+                        queries::bash::IMPORTS,
+                        None,
+                        queries::bash::DEFINITIONS,
+                        queries::bash::CALLS,
+                        queries::bash::ASSIGNMENTS,
+                    )
+                })
+                .map(Some),
+            #[cfg(not(feature = "lang-bash"))]
+            Language::Bash => Ok(None),
 
             #[cfg(feature = "lang-haskell")]
-            Language::Haskell => self.haskell_queries.get_or_try_init(|| compile_queries(
-                tree_sitter_haskell::LANGUAGE.into(), "haskell",
-                queries::haskell::IMPORTS, None,
-                queries::haskell::DEFINITIONS, queries::haskell::CALLS, queries::haskell::ASSIGNMENTS,
-            )).map(Some),
-            #[cfg(not(feature = "lang-haskell"))] Language::Haskell => Ok(None),
+            Language::Haskell => self
+                .haskell_queries
+                .get_or_try_init(|| {
+                    compile_queries(
+                        tree_sitter_haskell::LANGUAGE.into(),
+                        "haskell",
+                        queries::haskell::IMPORTS,
+                        None,
+                        queries::haskell::DEFINITIONS,
+                        queries::haskell::CALLS,
+                        queries::haskell::ASSIGNMENTS,
+                    )
+                })
+                .map(Some),
+            #[cfg(not(feature = "lang-haskell"))]
+            Language::Haskell => Ok(None),
 
             #[cfg(feature = "lang-nix")]
-            Language::Nix => self.nix_queries.get_or_try_init(|| compile_queries(
-                tree_sitter_nix::LANGUAGE.into(), "nix",
-                queries::nix::IMPORTS, None,
-                queries::nix::DEFINITIONS, queries::nix::CALLS, queries::nix::ASSIGNMENTS,
-            )).map(Some),
-            #[cfg(not(feature = "lang-nix"))] Language::Nix => Ok(None),
+            Language::Nix => self
+                .nix_queries
+                .get_or_try_init(|| {
+                    compile_queries(
+                        tree_sitter_nix::LANGUAGE.into(),
+                        "nix",
+                        queries::nix::IMPORTS,
+                        None,
+                        queries::nix::DEFINITIONS,
+                        queries::nix::CALLS,
+                        queries::nix::ASSIGNMENTS,
+                    )
+                })
+                .map(Some),
+            #[cfg(not(feature = "lang-nix"))]
+            Language::Nix => Ok(None),
 
             #[cfg(feature = "lang-lua")]
-            Language::Lua => self.lua_queries.get_or_try_init(|| compile_queries(
-                tree_sitter_lua::LANGUAGE.into(), "lua",
-                queries::lua::IMPORTS, None,
-                queries::lua::DEFINITIONS, queries::lua::CALLS, queries::lua::ASSIGNMENTS,
-            )).map(Some),
-            #[cfg(not(feature = "lang-lua"))] Language::Lua => Ok(None),
+            Language::Lua => self
+                .lua_queries
+                .get_or_try_init(|| {
+                    compile_queries(
+                        tree_sitter_lua::LANGUAGE.into(),
+                        "lua",
+                        queries::lua::IMPORTS,
+                        None,
+                        queries::lua::DEFINITIONS,
+                        queries::lua::CALLS,
+                        queries::lua::ASSIGNMENTS,
+                    )
+                })
+                .map(Some),
+            #[cfg(not(feature = "lang-lua"))]
+            Language::Lua => Ok(None),
 
             #[cfg(feature = "lang-perl")]
-            Language::Perl => self.perl_queries.get_or_try_init(|| compile_queries(
-                tree_sitter_perl_next::LANGUAGE.into(), "perl",
-                queries::perl::IMPORTS, None,
-                queries::perl::DEFINITIONS, queries::perl::CALLS, queries::perl::ASSIGNMENTS,
-            )).map(Some),
-            #[cfg(not(feature = "lang-perl"))] Language::Perl => Ok(None),
+            Language::Perl => self
+                .perl_queries
+                .get_or_try_init(|| {
+                    compile_queries(
+                        tree_sitter_perl_next::LANGUAGE.into(),
+                        "perl",
+                        queries::perl::IMPORTS,
+                        None,
+                        queries::perl::DEFINITIONS,
+                        queries::perl::CALLS,
+                        queries::perl::ASSIGNMENTS,
+                    )
+                })
+                .map(Some),
+            #[cfg(not(feature = "lang-perl"))]
+            Language::Perl => Ok(None),
 
             #[cfg(feature = "lang-elixir")]
-            Language::Elixir => self.elixir_queries.get_or_try_init(|| compile_queries(
-                tree_sitter_elixir::LANGUAGE.into(), "elixir",
-                queries::elixir::IMPORTS, None,
-                queries::elixir::DEFINITIONS, queries::elixir::CALLS, queries::elixir::ASSIGNMENTS,
-            )).map(Some),
-            #[cfg(not(feature = "lang-elixir"))] Language::Elixir => Ok(None),
+            Language::Elixir => self
+                .elixir_queries
+                .get_or_try_init(|| {
+                    compile_queries(
+                        tree_sitter_elixir::LANGUAGE.into(),
+                        "elixir",
+                        queries::elixir::IMPORTS,
+                        None,
+                        queries::elixir::DEFINITIONS,
+                        queries::elixir::CALLS,
+                        queries::elixir::ASSIGNMENTS,
+                    )
+                })
+                .map(Some),
+            #[cfg(not(feature = "lang-elixir"))]
+            Language::Elixir => Ok(None),
 
             #[cfg(feature = "lang-erlang")]
-            Language::Erlang => self.erlang_queries.get_or_try_init(|| compile_queries(
-                tree_sitter_erlang::LANGUAGE.into(), "erlang",
-                queries::erlang::IMPORTS, None,
-                queries::erlang::DEFINITIONS, queries::erlang::CALLS, queries::erlang::ASSIGNMENTS,
-            )).map(Some),
-            #[cfg(not(feature = "lang-erlang"))] Language::Erlang => Ok(None),
+            Language::Erlang => self
+                .erlang_queries
+                .get_or_try_init(|| {
+                    compile_queries(
+                        tree_sitter_erlang::LANGUAGE.into(),
+                        "erlang",
+                        queries::erlang::IMPORTS,
+                        None,
+                        queries::erlang::DEFINITIONS,
+                        queries::erlang::CALLS,
+                        queries::erlang::ASSIGNMENTS,
+                    )
+                })
+                .map(Some),
+            #[cfg(not(feature = "lang-erlang"))]
+            Language::Erlang => Ok(None),
 
             #[cfg(feature = "lang-zig")]
-            Language::Zig => self.zig_queries.get_or_try_init(|| compile_queries(
-                tree_sitter_zig::LANGUAGE.into(), "zig",
-                queries::zig::IMPORTS, None,
-                queries::zig::DEFINITIONS, queries::zig::CALLS, queries::zig::ASSIGNMENTS,
-            )).map(Some),
-            #[cfg(not(feature = "lang-zig"))] Language::Zig => Ok(None),
+            Language::Zig => self
+                .zig_queries
+                .get_or_try_init(|| {
+                    compile_queries(
+                        tree_sitter_zig::LANGUAGE.into(),
+                        "zig",
+                        queries::zig::IMPORTS,
+                        None,
+                        queries::zig::DEFINITIONS,
+                        queries::zig::CALLS,
+                        queries::zig::ASSIGNMENTS,
+                    )
+                })
+                .map(Some),
+            #[cfg(not(feature = "lang-zig"))]
+            Language::Zig => Ok(None),
 
             #[cfg(feature = "lang-ocaml")]
-            Language::OCaml => self.ocaml_queries.get_or_try_init(|| compile_queries(
-                tree_sitter_ocaml::LANGUAGE_OCAML.into(), "ocaml",
-                queries::ocaml::IMPORTS, None,
-                queries::ocaml::DEFINITIONS, queries::ocaml::CALLS, queries::ocaml::ASSIGNMENTS,
-            )).map(Some),
-            #[cfg(not(feature = "lang-ocaml"))] Language::OCaml => Ok(None),
+            Language::OCaml => self
+                .ocaml_queries
+                .get_or_try_init(|| {
+                    compile_queries(
+                        tree_sitter_ocaml::LANGUAGE_OCAML.into(),
+                        "ocaml",
+                        queries::ocaml::IMPORTS,
+                        None,
+                        queries::ocaml::DEFINITIONS,
+                        queries::ocaml::CALLS,
+                        queries::ocaml::ASSIGNMENTS,
+                    )
+                })
+                .map(Some),
+            #[cfg(not(feature = "lang-ocaml"))]
+            Language::OCaml => Ok(None),
 
             #[cfg(feature = "lang-julia")]
-            Language::Julia => self.julia_queries.get_or_try_init(|| compile_queries(
-                tree_sitter_julia::LANGUAGE.into(), "julia",
-                queries::julia::IMPORTS, None,
-                queries::julia::DEFINITIONS, queries::julia::CALLS, queries::julia::ASSIGNMENTS,
-            )).map(Some),
-            #[cfg(not(feature = "lang-julia"))] Language::Julia => Ok(None),
+            Language::Julia => self
+                .julia_queries
+                .get_or_try_init(|| {
+                    compile_queries(
+                        tree_sitter_julia::LANGUAGE.into(),
+                        "julia",
+                        queries::julia::IMPORTS,
+                        None,
+                        queries::julia::DEFINITIONS,
+                        queries::julia::CALLS,
+                        queries::julia::ASSIGNMENTS,
+                    )
+                })
+                .map(Some),
+            #[cfg(not(feature = "lang-julia"))]
+            Language::Julia => Ok(None),
 
             #[cfg(feature = "lang-dart")]
-            Language::Dart => self.dart_queries.get_or_try_init(|| compile_queries(
-                tree_sitter_dart_orchard::LANGUAGE.into(), "dart",
-                queries::dart::IMPORTS, None,
-                queries::dart::DEFINITIONS, queries::dart::CALLS, queries::dart::ASSIGNMENTS,
-            )).map(Some),
-            #[cfg(not(feature = "lang-dart"))] Language::Dart => Ok(None),
+            Language::Dart => self
+                .dart_queries
+                .get_or_try_init(|| {
+                    compile_queries(
+                        tree_sitter_dart_orchard::LANGUAGE.into(),
+                        "dart",
+                        queries::dart::IMPORTS,
+                        None,
+                        queries::dart::DEFINITIONS,
+                        queries::dart::CALLS,
+                        queries::dart::ASSIGNMENTS,
+                    )
+                })
+                .map(Some),
+            #[cfg(not(feature = "lang-dart"))]
+            Language::Dart => Ok(None),
 
             #[cfg(feature = "lang-r")]
-            Language::R => self.r_queries.get_or_try_init(|| compile_queries(
-                tree_sitter_r::LANGUAGE.into(), "r",
-                queries::r::IMPORTS, None,
-                queries::r::DEFINITIONS, queries::r::CALLS, queries::r::ASSIGNMENTS,
-            )).map(Some),
-            #[cfg(not(feature = "lang-r"))] Language::R => Ok(None),
+            Language::R => self
+                .r_queries
+                .get_or_try_init(|| {
+                    compile_queries(
+                        tree_sitter_r::LANGUAGE.into(),
+                        "r",
+                        queries::r::IMPORTS,
+                        None,
+                        queries::r::DEFINITIONS,
+                        queries::r::CALLS,
+                        queries::r::ASSIGNMENTS,
+                    )
+                })
+                .map(Some),
+            #[cfg(not(feature = "lang-r"))]
+            Language::R => Ok(None),
 
             #[cfg(feature = "lang-fish")]
-            Language::Fish => self.fish_queries.get_or_try_init(|| compile_queries(
-                tree_sitter_fish::language(), "fish",
-                queries::fish::IMPORTS, None,
-                queries::fish::DEFINITIONS, queries::fish::CALLS, queries::fish::ASSIGNMENTS,
-            )).map(Some),
-            #[cfg(not(feature = "lang-fish"))] Language::Fish => Ok(None),
+            Language::Fish => self
+                .fish_queries
+                .get_or_try_init(|| {
+                    compile_queries(
+                        tree_sitter_fish::language(),
+                        "fish",
+                        queries::fish::IMPORTS,
+                        None,
+                        queries::fish::DEFINITIONS,
+                        queries::fish::CALLS,
+                        queries::fish::ASSIGNMENTS,
+                    )
+                })
+                .map(Some),
+            #[cfg(not(feature = "lang-fish"))]
+            Language::Fish => Ok(None),
 
             #[cfg(feature = "lang-html")]
-            Language::Html => self.html_queries.get_or_try_init(|| compile_queries(
-                tree_sitter_html::LANGUAGE.into(), "html",
-                queries::html::IMPORTS, None,
-                queries::html::DEFINITIONS, queries::html::CALLS, queries::html::ASSIGNMENTS,
-            )).map(Some),
-            #[cfg(not(feature = "lang-html"))] Language::Html => Ok(None),
+            Language::Html => self
+                .html_queries
+                .get_or_try_init(|| {
+                    compile_queries(
+                        tree_sitter_html::LANGUAGE.into(),
+                        "html",
+                        queries::html::IMPORTS,
+                        None,
+                        queries::html::DEFINITIONS,
+                        queries::html::CALLS,
+                        queries::html::ASSIGNMENTS,
+                    )
+                })
+                .map(Some),
+            #[cfg(not(feature = "lang-html"))]
+            Language::Html => Ok(None),
 
             #[cfg(feature = "lang-css")]
-            Language::Css => self.css_queries.get_or_try_init(|| compile_queries(
-                tree_sitter_css::LANGUAGE.into(), "css",
-                queries::css::IMPORTS, None,
-                queries::css::DEFINITIONS, queries::css::CALLS, queries::css::ASSIGNMENTS,
-            )).map(Some),
-            #[cfg(not(feature = "lang-css"))] Language::Css => Ok(None),
+            Language::Css => self
+                .css_queries
+                .get_or_try_init(|| {
+                    compile_queries(
+                        tree_sitter_css::LANGUAGE.into(),
+                        "css",
+                        queries::css::IMPORTS,
+                        None,
+                        queries::css::DEFINITIONS,
+                        queries::css::CALLS,
+                        queries::css::ASSIGNMENTS,
+                    )
+                })
+                .map(Some),
+            #[cfg(not(feature = "lang-css"))]
+            Language::Css => Ok(None),
 
             #[cfg(feature = "lang-scss")]
-            Language::Scss => self.scss_queries.get_or_try_init(|| compile_queries(
-                tree_sitter_scss::language(), "scss",
-                queries::scss::IMPORTS, None,
-                queries::scss::DEFINITIONS, queries::scss::CALLS, queries::scss::ASSIGNMENTS,
-            )).map(Some),
-            #[cfg(not(feature = "lang-scss"))] Language::Scss => Ok(None),
+            Language::Scss => self
+                .scss_queries
+                .get_or_try_init(|| {
+                    compile_queries(
+                        tree_sitter_scss::language(),
+                        "scss",
+                        queries::scss::IMPORTS,
+                        None,
+                        queries::scss::DEFINITIONS,
+                        queries::scss::CALLS,
+                        queries::scss::ASSIGNMENTS,
+                    )
+                })
+                .map(Some),
+            #[cfg(not(feature = "lang-scss"))]
+            Language::Scss => Ok(None),
 
             #[cfg(feature = "lang-json")]
-            Language::Json => self.json_queries.get_or_try_init(|| compile_queries(
-                tree_sitter_json::LANGUAGE.into(), "json",
-                queries::json::IMPORTS, None,
-                queries::json::DEFINITIONS, queries::json::CALLS, queries::json::ASSIGNMENTS,
-            )).map(Some),
-            #[cfg(not(feature = "lang-json"))] Language::Json => Ok(None),
+            Language::Json => self
+                .json_queries
+                .get_or_try_init(|| {
+                    compile_queries(
+                        tree_sitter_json::LANGUAGE.into(),
+                        "json",
+                        queries::json::IMPORTS,
+                        None,
+                        queries::json::DEFINITIONS,
+                        queries::json::CALLS,
+                        queries::json::ASSIGNMENTS,
+                    )
+                })
+                .map(Some),
+            #[cfg(not(feature = "lang-json"))]
+            Language::Json => Ok(None),
 
             #[cfg(feature = "lang-yaml")]
-            Language::Yaml => self.yaml_queries.get_or_try_init(|| compile_queries(
-                tree_sitter_yaml::LANGUAGE.into(), "yaml",
-                queries::yaml::IMPORTS, None,
-                queries::yaml::DEFINITIONS, queries::yaml::CALLS, queries::yaml::ASSIGNMENTS,
-            )).map(Some),
-            #[cfg(not(feature = "lang-yaml"))] Language::Yaml => Ok(None),
+            Language::Yaml => self
+                .yaml_queries
+                .get_or_try_init(|| {
+                    compile_queries(
+                        tree_sitter_yaml::LANGUAGE.into(),
+                        "yaml",
+                        queries::yaml::IMPORTS,
+                        None,
+                        queries::yaml::DEFINITIONS,
+                        queries::yaml::CALLS,
+                        queries::yaml::ASSIGNMENTS,
+                    )
+                })
+                .map(Some),
+            #[cfg(not(feature = "lang-yaml"))]
+            Language::Yaml => Ok(None),
 
             #[cfg(feature = "lang-toml")]
-            Language::Toml => self.toml_queries.get_or_try_init(|| compile_queries(
-                tree_sitter_toml_ng::LANGUAGE.into(), "toml",
-                queries::toml::IMPORTS, None,
-                queries::toml::DEFINITIONS, queries::toml::CALLS, queries::toml::ASSIGNMENTS,
-            )).map(Some),
-            #[cfg(not(feature = "lang-toml"))] Language::Toml => Ok(None),
+            Language::Toml => self
+                .toml_queries
+                .get_or_try_init(|| {
+                    compile_queries(
+                        tree_sitter_toml_ng::LANGUAGE.into(),
+                        "toml",
+                        queries::toml::IMPORTS,
+                        None,
+                        queries::toml::DEFINITIONS,
+                        queries::toml::CALLS,
+                        queries::toml::ASSIGNMENTS,
+                    )
+                })
+                .map(Some),
+            #[cfg(not(feature = "lang-toml"))]
+            Language::Toml => Ok(None),
 
             #[cfg(feature = "lang-markdown")]
-            Language::Markdown => self.markdown_queries.get_or_try_init(|| compile_queries(
-                tree_sitter_md::LANGUAGE.into(), "markdown",
-                queries::markdown::IMPORTS, None,
-                queries::markdown::DEFINITIONS, queries::markdown::CALLS, queries::markdown::ASSIGNMENTS,
-            )).map(Some),
-            #[cfg(not(feature = "lang-markdown"))] Language::Markdown => Ok(None),
+            Language::Markdown => self
+                .markdown_queries
+                .get_or_try_init(|| {
+                    compile_queries(
+                        tree_sitter_md::LANGUAGE.into(),
+                        "markdown",
+                        queries::markdown::IMPORTS,
+                        None,
+                        queries::markdown::DEFINITIONS,
+                        queries::markdown::CALLS,
+                        queries::markdown::ASSIGNMENTS,
+                    )
+                })
+                .map(Some),
+            #[cfg(not(feature = "lang-markdown"))]
+            Language::Markdown => Ok(None),
 
             #[cfg(feature = "lang-graphql")]
-            Language::GraphQl => self.graphql_queries.get_or_try_init(|| compile_queries(
-                tree_sitter_graphql::LANGUAGE.into(), "graphql",
-                queries::graphql::IMPORTS, None,
-                queries::graphql::DEFINITIONS, queries::graphql::CALLS, queries::graphql::ASSIGNMENTS,
-            )).map(Some),
-            #[cfg(not(feature = "lang-graphql"))] Language::GraphQl => Ok(None),
+            Language::GraphQl => self
+                .graphql_queries
+                .get_or_try_init(|| {
+                    compile_queries(
+                        tree_sitter_graphql::LANGUAGE.into(),
+                        "graphql",
+                        queries::graphql::IMPORTS,
+                        None,
+                        queries::graphql::DEFINITIONS,
+                        queries::graphql::CALLS,
+                        queries::graphql::ASSIGNMENTS,
+                    )
+                })
+                .map(Some),
+            #[cfg(not(feature = "lang-graphql"))]
+            Language::GraphQl => Ok(None),
 
             #[cfg(feature = "lang-vue")]
-            Language::Vue => self.vue_queries.get_or_try_init(|| compile_queries(
-                tree_sitter_vue_next::LANGUAGE.into(), "vue",
-                queries::vue::IMPORTS, None,
-                queries::vue::DEFINITIONS, queries::vue::CALLS, queries::vue::ASSIGNMENTS,
-            )).map(Some),
-            #[cfg(not(feature = "lang-vue"))] Language::Vue => Ok(None),
+            Language::Vue => self
+                .vue_queries
+                .get_or_try_init(|| {
+                    compile_queries(
+                        tree_sitter_vue_next::LANGUAGE.into(),
+                        "vue",
+                        queries::vue::IMPORTS,
+                        None,
+                        queries::vue::DEFINITIONS,
+                        queries::vue::CALLS,
+                        queries::vue::ASSIGNMENTS,
+                    )
+                })
+                .map(Some),
+            #[cfg(not(feature = "lang-vue"))]
+            Language::Vue => Ok(None),
 
             #[cfg(feature = "lang-svelte")]
-            Language::Svelte => self.svelte_queries.get_or_try_init(|| compile_queries(
-                tree_sitter_svelte_next::LANGUAGE.into(), "svelte",
-                queries::svelte::IMPORTS, None,
-                queries::svelte::DEFINITIONS, queries::svelte::CALLS, queries::svelte::ASSIGNMENTS,
-            )).map(Some),
-            #[cfg(not(feature = "lang-svelte"))] Language::Svelte => Ok(None),
+            Language::Svelte => self
+                .svelte_queries
+                .get_or_try_init(|| {
+                    compile_queries(
+                        tree_sitter_svelte_next::LANGUAGE.into(),
+                        "svelte",
+                        queries::svelte::IMPORTS,
+                        None,
+                        queries::svelte::DEFINITIONS,
+                        queries::svelte::CALLS,
+                        queries::svelte::ASSIGNMENTS,
+                    )
+                })
+                .map(Some),
+            #[cfg(not(feature = "lang-svelte"))]
+            Language::Svelte => Ok(None),
 
             Language::Unknown => Ok(None),
         }
@@ -1114,18 +1389,6 @@ impl QueryEngine {
     /// `"` `'` `` ` `` `<` `>` characters are removed so the resulting
     /// string is a comparable path (e.g. `<stdio.h>` → `stdio.h`,
     /// `"react"` → `react`).
-
-
-
-
-
-
-
-
-
-
-
-
 
     // -----------------------------------------------------------------------
     // Export extraction (TypeScript only)
@@ -1359,43 +1622,121 @@ impl QueryEngine {
 
         match language {
             Language::TypeScript | Language::JavaScript => {
-                crate::languages::typescript::extract_definitions(&matches, source, qwc, &mut definitions, &mut seen_nodes);
+                crate::languages::typescript::extract_definitions(
+                    &matches,
+                    source,
+                    qwc,
+                    &mut definitions,
+                    &mut seen_nodes,
+                );
             }
             Language::Python => {
-                crate::languages::python::extract_definitions(&matches, source, qwc, &mut definitions, &mut seen_nodes);
+                crate::languages::python::extract_definitions(
+                    &matches,
+                    source,
+                    qwc,
+                    &mut definitions,
+                    &mut seen_nodes,
+                );
             }
             Language::Go => {
-                crate::languages::go::extract_definitions(&matches, source, qwc, &mut definitions, &mut seen_nodes);
+                crate::languages::go::extract_definitions(
+                    &matches,
+                    source,
+                    qwc,
+                    &mut definitions,
+                    &mut seen_nodes,
+                );
             }
             Language::Java => {
-                crate::languages::java::extract_definitions(&matches, source, qwc, &mut definitions, &mut seen_nodes);
+                crate::languages::java::extract_definitions(
+                    &matches,
+                    source,
+                    qwc,
+                    &mut definitions,
+                    &mut seen_nodes,
+                );
             }
             Language::Rust => {
-                crate::languages::rust::extract_definitions(&matches, source, qwc, &mut definitions, &mut seen_nodes);
+                crate::languages::rust::extract_definitions(
+                    &matches,
+                    source,
+                    qwc,
+                    &mut definitions,
+                    &mut seen_nodes,
+                );
             }
             Language::CSharp => {
-                crate::languages::csharp::extract_definitions(&matches, source, qwc, &mut definitions, &mut seen_nodes);
+                crate::languages::csharp::extract_definitions(
+                    &matches,
+                    source,
+                    qwc,
+                    &mut definitions,
+                    &mut seen_nodes,
+                );
             }
             Language::Php => {
-                crate::languages::php::extract_definitions(&matches, source, qwc, &mut definitions, &mut seen_nodes);
+                crate::languages::php::extract_definitions(
+                    &matches,
+                    source,
+                    qwc,
+                    &mut definitions,
+                    &mut seen_nodes,
+                );
             }
             Language::Ruby => {
-                crate::languages::ruby::extract_definitions(&matches, source, qwc, &mut definitions, &mut seen_nodes);
+                crate::languages::ruby::extract_definitions(
+                    &matches,
+                    source,
+                    qwc,
+                    &mut definitions,
+                    &mut seen_nodes,
+                );
             }
             Language::Kotlin => {
-                crate::languages::kotlin::extract_definitions(&matches, source, qwc, &mut definitions, &mut seen_nodes);
+                crate::languages::kotlin::extract_definitions(
+                    &matches,
+                    source,
+                    qwc,
+                    &mut definitions,
+                    &mut seen_nodes,
+                );
             }
             Language::Swift => {
-                crate::languages::swift::extract_definitions(&matches, source, qwc, &mut definitions, &mut seen_nodes);
+                crate::languages::swift::extract_definitions(
+                    &matches,
+                    source,
+                    qwc,
+                    &mut definitions,
+                    &mut seen_nodes,
+                );
             }
             Language::C => {
-                crate::languages::c::extract_definitions(&matches, source, qwc, &mut definitions, &mut seen_nodes);
+                crate::languages::c::extract_definitions(
+                    &matches,
+                    source,
+                    qwc,
+                    &mut definitions,
+                    &mut seen_nodes,
+                );
             }
             Language::Cpp => {
-                crate::languages::cpp::extract_definitions(&matches, source, qwc, &mut definitions, &mut seen_nodes);
+                crate::languages::cpp::extract_definitions(
+                    &matches,
+                    source,
+                    qwc,
+                    &mut definitions,
+                    &mut seen_nodes,
+                );
             }
             Language::Scala => {
-                crate::languages::scala::extract_definitions(&matches, source, qwc, &mut definitions, &mut seen_nodes);
+                crate::languages::scala::extract_definitions(
+                    &matches,
+                    source,
+                    qwc,
+                    &mut definitions,
+                    &mut seen_nodes,
+                );
             }
             // Catch-all for languages without a bespoke per-kind dispatch
             // arm (the 23 newly-added grammars, plus data/markup formats
@@ -1578,12 +1919,9 @@ impl QueryEngine {
 // Helper types
 // ---------------------------------------------------------------------------
 
-
-
 // ---------------------------------------------------------------------------
 // Free helper functions
 // ---------------------------------------------------------------------------
-
 
 /// Extract (start_line, end_line, start_byte) from a node capture.
 
@@ -1636,7 +1974,6 @@ impl QueryEngine {
 ///
 /// Returns `Ok(true)` if at least one call was emitted.
 #[allow(dead_code)] // wired in once a language opts in via its calls.scm
-
 
 /// Check if an export_statement node has the `default` keyword.
 fn has_default_keyword(node: &Node) -> bool {
@@ -1719,57 +2056,21 @@ mod tests {
 
     // === TypeScript imports ===
 
-
-
-
-
-
-
-
     // === TypeScript exports ===
-
-
-
-
-
-
 
     // === TypeScript definitions ===
 
-
-
-
-
-
-
     // === TypeScript call sites ===
-
-
-
 
     // === TypeScript data flow ===
 
-
-
-
     // === Python imports ===
-
-
-
-
 
     // === Python definitions ===
 
-
-
-
     // === Python call sites ===
 
-
     // === Python data flow ===
-
-
-
 
     // === Unknown language ===
 
@@ -1791,8 +2092,6 @@ mod tests {
     }
 
     // === Parity with ast.rs ===
-
-
 
     // === Determinism ===
 
@@ -2260,17 +2559,6 @@ mod audit_tests {
         shared_test_engine()
     }
 
-
-
-
-
-
-
-
-
-
-
-
     #[test]
     fn test_hash_str_no_collision_for_common_names() {
         use crate::languages::common::hash_str;
@@ -2302,15 +2590,6 @@ mod audit_tests {
             }
         }
     }
-
-
-
-
-
-
-
-
-
 }
 
 // ---------------------------------------------------------------------------
@@ -2334,88 +2613,57 @@ mod scm_audit_tests {
 
     // === TS enum declarations ===
 
-
-
     // === TS export default expression ===
-
-
 
     // === TS enum in exports ===
 
-
     // === TS import type ===
-
 
     // === Python walrus operator ===
 
-
     // === TS destructuring assignments ===
-
-
 
     // === Python tuple unpacking ===
 
-
     // === Python relative import with alias ===
-
 
     // === Python async def ===
 
-
     // === TS `as const` / `satisfies` ===
-
-
 
     // === TS `export default function` with no name ===
 
-
     // === TS template literal type ===
-
 
     // === TS namespace/module declarations ===
 
-
     // === TS `export =` (CommonJS-style) ===
-
 
     // === Python __all__ ===
 
-
     // === TS `require()` calls (CJS imports) ===
-
 
     // === TS dynamic import ===
 
-
     // === Python decorated method inside decorated class ===
-
 
     // === TS exported arrow function ===
 
-
     // === Python multiline import ===
-
 
     // === Python multiple import on same line ===
 
-
     // === TS re-export namespace ===
-
 
     // === find_containing_function for function_expression ===
 
-
     // === TS computed property method ===
-
 
     // === Python nested class ===
 
-
     // === TS class with static methods ===
 
-
     // === TS getter/setter ===
-
 
     // === Verify .scm pattern ordering doesn't matter ===
 
@@ -2489,185 +2737,59 @@ export const VAL = 1;
 
     // === Verify definition extraction finds all kinds ===
 
-
-
     // === Verify Python import capture coverage ===
-
 
     // === Agent audit Issue 3: Decorated Python function double-counting ===
 
-
-
     // === Agent audit Issue 4: "function" kind string in const skip logic ===
 
-
-
     // === Agent audit Issue 1: TS new_expression not in calls.scm ===
-
 
     // =====================================================================
     // Rust language tests
     // =====================================================================
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     // === Java language detection ===
-
 
     // === Java imports ===
 
-
-
-
-
     // === Java definitions ===
-
-
-
-
-
-
 
     // === Java call sites ===
 
-
-
-
     // === Java data flow ===
-
-
 
     // === Java empty / edge cases ===
 
-
     // === Java full module ===
-
 
     // ===================================================================
     // C# tests
     // ===================================================================
 
-
     // === C# imports ===
-
-
-
-
 
     // === C# definitions ===
 
-
-
-
-
-
-
-
-
-
-
     // === C# call sites ===
-
-
-
-
 
     // === C# data flow ===
 
-
-
-
     // === C# empty / edge cases ===
 
-
     // === C# full module ===
-
 
     // ===================================================================
     // PHP Tests
     // ===================================================================
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     // -----------------------------------------------------------------------
     // Ruby tests
     // -----------------------------------------------------------------------
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     // Kotlin tests
 
-
-
-
-
-
-
     // Swift tests
-
-
-
-
-
-
 }
 
 // ===========================================================================
@@ -2691,27 +2813,15 @@ mod c_tests {
 
     // === C imports (#include) ===
 
-
-
-
     // === C function definitions ===
-
-
-
-
 
     // === C call sites ===
 
-
-
     // === C data flow ===
-
 
     // === C language detection ===
 
-
     // === C full integration ===
-
 }
 
 // ===========================================================================
@@ -2735,35 +2845,15 @@ mod cpp_tests {
 
     // === C++ imports (#include) ===
 
-
-
     // === C++ definitions ===
-
-
-
-
-
-
 
     // === C++ call sites ===
 
-
-
-
     // === C++ data flow ===
-
 
     // === C++ language detection ===
 
-
     // === C++ full integration ===
 
-
     // Scala tests
-
-
-
-
-
-
 }

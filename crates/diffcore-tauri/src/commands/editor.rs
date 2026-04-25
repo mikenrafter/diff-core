@@ -257,10 +257,16 @@ pub fn save_file_content(file_path: String, content: String) -> Result<(), Comma
         return Err(CommandError::Io(format!("File not found: {}", file_path)));
     }
     if !path.is_file() {
-        return Err(CommandError::Io(format!("Path is not a file: {}", file_path)));
+        return Err(CommandError::Io(format!(
+            "Path is not a file: {}",
+            file_path
+        )));
     }
     let parent = path.parent().ok_or_else(|| {
-        CommandError::Io(format!("Cannot determine parent directory for: {}", file_path))
+        CommandError::Io(format!(
+            "Cannot determine parent directory for: {}",
+            file_path
+        ))
     })?;
     if !parent.exists() {
         return Err(CommandError::Io(format!(
@@ -272,4 +278,3 @@ pub fn save_file_content(file_path: String, content: String) -> Result<(), Comma
     std::fs::write(&path, content)
         .map_err(|e| CommandError::Io(format!("Failed to write file '{}': {}", file_path, e)))
 }
-

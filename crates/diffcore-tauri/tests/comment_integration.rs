@@ -8,11 +8,11 @@
 //! Run with:
 //!   cargo test --test comment_integration
 
+use diffcore_core::cache;
 use diffcore_tauri::commands::{
     comment_cache_key, delete_comment, delete_comment_cached, export_comments, load_comments,
     load_comments_cached, save_comment, save_comment_cached, ReviewComment,
 };
-use diffcore_core::cache;
 use git2::{Repository, Signature};
 use std::path::PathBuf;
 
@@ -410,7 +410,11 @@ fn create_test_repo_on_branch(branch_name: &str) -> (tempfile::TempDir, String) 
 static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Helper: set the cache dir env vars for isolated testing (serialized via mutex).
-fn with_cache_dirs<F: FnOnce()>(comment_dir: &std::path::Path, refinement_dir: Option<&std::path::Path>, f: F) {
+fn with_cache_dirs<F: FnOnce()>(
+    comment_dir: &std::path::Path,
+    refinement_dir: Option<&std::path::Path>,
+    f: F,
+) {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     std::env::set_var("DIFFCORE_COMMENT_CACHE_DIR", comment_dir.as_os_str());
     if let Some(rd) = refinement_dir {
@@ -446,11 +450,7 @@ fn cached_comments_isolated_by_branch() {
 
     with_cache_dirs(cache_tmp.path(), None, || {
         // Save on branch-a
-        save_comment_cached(
-            repo_path.clone(),
-            make_comment("c1", "code", "On branch A"),
-        )
-        .unwrap();
+        save_comment_cached(repo_path.clone(), make_comment("c1", "code", "On branch A")).unwrap();
 
         // Switch to branch-b
         let repo = Repository::discover(&repo_path).unwrap();
@@ -460,11 +460,7 @@ fn cached_comments_isolated_by_branch() {
         repo.set_head("refs/heads/branch-b").unwrap();
 
         // Save on branch-b
-        save_comment_cached(
-            repo_path.clone(),
-            make_comment("c2", "code", "On branch B"),
-        )
-        .unwrap();
+        save_comment_cached(repo_path.clone(), make_comment("c2", "code", "On branch B")).unwrap();
 
         // Load on branch-b — should only see branch-b comments
         let loaded_b = load_comments_cached(repo_path.clone()).unwrap();
@@ -489,11 +485,7 @@ fn cached_comments_persist_across_reload() {
     let (_repo_tmp, repo_path) = create_test_repo_on_branch("persist-test");
 
     with_cache_dirs(cache_tmp.path(), None, || {
-        save_comment_cached(
-            repo_path.clone(),
-            make_comment("c1", "code", "Persisted"),
-        )
-        .unwrap();
+        save_comment_cached(repo_path.clone(), make_comment("c1", "code", "Persisted")).unwrap();
         save_comment_cached(
             repo_path.clone(),
             make_comment("c2", "file", "Also persisted"),
@@ -710,7 +702,10 @@ fn refinement_cache_different_branches_isolated() {
 
         // branch-b should NOT find branch-a's refinement
         let loaded = cache::load_cached_refinement(&format!("branch_{}", key_b));
-        assert!(loaded.is_none(), "branch-b should not see branch-a's cached refinement");
+        assert!(
+            loaded.is_none(),
+            "branch-b should not see branch-a's cached refinement"
+        );
 
         // branch-a's refinement should still be there
         let loaded_a = cache::load_cached_refinement(&format!("branch_{}", key_a));
@@ -752,15 +747,24 @@ fn refinement_cache_worktree_sees_same_branch_cache() {
 
         // Worktree can load its own cached refinement
         let loaded = cache::load_cached_refinement(&format!("branch_{}", wt_key));
-        assert!(loaded.is_some(), "Worktree should see its own cached refinement");
+        assert!(
+            loaded.is_some(),
+            "Worktree should see its own cached refinement"
+        );
 
         // Main repo is on "main", worktree is on "wt-refine" — different branches,
         // so main should NOT see the worktree's refinement
         let main_key = comment_cache_key(&repo_path).unwrap();
-        assert_ne!(wt_key, main_key, "Different branches should produce different keys");
+        assert_ne!(
+            wt_key, main_key,
+            "Different branches should produce different keys"
+        );
 
         let loaded_main = cache::load_cached_refinement(&format!("branch_{}", main_key));
-        assert!(loaded_main.is_none(), "Main on 'main' should not see worktree 'wt-refine' refinement");
+        assert!(
+            loaded_main.is_none(),
+            "Main on 'main' should not see worktree 'wt-refine' refinement"
+        );
 
         // Key is deterministic — calling again on same path gives same key
         let wt_key2 = comment_cache_key(&wt_path).unwrap();

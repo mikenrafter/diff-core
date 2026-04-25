@@ -1,8 +1,9 @@
+import { memo } from "react";
 import type { EditedHunk } from "../DiffViewer";
 import DiffViewer from "../DiffViewer";
 import ErrorBoundary from "../ErrorBoundary";
 import { CrashTest } from "../CrashTest";
-import { useAppContext } from "../../hooks/AppContext";
+import { useDiffContext } from "../../hooks/DiffContext";
 import { shortPath } from "../../utils/pathUtils";
 import { editorIcons } from "../../utils/editorUtils";
 
@@ -11,7 +12,7 @@ import { editorIcons } from "../../utils/editorUtils";
  * the "Open With" editor toolbar. DiffViewer event handlers are delegated
  * to context callbacks to keep internal App.tsx refs out of this component.
  */
-export function CenterPane() {
+export const CenterPane = memo(function CenterPane() {
   const {
     fileDiff, selectedFile, selectedGroup,
     openWithRef, openWithDropdown, setOpenWithDropdown,
@@ -27,12 +28,7 @@ export function CenterPane() {
     setActiveCommentId, setRightPanelTab, rightPanelCollapsed, setRightPanelCollapsed,
     handleGoToDefinition,
     handleDiffCommentRequest, handleDiffEditorContentChange, handleDiffHunksChanged,
-    // Dead-code comment strip fields — kept for type-safety while the feature is hidden
-    comments, commentsCollapsed, setCommentsCollapsed,
-    activeCommentId, editingCommentId, setEditingCommentId,
-    editingCommentText, setEditingCommentText,
-    deleteComment, updateComment,
-  } = useAppContext();
+  } = useDiffContext();
 
   return (
         <main className="panel panel-center">
@@ -235,157 +231,6 @@ export function CenterPane() {
             </ErrorBoundary>
           </div>
           {/* Comments moved to right panel tab */}
-          {false && selectedFile && (() => {
-            const fileComments = comments.filter(
-              (c) => c.file_path === selectedFile && selectedGroup && c.group_id === selectedGroup.id,
-            );
-            if (fileComments.length === 0) return null;
-            return (
-              <div className={`comment-strip ${commentsCollapsed ? "comment-strip-collapsed" : ""}`}>
-                {/* Header bar with "Comments" label and collapse toggle */}
-                <div className="comment-strip-header">
-                  <button
-                    className="comment-strip-toggle"
-                    onClick={() => setCommentsCollapsed(!commentsCollapsed)}
-                    aria-expanded={!commentsCollapsed}
-                  >
-                    <span className="section-toggle-icon">{commentsCollapsed ? "\u25B6" : "\u25BC"}</span>
-                    <span>Comments</span>
-                    <span className="comment-strip-count">{fileComments.length}</span>
-                  </button>
-                </div>
-                {/* Collapsible body */}
-                <div className="comment-strip-body">
-                  {/* Left nav — compact pill list for quick toggling */}
-                  <div className="comment-strip-nav">
-                    {fileComments.map((comment, i) => (
-                      <button
-                        key={comment.id}
-                        className={`comment-strip-nav-item comment-strip-nav-${comment.type} ${activeCommentId === comment.id ? "comment-strip-nav-active" : ""}`}
-                        onClick={() => {
-                          setActiveCommentId(comment.id);
-                          if (comment.start_line != null) {
-                            diffViewerRef.current?.scrollToLine(comment.start_line, comment.end_line ?? undefined);
-                          }
-                          // Scroll corresponding card into view
-                          setTimeout(() => {
-                            const el = document.querySelector(`.comment-strip-item[data-comment-id="${comment.id}"]`);
-                            el?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-                          }, 50);
-                        }}
-                        title={comment.text.slice(0, 60) + (comment.text.length > 60 ? "..." : "")}
-                      >
-                        <span className="comment-strip-nav-num">{i + 1}</span>
-                        {comment.start_line != null && (
-                          <span className="comment-strip-nav-line">L{comment.start_line}</span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                  {/* Right detail — scrollable comment cards */}
-                  <div className="comment-strip-detail">
-                    {fileComments.map((comment) => (
-                      <div
-                        key={comment.id}
-                        data-comment-id={comment.id}
-                        className={`comment-strip-item ${activeCommentId === comment.id ? "comment-strip-item-active" : ""}`}
-                        onClick={() => {
-                          setActiveCommentId(comment.id);
-                          if (comment.start_line != null) {
-                            diffViewerRef.current?.scrollToLine(comment.start_line, comment.end_line ?? undefined);
-                          }
-                        }}
-                        role={comment.start_line != null ? "button" : undefined}
-                        tabIndex={comment.start_line != null ? 0 : undefined}
-                      >
-                        <div className="comment-strip-meta">
-                          <span className={`comment-strip-badge comment-strip-badge-${comment.type}`}>{comment.type}</span>
-                          {comment.file_path && (
-                            <span className="comment-strip-filepath">{shortPath(comment.file_path)}</span>
-                          )}
-                          {comment.start_line != null && comment.end_line != null && (
-                            <span className="comment-strip-lines">:{comment.start_line}-{comment.end_line}</span>
-                          )}
-                          <button
-                            className="comment-strip-edit"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setEditingCommentId(comment.id);
-                              setEditingCommentText(comment.text);
-                            }}
-                            title="Edit comment"
-                          >
-                            &#9998;
-                          </button>
-                          <button
-                            className="comment-strip-delete"
-                            onClick={(e) => { e.stopPropagation(); deleteComment(comment.id); }}
-                            title="Delete comment"
-                          >
-                            &times;
-                          </button>
-                        </div>
-                        {comment.selected_code && (
-                          <pre className="comment-strip-code">{comment.selected_code}</pre>
-                        )}
-                        {editingCommentId === comment.id ? (
-                          <div className="comment-strip-edit-container" onClick={(e) => e.stopPropagation()}>
-                            <textarea
-                              className="comment-strip-edit-textarea"
-                              value={editingCommentText}
-                              onChange={(e) => setEditingCommentText(e.target.value)}
-                              autoFocus
-                              rows={3}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                                  e.preventDefault();
-                                  if (editingCommentText.trim()) {
-                                    updateComment(comment.id, editingCommentText.trim());
-                                  }
-                                }
-                                if (e.key === "Escape") {
-                                  e.preventDefault();
-                                  setEditingCommentId(null);
-                                }
-                              }}
-                            />
-                            <div className="comment-strip-edit-actions">
-                              <span className="comment-strip-edit-hint">Cmd+Enter to save, Escape to cancel</span>
-                              <button
-                                className="btn btn-comment-save"
-                                disabled={!editingCommentText.trim()}
-                                onClick={() => updateComment(comment.id, editingCommentText.trim())}
-                              >
-                                Save
-                              </button>
-                              <button
-                                className="btn btn-comment-cancel"
-                                onClick={() => setEditingCommentId(null)}
-                              >
-                                Cancel
-                              </button>
-                            </div>
-                          </div>
-                        ) : (
-                          <p
-                            className="comment-strip-text"
-                            onDoubleClick={(e) => {
-                              e.stopPropagation();
-                              setEditingCommentId(comment.id);
-                              setEditingCommentText(comment.text);
-                            }}
-                            title="Double-click to edit"
-                          >
-                            {comment.text}
-                          </p>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            );
-          })()}
         </main>
   );
-}
+});

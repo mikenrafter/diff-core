@@ -307,7 +307,15 @@ impl DiffcoreConfig {
 
         // Validate LLM provider if specified
         if let Some(ref provider) = self.llm.provider {
-            let valid = ["anthropic", "openai", "gemini", "openrouter", "github_copilot", "codex", "claude"];
+            let valid = [
+                "anthropic",
+                "openai",
+                "gemini",
+                "openrouter",
+                "github_copilot",
+                "codex",
+                "claude",
+            ];
             if !valid.contains(&provider.as_str()) {
                 return Err(ConfigError::Validation(format!(
                     "Unknown LLM provider '{}'. Valid providers: {}",
@@ -319,7 +327,15 @@ impl DiffcoreConfig {
 
         // Validate refinement provider if specified
         if let Some(ref provider) = self.llm.refinement.provider {
-            let valid = ["anthropic", "openai", "gemini", "openrouter", "github_copilot", "codex", "claude"];
+            let valid = [
+                "anthropic",
+                "openai",
+                "gemini",
+                "openrouter",
+                "github_copilot",
+                "codex",
+                "claude",
+            ];
             if !valid.contains(&provider.as_str()) {
                 return Err(ConfigError::Validation(format!(
                     "Unknown refinement provider '{}'. Valid providers: {}",
@@ -1254,16 +1270,28 @@ enabled = false
     #[test]
     fn test_both_defaults_true_on_empty_config() {
         let config = DiffcoreConfig::default();
-        assert!(config.llm.annotations_enabled, "annotations should default to true");
-        assert!(config.llm.refinement.enabled, "refinement should default to true");
+        assert!(
+            config.llm.annotations_enabled,
+            "annotations should default to true"
+        );
+        assert!(
+            config.llm.refinement.enabled,
+            "refinement should default to true"
+        );
     }
 
     #[test]
     fn test_both_defaults_true_on_minimal_toml() {
         let toml_str = "";
         let config = DiffcoreConfig::from_str(toml_str).unwrap();
-        assert!(config.llm.annotations_enabled, "annotations should default to true");
-        assert!(config.llm.refinement.enabled, "refinement should default to true");
+        assert!(
+            config.llm.annotations_enabled,
+            "annotations should default to true"
+        );
+        assert!(
+            config.llm.refinement.enabled,
+            "refinement should default to true"
+        );
     }
 
     #[test]
@@ -1295,18 +1323,24 @@ enabled = false
     #[test]
     fn test_global_defaults_merge_with_annotations() {
         // Test that global config merge still works with annotations_enabled
-        let mut local = DiffcoreConfig::from_str(r#"
+        let mut local = DiffcoreConfig::from_str(
+            r#"
 [llm]
 annotations_enabled = false
-"#).unwrap();
-        let global = DiffcoreConfig::from_str(r#"
+"#,
+        )
+        .unwrap();
+        let global = DiffcoreConfig::from_str(
+            r#"
 [llm]
 provider = "anthropic"
 
 [llm.refinement]
 enabled = true
 provider = "openai"
-"#).unwrap();
+"#,
+        )
+        .unwrap();
 
         local.apply_global_llm_defaults(&global);
 
@@ -1330,8 +1364,14 @@ provider = "openai"
         config.save_global().unwrap();
 
         let loaded = DiffcoreConfig::load_global().unwrap();
-        assert!(!loaded.llm.annotations_enabled, "annotations_enabled should survive save/load");
-        assert!(!loaded.llm.refinement.enabled, "refinement.enabled should survive save/load");
+        assert!(
+            !loaded.llm.annotations_enabled,
+            "annotations_enabled should survive save/load"
+        );
+        assert!(
+            !loaded.llm.refinement.enabled,
+            "refinement.enabled should survive save/load"
+        );
 
         std::env::remove_var("DIFFCORE_GLOBAL_CONFIG_DIR");
     }
@@ -1339,34 +1379,49 @@ provider = "openai"
     #[test]
     fn test_repo_local_key_cmd_ignored_when_no_global() {
         // Security: repo-local key_cmd must be dropped when there is no global key_cmd.
-        let mut local = DiffcoreConfig::from_str(r#"
+        let mut local = DiffcoreConfig::from_str(
+            r#"
 [llm]
 provider = "anthropic"
 key_cmd = "malicious-command"
 
 [llm.refinement]
 key_cmd = "another-malicious-command"
-"#).unwrap();
+"#,
+        )
+        .unwrap();
         let global = DiffcoreConfig::default();
 
         local.apply_global_llm_defaults(&global);
 
-        assert_eq!(local.llm.key_cmd, None, "repo-local key_cmd must be dropped");
-        assert_eq!(local.llm.refinement.key_cmd, None, "repo-local refinement key_cmd must be dropped");
+        assert_eq!(
+            local.llm.key_cmd, None,
+            "repo-local key_cmd must be dropped"
+        );
+        assert_eq!(
+            local.llm.refinement.key_cmd, None,
+            "repo-local refinement key_cmd must be dropped"
+        );
     }
 
     #[test]
     fn test_global_key_cmd_overrides_repo_local() {
         // Security: global key_cmd always wins over repo-local.
-        let mut local = DiffcoreConfig::from_str(r#"
+        let mut local = DiffcoreConfig::from_str(
+            r#"
 [llm]
 provider = "anthropic"
 key_cmd = "repo-local-cmd"
-"#).unwrap();
-        let global = DiffcoreConfig::from_str(r#"
+"#,
+        )
+        .unwrap();
+        let global = DiffcoreConfig::from_str(
+            r#"
 [llm]
 key_cmd = "trusted-global-cmd"
-"#).unwrap();
+"#,
+        )
+        .unwrap();
 
         local.apply_global_llm_defaults(&global);
 

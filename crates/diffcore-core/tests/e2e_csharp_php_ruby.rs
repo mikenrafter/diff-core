@@ -815,4 +815,3 @@ end
         result.summary.frameworks_detected
     );
 }
-

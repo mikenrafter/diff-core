@@ -3,18 +3,17 @@
 //! Moved from `query_engine.rs` during the per-language module split.
 //! Pure mechanical move — no logic changes.
 
-use crate::ast::{Definition, ImportedName, ImportInfo};
+use crate::ast::{Definition, ImportInfo, ImportedName};
 use crate::languages::common::{
-    collect_matches, get_or_insert_import, hash_str, node_span, node_text,
-    extract_definitions_standard, CollectedMatch, ImportBuilder,
+    collect_matches, extract_definitions_standard, get_or_insert_import, hash_str, node_span,
+    node_text, CollectedMatch, ImportBuilder,
 };
 use crate::query_engine::{QueryEngineError, QueryWithCaptures};
 use crate::types::SymbolKind;
 use tree_sitter::{Node, QueryCursor};
 
-
 pub(crate) fn extract_imports(
-root: &Node,
+    root: &Node,
     source: &[u8],
     qwc: &QueryWithCaptures,
 ) -> Result<Vec<ImportInfo>, QueryEngineError> {
@@ -134,73 +133,66 @@ pub(crate) fn extract_definitions(
     definitions: &mut Vec<Definition>,
     seen_nodes: &mut Vec<(usize, usize)>,
 ) {
-    if extract_definitions_standard(
-        matches,
-        source,
-        qwc,
-        definitions,
-        seen_nodes,
-    ) {
+    if extract_definitions_standard(matches, source, qwc, definitions, seen_nodes) {
         // Standard path took over.
     } else {
-    let fn_name_idx = qwc.capture_index("fn_name");
-    let fn_node_idx = qwc.capture_index("fn_node");
-    let struct_name_idx = qwc.capture_index("struct_name");
-    let struct_node_idx = qwc.capture_index("struct_node");
-    let enum_name_idx = qwc.capture_index("enum_name");
-    let enum_node_idx = qwc.capture_index("enum_node");
-    let trait_name_idx = qwc.capture_index("trait_name");
-    let trait_node_idx = qwc.capture_index("trait_node");
-    let type_name_idx = qwc.capture_index("type_name");
-    let type_node_idx = qwc.capture_index("type_node");
-    let const_name_idx = qwc.capture_index("const_name");
-    let const_node_idx = qwc.capture_index("const_node");
-    let static_name_idx = qwc.capture_index("static_name");
-    let static_node_idx = qwc.capture_index("static_node");
-    let method_name_idx = qwc.capture_index("method_name");
-    let method_node_idx = qwc.capture_index("method_node");
-    let macro_name_idx = qwc.capture_index("macro_name");
-    let macro_node_idx = qwc.capture_index("macro_node");
+        let fn_name_idx = qwc.capture_index("fn_name");
+        let fn_node_idx = qwc.capture_index("fn_node");
+        let struct_name_idx = qwc.capture_index("struct_name");
+        let struct_node_idx = qwc.capture_index("struct_node");
+        let enum_name_idx = qwc.capture_index("enum_name");
+        let enum_node_idx = qwc.capture_index("enum_node");
+        let trait_name_idx = qwc.capture_index("trait_name");
+        let trait_node_idx = qwc.capture_index("trait_node");
+        let type_name_idx = qwc.capture_index("type_name");
+        let type_node_idx = qwc.capture_index("type_node");
+        let const_name_idx = qwc.capture_index("const_name");
+        let const_node_idx = qwc.capture_index("const_node");
+        let static_name_idx = qwc.capture_index("static_name");
+        let static_node_idx = qwc.capture_index("static_node");
+        let method_name_idx = qwc.capture_index("method_name");
+        let method_node_idx = qwc.capture_index("method_node");
+        let macro_name_idx = qwc.capture_index("macro_name");
+        let macro_node_idx = qwc.capture_index("macro_node");
 
-    let rust_def_captures: &[(Option<u32>, Option<u32>, SymbolKind)] = &[
-        (fn_name_idx, fn_node_idx, SymbolKind::Function),
-        (method_name_idx, method_node_idx, SymbolKind::Function),
-        (struct_name_idx, struct_node_idx, SymbolKind::Class),
-        (enum_name_idx, enum_node_idx, SymbolKind::Class),
-        (trait_name_idx, trait_node_idx, SymbolKind::Interface),
-        (type_name_idx, type_node_idx, SymbolKind::TypeAlias),
-        (const_name_idx, const_node_idx, SymbolKind::Constant),
-        (static_name_idx, static_node_idx, SymbolKind::Constant),
-        (macro_name_idx, macro_node_idx, SymbolKind::Function),
-    ];
+        let rust_def_captures: &[(Option<u32>, Option<u32>, SymbolKind)] = &[
+            (fn_name_idx, fn_node_idx, SymbolKind::Function),
+            (method_name_idx, method_node_idx, SymbolKind::Function),
+            (struct_name_idx, struct_node_idx, SymbolKind::Class),
+            (enum_name_idx, enum_node_idx, SymbolKind::Class),
+            (trait_name_idx, trait_node_idx, SymbolKind::Interface),
+            (type_name_idx, type_node_idx, SymbolKind::TypeAlias),
+            (const_name_idx, const_node_idx, SymbolKind::Constant),
+            (static_name_idx, static_node_idx, SymbolKind::Constant),
+            (macro_name_idx, macro_node_idx, SymbolKind::Function),
+        ];
 
-    for m in matches {
-        for &(name_cap, node_cap, kind) in rust_def_captures {
-            if m.has_capture(name_cap) {
-                let name_text = m
-                    .get_capture(name_cap)
-                    .map(|n| node_text(&n, source).to_string())
-                    .unwrap_or_default();
-                let (start_line, end_line, node_start) = node_span(m, node_cap);
-                if !name_text.is_empty() {
-                    let key = (node_start, hash_str(&name_text));
-                    if !seen_nodes.contains(&key) {
-                        seen_nodes.push(key);
-                        definitions.push(Definition {
-                            name: name_text,
-                            kind,
-                            start_line,
-                            end_line,
-                        });
+        for m in matches {
+            for &(name_cap, node_cap, kind) in rust_def_captures {
+                if m.has_capture(name_cap) {
+                    let name_text = m
+                        .get_capture(name_cap)
+                        .map(|n| node_text(&n, source).to_string())
+                        .unwrap_or_default();
+                    let (start_line, end_line, node_start) = node_span(m, node_cap);
+                    if !name_text.is_empty() {
+                        let key = (node_start, hash_str(&name_text));
+                        if !seen_nodes.contains(&key) {
+                            seen_nodes.push(key);
+                            definitions.push(Definition {
+                                name: name_text,
+                                kind,
+                                start_line,
+                                end_line,
+                            });
+                        }
                     }
+                    break;
                 }
-                break;
             }
         }
-    }
     } // close `else` opened above for the standard-convention fallback
 }
-
 
 #[cfg(test)]
 #[allow(
@@ -685,5 +677,4 @@ fn start_listener(addr: String) {
             .collect();
         assert!(callees.contains(&"start_listener"));
     }
-
 }

@@ -40,9 +40,9 @@ fn build_pass1_request(
         .collect();
 
     let mut diff_summary = format!(
-            "{} files changed across {} groups",
-            analysis.summary.total_files_changed, analysis.summary.total_groups,
-        );
+        "{} files changed across {} groups",
+        analysis.summary.total_files_changed, analysis.summary.total_groups,
+    );
 
     if let Some(context) = reanalysis_context {
         let trimmed = context.trim();
@@ -128,7 +128,16 @@ fn build_pass2_request(
     let repo = git2::Repository::discover(&repo_path_buf)
         .map_err(|e| CommandError::Git(format!("Not a git repository: {}", e)))?;
 
-    let (diff_result, _) = super::extract_diff(&repo, base, head, range, staged, unstaged, false, include_uncommitted)?;
+    let (diff_result, _) = super::extract_diff(
+        &repo,
+        base,
+        head,
+        range,
+        staged,
+        unstaged,
+        false,
+        include_uncommitted,
+    )?;
 
     let files: Vec<llm::schema::Pass2FileInput> = group
         .files
@@ -405,10 +414,9 @@ async fn run_refinement_with_activity(
         .provider
         .clone()
         .unwrap_or_else(|| "anthropic".to_string());
-    let configured_model_name = refinement_llm_config
-        .model
-        .clone()
-        .unwrap_or_else(|| super::default_model_for_provider(&configured_provider_name).to_string());
+    let configured_model_name = refinement_llm_config.model.clone().unwrap_or_else(|| {
+        super::default_model_for_provider(&configured_provider_name).to_string()
+    });
     let outcome = llm::with_activity_callback(make_activity_callback(job.clone()), async {
         refinement::run_refinement_iterations(
             provider.as_ref(),
@@ -422,9 +430,7 @@ async fn run_refinement_with_activity(
     })
     .await;
 
-    if outcome.parse_failures > 0
-        && outcome.fallback_message.is_none()
-        && outcome.attempts_used > 1
+    if outcome.parse_failures > 0 && outcome.fallback_message.is_none() && outcome.attempts_used > 1
     {
         emit_diffcore_activity(
             &job,
@@ -605,7 +611,15 @@ pub fn start_annotate_group(
 ) -> Result<AsyncLlmJobStart, CommandError> {
     let analysis = super::load_cached_analysis(&state)?;
     let request = build_pass2_request(
-        &analysis, &group_id, &repo_path, base, head, range, staged, unstaged, include_uncommitted.unwrap_or(true),
+        &analysis,
+        &group_id,
+        &repo_path,
+        base,
+        head,
+        range,
+        staged,
+        unstaged,
+        include_uncommitted.unwrap_or(true),
     )?;
     let (mut config, workdir) = super::load_config_from_path(Some(&repo_path));
     if let Some(provider) = llm_provider {
@@ -842,7 +856,16 @@ pub async fn annotate_group(
     let repo = git2::Repository::discover(&repo_path_buf)
         .map_err(|e| CommandError::Git(format!("Not a git repository: {}", e)))?;
 
-    let (diff_result, _) = super::extract_diff(&repo, base, head, range, staged, unstaged, false, include_uncommitted.unwrap_or(true))?;
+    let (diff_result, _) = super::extract_diff(
+        &repo,
+        base,
+        head,
+        range,
+        staged,
+        unstaged,
+        false,
+        include_uncommitted.unwrap_or(true),
+    )?;
 
     // Build Pass 2 file inputs with diffs
     let files: Vec<llm::schema::Pass2FileInput> = group
@@ -1035,11 +1058,7 @@ pub async fn refine_groups(
     }
 
     for w in &outcome.warnings {
-        warn!(
-            "Refinement warning [{}]: {}",
-            w.event_type(),
-            w.message
-        );
+        warn!("Refinement warning [{}]: {}", w.event_type(), w.message);
     }
 
     // Update cached analysis with refined groups
@@ -1101,7 +1120,8 @@ pub struct RefinementResult {
     pub parse_failures: u32,
 }
 
-fn default_refinement_stop_reason() -> diffcore_core::llm::refinement::RefinementIterationStopReason {
+fn default_refinement_stop_reason() -> diffcore_core::llm::refinement::RefinementIterationStopReason
+{
     diffcore_core::llm::refinement::RefinementIterationStopReason::NoOp
 }
 

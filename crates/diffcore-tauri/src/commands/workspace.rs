@@ -11,8 +11,6 @@ use diffcore_core::git;
 
 use super::{AppState, CommandError, FileDiffContent};
 
-
-
 /// Summary of repository state for the UI.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RepoInfo {
@@ -36,11 +34,13 @@ pub fn list_branches(repo_path: String) -> Result<Vec<git::BranchInfo>, CommandE
 
 /// List recent commits for commit-level ref selection in the UI.
 #[tauri::command]
-pub fn list_commits(repo_path: String, limit: Option<usize>) -> Result<Vec<git::CommitInfo>, CommandError> {
+pub fn list_commits(
+    repo_path: String,
+    limit: Option<usize>,
+) -> Result<Vec<git::CommitInfo>, CommandError> {
     let repo = super::open_repo(&repo_path)?;
     let bounded_limit = limit.unwrap_or(50).clamp(1, 200);
-    git::list_recent_commits(&repo, bounded_limit)
-        .map_err(|e| CommandError::Git(format!("{}", e)))
+    git::list_recent_commits(&repo, bounded_limit).map_err(|e| CommandError::Git(format!("{}", e)))
 }
 
 /// List all git worktrees for the repository.
@@ -268,7 +268,10 @@ pub fn cross_file_search(
             Ok(true)
         });
 
-        if searcher.search_path(&matcher, &absolute_path, sink).is_err() {
+        if searcher
+            .search_path(&matcher, &absolute_path, sink)
+            .is_err()
+        {
             continue;
         }
 

@@ -212,10 +212,7 @@ pub fn diff_worktree(repo: &Repository) -> Result<DiffResult, GitError> {
 ///
 /// This captures both committed changes on the current branch AND uncommitted changes,
 /// equivalent to `git diff <base_ref>` on the command line.
-pub fn diff_branch_to_workdir(
-    repo: &Repository,
-    base_ref: &str,
-) -> Result<DiffResult, GitError> {
+pub fn diff_branch_to_workdir(repo: &Repository, base_ref: &str) -> Result<DiffResult, GitError> {
     let base_obj = repo
         .revparse_single(base_ref)
         .map_err(|_| GitError::RefNotFound(base_ref.to_string()))?;
@@ -284,8 +281,7 @@ pub fn diff_merge_base_to_workdir(
     opts.recurse_untracked_dirs(true);
     opts.show_untracked_content(true);
 
-    let mut diff =
-        repo.diff_tree_to_workdir_with_index(Some(&merge_base_tree), Some(&mut opts))?;
+    let mut diff = repo.diff_tree_to_workdir_with_index(Some(&merge_base_tree), Some(&mut opts))?;
     find_renames(&mut diff)?;
     let mut files = extract_file_diffs(repo, &diff)?;
     append_untracked_workdir_files(repo, &mut files)?;

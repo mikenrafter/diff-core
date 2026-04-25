@@ -497,4 +497,3 @@ fn test_add_negative() {
         "should detect _test.rs as test file entrypoint"
     );
 }
-

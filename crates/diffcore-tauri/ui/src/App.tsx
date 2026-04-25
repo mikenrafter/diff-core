@@ -34,6 +34,7 @@ import { describeActivityEntry, summarizeActivityTimeline, providerSupportsToolA
 import { resolveInteractiveProvider, resolveInteractiveModel, isApiProvider, PROVIDER_LABELS } from "./utils/llmUtils";
 import type { SubscriptionProvider } from "./utils/llmUtils";
 import { AppContext } from "./hooks/AppContext";
+import { DiffContext } from "./hooks/DiffContext";
 import { useEditorIntegration } from "./hooks/useEditorIntegration";
 import { useActivityStream } from "./hooks/useActivityStream";
 import { useManifestActions } from "./hooks/useManifestActions";
@@ -1198,8 +1199,9 @@ export default function App() {
     [handleSelectFile],
   );
 
-  const runAnalysis = useCallback(async () => {
-    if (!repoPath) return;
+  const runAnalysis = useCallback(async (overrideRepoPath?: string) => {
+    const effectiveRepoPath = (overrideRepoPath ?? repoPath).trim();
+    if (!effectiveRepoPath) return;
     if (comparisonMode === "invalid") {
       setError("Unsupported compare targets. Use source=Unstaged changes and target=Staged changes, or regular branch/commit targets.");
       return;
@@ -1239,7 +1241,7 @@ export default function App() {
       let result: AnalysisOutput;
       if (IS_TAURI) {
         result = await tauriInvoke<AnalysisOutput>("analyze", {
-          repoPath,
+          repoPath: effectiveRepoPath,
           base: analysisDiffArgs.base,
           head: analysisDiffArgs.head,
           range: null,
@@ -1267,7 +1269,7 @@ export default function App() {
       }
       // Check for cached refinement and auto-apply if found
       if (IS_TAURI) {
-        tauriInvoke<RefinementResult | null>("get_cached_refinement", { repoPath: repoPath || null }).then((cached) => {
+        tauriInvoke<RefinementResult | null>("get_cached_refinement", { repoPath: effectiveRepoPath || null }).then((cached) => {
           if (cached) {
             applyRefinementResult(cached, { fromCache: true });
           }
@@ -3013,6 +3015,39 @@ export default function App() {
     handleDiffCommentRequest, handleDiffEditorContentChange, handleDiffHunksChanged,
   };
 
+  // Dedicated diff/Monaco context to isolate expensive rerenders from unrelated state changes.
+  const diffContextValue = useMemo(() => ({
+    fileDiff, selectedFile, selectedGroup,
+    openTabs, handleSelectFile, closeTab, setTabContextMenu,
+    openWithRef, openWithDropdown, setOpenWithDropdown,
+    lastEditor, editorOptions, openInEditor,
+    replayActive, replayStep, replayVisited,
+    replayHunks, replayHunkIndex, replayViewedHunkIds,
+    hasNextReplayHunk, hasPrevReplayHunk,
+    navigateReplayHunk, commentOnCurrentReplayHunk,
+    goToReplayStep, exitReplay,
+    diffViewerRef, editsEnabled, shouldRenderSideBySide,
+    codeCommentsForSelectedFile,
+    setActiveCommentId, setRightPanelTab, rightPanelCollapsed, setRightPanelCollapsed,
+    handleGoToDefinition,
+    handleDiffCommentRequest, handleDiffEditorContentChange, handleDiffHunksChanged,
+  }), [
+    fileDiff, selectedFile, selectedGroup,
+    openTabs, handleSelectFile, closeTab, setTabContextMenu,
+    openWithRef, openWithDropdown, setOpenWithDropdown,
+    lastEditor, editorOptions, openInEditor,
+    replayActive, replayStep, replayVisited,
+    replayHunks, replayHunkIndex, replayViewedHunkIds,
+    hasNextReplayHunk, hasPrevReplayHunk,
+    navigateReplayHunk, commentOnCurrentReplayHunk,
+    goToReplayStep, exitReplay,
+    diffViewerRef, editsEnabled, shouldRenderSideBySide,
+    codeCommentsForSelectedFile,
+    setActiveCommentId, setRightPanelTab, rightPanelCollapsed, setRightPanelCollapsed,
+    handleGoToDefinition,
+    handleDiffCommentRequest, handleDiffEditorContentChange, handleDiffHunksChanged,
+  ]);
+
   return (
     <AppContext.Provider value={contextValue}>
 
@@ -3075,7 +3110,9 @@ export default function App() {
 
         {/* Center panel: Monaco Diff Viewer */}
         {/* Center panel: Monaco Diff Viewer */}
-        <CenterPane />
+        <DiffContext.Provider value={diffContextValue}>
+          <CenterPane />
+        </DiffContext.Provider>
 
         {/* Right panel: drag handle + panel */}
         <RightPane />

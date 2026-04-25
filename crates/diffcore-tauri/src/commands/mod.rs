@@ -61,15 +61,13 @@ impl AppState {
         // construction on error rather than panicking at startup; in
         // practice QueryEngine::new() is infallible today, but the
         // Result return type leaves room for future configuration loading.
-        let query_engine = Arc::new(
-            QueryEngine::new().unwrap_or_else(|e| {
-                log::error!("QueryEngine construction failed at startup: {e}");
-                // Re-attempt; if this also fails the app cannot parse files
-                // but other commands continue to work, so we panic only as
-                // a last resort. (Today new() can't actually fail.)
-                QueryEngine::new().expect("QueryEngine::new() failed twice")
-            }),
-        );
+        let query_engine = Arc::new(QueryEngine::new().unwrap_or_else(|e| {
+            log::error!("QueryEngine construction failed at startup: {e}");
+            // Re-attempt; if this also fails the app cannot parse files
+            // but other commands continue to work, so we panic only as
+            // a last resort. (Today new() can't actually fail.)
+            QueryEngine::new().expect("QueryEngine::new() failed twice")
+        }));
         Self {
             last_analysis: Mutex::new(None),
             last_diff: Mutex::new(None),
@@ -201,7 +199,8 @@ pub fn analyze(
         .map_err(|e| CommandError::Config(format!("{}", e)))?;
 
     // Resolve include_uncommitted: UI override > config > default (true)
-    let effective_include_uncommitted = include_uncommitted.unwrap_or(config.diff.include_uncommitted);
+    let effective_include_uncommitted =
+        include_uncommitted.unwrap_or(config.diff.include_uncommitted);
 
     // Extract diff
     let (diff_result, diff_source) = extract_diff(
@@ -455,7 +454,16 @@ pub fn get_file_diff(
     }
 
     // Cache miss — fall back to extracting from git
-    get_file_diff_uncached(repo_path, file_path, base, head, range, staged, unstaged, include_uncommitted.unwrap_or(true))
+    get_file_diff_uncached(
+        repo_path,
+        file_path,
+        base,
+        head,
+        range,
+        staged,
+        unstaged,
+        include_uncommitted.unwrap_or(true),
+    )
 }
 
 /// Core file diff logic without caching — also callable from integration tests.
@@ -490,7 +498,16 @@ pub fn get_file_diff_uncached(
     let repo = git2::Repository::discover(&repo_path_buf)
         .map_err(|e| CommandError::Git(format!("Not a git repository: {}", e)))?;
 
-    let (diff_result, _) = extract_diff(&repo, base, head, range, staged, unstaged, false, include_uncommitted)?;
+    let (diff_result, _) = extract_diff(
+        &repo,
+        base,
+        head,
+        range,
+        staged,
+        unstaged,
+        false,
+        include_uncommitted,
+    )?;
 
     let file_diff = diff_result
         .files
@@ -520,7 +537,6 @@ pub(super) fn load_cached_analysis(
 pub(super) fn provider_supports_tool_activity(provider: &str) -> bool {
     matches!(provider, "codex" | "claude")
 }
-
 
 pub(super) fn load_config_from_path(repo_path: Option<&str>) -> (DiffcoreConfig, Option<PathBuf>) {
     if let Some(path) = repo_path {
@@ -600,7 +616,6 @@ pub(super) fn preferred_model_for_runtime(
     }
 }
 
-
 /// Open a repository from a path, with canonicalization and error handling.
 pub(super) fn open_repo(repo_path: &str) -> Result<git2::Repository, CommandError> {
     let path = PathBuf::from(repo_path);
@@ -674,28 +689,23 @@ pub(super) fn extract_diff(
             .unwrap_or("main");
         let head_ref = head.as_deref().unwrap_or("HEAD");
         if include_uncommitted {
-            let diff =
-                git::diff_merge_base_to_workdir(repo, base_ref, head_ref).map_err(|e| {
+            let diff = git::diff_merge_base_to_workdir(repo, base_ref, head_ref).map_err(|e| {
+                CommandError::Git(format!(
+                    "Failed to compute merge-base-to-workdir diff between '{}' and '{}': {}",
+                    base_ref, head_ref, e
+                ))
+            })?;
+            let source =
+                output::diff_source_branch_with_worktree(base_ref, diff.base_sha.as_deref());
+            Ok((diff, source))
+        } else {
+            let selected = git::diff_merge_base_with_worktree_fallback(repo, base_ref, head_ref)
+                .map_err(|e| {
                     CommandError::Git(format!(
-                        "Failed to compute merge-base-to-workdir diff between '{}' and '{}': {}",
+                        "Failed to compute merge-base diff between '{}' and '{}': {}",
                         base_ref, head_ref, e
                     ))
                 })?;
-            let source = output::diff_source_branch_with_worktree(
-                base_ref,
-                diff.base_sha.as_deref(),
-            );
-            Ok((diff, source))
-        } else {
-            let selected =
-                git::diff_merge_base_with_worktree_fallback(repo, base_ref, head_ref).map_err(
-                    |e| {
-                        CommandError::Git(format!(
-                            "Failed to compute merge-base diff between '{}' and '{}': {}",
-                            base_ref, head_ref, e
-                        ))
-                    },
-                )?;
             let source = if selected.used_worktree_fallback {
                 output::diff_source_worktree(
                     Some(base_ref),
@@ -719,10 +729,8 @@ pub(super) fn extract_diff(
         if include_uncommitted {
             let diff = git::diff_branch_to_workdir(repo, base_ref)
                 .map_err(|e| CommandError::Git(format!("{}", e)))?;
-            let source = output::diff_source_branch_with_worktree(
-                base_ref,
-                diff.base_sha.as_deref(),
-            );
+            let source =
+                output::diff_source_branch_with_worktree(base_ref, diff.base_sha.as_deref());
             Ok((diff, source))
         } else {
             let selected = git::diff_refs_with_worktree_fallback(repo, base_ref, head_ref)
@@ -795,50 +803,48 @@ pub(super) fn detect_language(path: &str) -> String {
     }
 }
 
-
 // ── Submodules ──────────────────────────────────────────────────────────────
 
-pub mod llm;
-pub mod workspace;
-pub mod settings;
-pub mod editor;
 pub mod app_state;
 pub mod comments;
+pub mod editor;
+pub mod llm;
 pub mod manifest;
+pub mod settings;
+pub mod workspace;
 
 // Re-export public command items for internal tests and compatibility with
 // older call sites that import from `commands::*`.
 #[allow(unused_imports)]
-pub use llm::{
-    annotate_group, annotate_overview, get_cached_refinement, refine_groups,
-    start_annotate_group, start_annotate_overview, start_refine_groups,
-    store_refinement_cache, AsyncLlmJobStart, RefinementResult,
-};
+pub use app_state::{load_last_app_state, save_app_state};
 #[allow(unused_imports)]
-pub use workspace::{
-    cross_file_search, get_branch_status, get_last_diff_file_statuses,
-    get_launch_directory, get_repo_info, get_workspace_file_content, list_branches,
-    list_commits, list_worktrees, parse_file_content, CrossFileSearchMatch,
-    CrossFileSearchResult, FileShortStatus, RepoInfo,
-};
-#[allow(unused_imports)]
-pub use settings::{
-    check_api_key, clear_api_key, fetch_provider_models, get_ignore_paths,
-    get_llm_settings, save_api_key, save_ignore_paths, save_llm_settings, LlmSettings,
+pub use comments::{
+    comment_cache_key, delete_comment, delete_comment_cached, export_comments, load_comments,
+    load_comments_cached, save_comment, save_comment_cached, update_comment_cached, CommentsFile,
+    ReviewComment,
 };
 #[allow(unused_imports)]
 pub use editor::{check_editors_available, open_in_editor, save_file_content};
 #[allow(unused_imports)]
-pub use app_state::{load_last_app_state, save_app_state};
-#[allow(unused_imports)]
-pub use comments::{
-    comment_cache_key, delete_comment, delete_comment_cached, export_comments,
-    load_comments, load_comments_cached, save_comment, save_comment_cached,
-    update_comment_cached, CommentsFile, ReviewComment,
+pub use llm::{
+    annotate_group, annotate_overview, get_cached_refinement, refine_groups, start_annotate_group,
+    start_annotate_overview, start_refine_groups, store_refinement_cache, AsyncLlmJobStart,
+    RefinementResult,
 };
 #[allow(unused_imports)]
 pub use manifest::{
     export_groups_manifest, import_groups_manifest, unwatch_manifest, watch_manifest,
+};
+#[allow(unused_imports)]
+pub use settings::{
+    check_api_key, clear_api_key, fetch_provider_models, get_ignore_paths, get_llm_settings,
+    save_api_key, save_ignore_paths, save_llm_settings, LlmSettings,
+};
+#[allow(unused_imports)]
+pub use workspace::{
+    cross_file_search, get_branch_status, get_last_diff_file_statuses, get_launch_directory,
+    get_repo_info, get_workspace_file_content, list_branches, list_commits, list_worktrees,
+    parse_file_content, CrossFileSearchMatch, CrossFileSearchResult, FileShortStatus, RepoInfo,
 };
 
 #[cfg(test)]
@@ -1235,7 +1241,8 @@ mod tests {
             model: "gpt-4.1".to_string(),
             had_changes: true,
             warnings: Vec::new(),
-            stop_reason: diffcore_core::llm::refinement::RefinementIterationStopReason::MaxIterationsReached,
+            stop_reason:
+                diffcore_core::llm::refinement::RefinementIterationStopReason::MaxIterationsReached,
             attempts_used: 2,
             parse_failures: 1,
         };
@@ -1564,7 +1571,12 @@ mod tests {
 
         // Save then update
         save_comment_cached(repo_path.clone(), comment).unwrap();
-        update_comment_cached(repo_path.clone(), "test_update_1".to_string(), "Updated text".to_string()).unwrap();
+        update_comment_cached(
+            repo_path.clone(),
+            "test_update_1".to_string(),
+            "Updated text".to_string(),
+        )
+        .unwrap();
 
         let loaded = load_comments_cached(repo_path).unwrap();
         assert_eq!(loaded.len(), 1);
@@ -1590,7 +1602,12 @@ mod tests {
         };
 
         save_comment_cached(repo_path.clone(), comment).unwrap();
-        update_comment_cached(repo_path.clone(), "test_preserve_1".to_string(), "After update".to_string()).unwrap();
+        update_comment_cached(
+            repo_path.clone(),
+            "test_preserve_1".to_string(),
+            "After update".to_string(),
+        )
+        .unwrap();
 
         let loaded = load_comments_cached(repo_path).unwrap();
         let c = &loaded[0];
@@ -1623,7 +1640,12 @@ mod tests {
 
         save_comment_cached(repo_path.clone(), comment).unwrap();
         // Update a non-existent ID
-        update_comment_cached(repo_path.clone(), "nonexistent_id".to_string(), "New text".to_string()).unwrap();
+        update_comment_cached(
+            repo_path.clone(),
+            "nonexistent_id".to_string(),
+            "New text".to_string(),
+        )
+        .unwrap();
 
         let loaded = load_comments_cached(repo_path).unwrap();
         assert_eq!(loaded.len(), 1);
@@ -1651,7 +1673,12 @@ mod tests {
         }
 
         // Update only the 3rd comment
-        update_comment_cached(repo_path.clone(), "multi_3".to_string(), "Updated comment 3".to_string()).unwrap();
+        update_comment_cached(
+            repo_path.clone(),
+            "multi_3".to_string(),
+            "Updated comment 3".to_string(),
+        )
+        .unwrap();
 
         let loaded = load_comments_cached(repo_path).unwrap();
         assert_eq!(loaded.len(), 5);
@@ -1680,7 +1707,12 @@ mod tests {
         };
 
         save_comment_cached(repo_path.clone(), comment).unwrap();
-        update_comment_cached(repo_path.clone(), "empty_text_1".to_string(), "".to_string()).unwrap();
+        update_comment_cached(
+            repo_path.clone(),
+            "empty_text_1".to_string(),
+            "".to_string(),
+        )
+        .unwrap();
 
         let loaded = load_comments_cached(repo_path).unwrap();
         assert_eq!(loaded[0].text, "");
@@ -1704,8 +1736,14 @@ mod tests {
         };
 
         save_comment_cached(repo_path.clone(), comment).unwrap();
-        let special_text = "Contains \"quotes\", newlines\n\ttabs, unicode: 🦀, and <html> & entities";
-        update_comment_cached(repo_path.clone(), "special_chars_1".to_string(), special_text.to_string()).unwrap();
+        let special_text =
+            "Contains \"quotes\", newlines\n\ttabs, unicode: 🦀, and <html> & entities";
+        update_comment_cached(
+            repo_path.clone(),
+            "special_chars_1".to_string(),
+            special_text.to_string(),
+        )
+        .unwrap();
 
         let loaded = load_comments_cached(repo_path).unwrap();
         assert_eq!(loaded[0].text, special_text);
@@ -1729,7 +1767,12 @@ mod tests {
         };
 
         save_comment_cached(repo_path.clone(), comment).unwrap();
-        update_comment_cached(repo_path.clone(), "update_delete_1".to_string(), "Updated".to_string()).unwrap();
+        update_comment_cached(
+            repo_path.clone(),
+            "update_delete_1".to_string(),
+            "Updated".to_string(),
+        )
+        .unwrap();
         delete_comment_cached(repo_path.clone(), "update_delete_1".to_string()).unwrap();
 
         let loaded = load_comments_cached(repo_path).unwrap();
@@ -1756,7 +1799,12 @@ mod tests {
         save_comment_cached(repo_path.clone(), comment).unwrap();
 
         for i in 2..=10 {
-            update_comment_cached(repo_path.clone(), "multi_update_1".to_string(), format!("Version {}", i)).unwrap();
+            update_comment_cached(
+                repo_path.clone(),
+                "multi_update_1".to_string(),
+                format!("Version {}", i),
+            )
+            .unwrap();
         }
 
         let loaded = load_comments_cached(repo_path).unwrap();
@@ -1770,7 +1818,11 @@ mod tests {
         let repo_path = init_test_repo(dir.path());
 
         // Update on empty cache should succeed (no comment found, noop)
-        let result = update_comment_cached(repo_path.clone(), "no_such_id".to_string(), "text".to_string());
+        let result = update_comment_cached(
+            repo_path.clone(),
+            "no_such_id".to_string(),
+            "text".to_string(),
+        );
         assert!(result.is_ok());
 
         let loaded = load_comments_cached(repo_path).unwrap();
@@ -1984,7 +2036,12 @@ mod tests {
         assert_eq!(loaded.len(), 2);
 
         // 3. Update first comment
-        update_comment_cached(repo_path.clone(), "lifecycle_1".to_string(), "Edited first".to_string()).unwrap();
+        update_comment_cached(
+            repo_path.clone(),
+            "lifecycle_1".to_string(),
+            "Edited first".to_string(),
+        )
+        .unwrap();
         let loaded = load_comments_cached(repo_path.clone()).unwrap();
         assert_eq!(loaded[0].text, "Edited first");
         assert_eq!(loaded[1].text, "Second comment");
@@ -1996,7 +2053,12 @@ mod tests {
         assert_eq!(loaded[0].id, "lifecycle_1");
 
         // 5. Update the remaining comment again
-        update_comment_cached(repo_path.clone(), "lifecycle_1".to_string(), "Final edit".to_string()).unwrap();
+        update_comment_cached(
+            repo_path.clone(),
+            "lifecycle_1".to_string(),
+            "Final edit".to_string(),
+        )
+        .unwrap();
         let loaded = load_comments_cached(repo_path.clone()).unwrap();
         assert_eq!(loaded[0].text, "Final edit");
 
@@ -2017,10 +2079,18 @@ mod tests {
                 id: format!("type_test_{}", i),
                 comment_type: t.to_string(),
                 group_id: "g1".to_string(),
-                file_path: if *t != "group" { Some("test.ts".to_string()) } else { None },
+                file_path: if *t != "group" {
+                    Some("test.ts".to_string())
+                } else {
+                    None
+                },
                 start_line: if *t == "code" { Some(1) } else { None },
                 end_line: if *t == "code" { Some(5) } else { None },
-                selected_code: if *t == "code" { Some("code".to_string()) } else { None },
+                selected_code: if *t == "code" {
+                    Some("code".to_string())
+                } else {
+                    None
+                },
                 text: format!("{} comment", t),
                 created_at: "2026-01-01T00:00:00Z".to_string(),
             };

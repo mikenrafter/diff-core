@@ -3,7 +3,7 @@
 //! Moved from `query_engine.rs` during the per-language module split.
 //! Pure mechanical move — no logic changes.
 
-use crate::ast::{CallSite, Definition, ImportedName, ImportInfo, Language};
+use crate::ast::{CallSite, Definition, ImportInfo, ImportedName, Language};
 use crate::query_engine::{QueryEngineError, QueryWithCaptures};
 use crate::types::SymbolKind;
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator};
@@ -184,8 +184,8 @@ pub(crate) fn standard_kind_to_symbol_kind(suffix: &str) -> Option<SymbolKind> {
         // We collapse "type" aliases to TypeAlias when the grammar makes the
         // distinction explicit; otherwise the "type" arm above wins.
         "type_alias" | "typealias" | "alias" => SymbolKind::TypeAlias,
-        "constant" | "const" | "static" | "variable" | "field" | "property"
-        | "enum_member" | "enumerator" => SymbolKind::Constant,
+        "constant" | "const" | "static" | "variable" | "field" | "property" | "enum_member"
+        | "enumerator" => SymbolKind::Constant,
         // Ruby `module Foo … end` and C++ `namespace foo { … }` are
         // first-class symbols in our IR (Symbol::Module). Note that
         // upstream `tags.scm` files sometimes use these for *scoping
@@ -489,7 +489,11 @@ pub(crate) fn find_containing_function(
 }
 
 /// Extract argument texts from an arguments/argument_list node.
-pub(crate) fn extract_arg_texts(args_node: &Node, source: &[u8], language: Language) -> Vec<String> {
+pub(crate) fn extract_arg_texts(
+    args_node: &Node,
+    source: &[u8],
+    language: Language,
+) -> Vec<String> {
     let mut args = Vec::new();
     let mut cursor = args_node.walk();
     for child in args_node.named_children(&mut cursor) {

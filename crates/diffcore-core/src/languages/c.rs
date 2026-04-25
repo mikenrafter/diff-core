@@ -3,18 +3,16 @@
 //! Moved from `query_engine.rs` during the per-language module split.
 //! Pure mechanical move — no logic changes.
 
-use crate::ast::{Definition, ImportedName, ImportInfo};
+use crate::ast::{Definition, ImportInfo, ImportedName};
 use crate::languages::common::{
-    collect_matches, hash_str, node_span, node_text,
-    extract_definitions_standard, CollectedMatch,
+    collect_matches, extract_definitions_standard, hash_str, node_span, node_text, CollectedMatch,
 };
 use crate::query_engine::{QueryEngineError, QueryWithCaptures};
 use crate::types::SymbolKind;
 use tree_sitter::{Node, QueryCursor};
 
-
 pub(crate) fn extract_imports(
-root: &Node,
+    root: &Node,
     source: &[u8],
     qwc: &QueryWithCaptures,
 ) -> Result<Vec<ImportInfo>, QueryEngineError> {
@@ -83,65 +81,58 @@ pub(crate) fn extract_definitions(
     definitions: &mut Vec<Definition>,
     seen_nodes: &mut Vec<(usize, usize)>,
 ) {
-    if extract_definitions_standard(
-        matches,
-        source,
-        qwc,
-        definitions,
-        seen_nodes,
-    ) {
+    if extract_definitions_standard(matches, source, qwc, definitions, seen_nodes) {
         // Standard path took over.
     } else {
-    let func_name_idx = qwc.capture_index("func_name");
-    let func_node_idx = qwc.capture_index("func_node");
-    let struct_name_idx = qwc.capture_index("struct_name");
-    let struct_node_idx = qwc.capture_index("struct_node");
-    let enum_name_idx = qwc.capture_index("enum_name");
-    let enum_node_idx = qwc.capture_index("enum_node");
-    let union_name_idx = qwc.capture_index("union_name");
-    let union_node_idx = qwc.capture_index("union_node");
-    let typedef_name_idx = qwc.capture_index("typedef_name");
-    let typedef_node_idx = qwc.capture_index("typedef_node");
-    let global_name_idx = qwc.capture_index("global_name");
-    let global_node_idx = qwc.capture_index("global_node");
+        let func_name_idx = qwc.capture_index("func_name");
+        let func_node_idx = qwc.capture_index("func_node");
+        let struct_name_idx = qwc.capture_index("struct_name");
+        let struct_node_idx = qwc.capture_index("struct_node");
+        let enum_name_idx = qwc.capture_index("enum_name");
+        let enum_node_idx = qwc.capture_index("enum_node");
+        let union_name_idx = qwc.capture_index("union_name");
+        let union_node_idx = qwc.capture_index("union_node");
+        let typedef_name_idx = qwc.capture_index("typedef_name");
+        let typedef_node_idx = qwc.capture_index("typedef_node");
+        let global_name_idx = qwc.capture_index("global_name");
+        let global_node_idx = qwc.capture_index("global_node");
 
-    let c_def_captures: &[(Option<u32>, Option<u32>, SymbolKind)] = &[
-        (func_name_idx, func_node_idx, SymbolKind::Function),
-        (struct_name_idx, struct_node_idx, SymbolKind::Class),
-        (enum_name_idx, enum_node_idx, SymbolKind::Class),
-        (union_name_idx, union_node_idx, SymbolKind::Class),
-        (typedef_name_idx, typedef_node_idx, SymbolKind::TypeAlias),
-        (global_name_idx, global_node_idx, SymbolKind::Constant),
-    ];
+        let c_def_captures: &[(Option<u32>, Option<u32>, SymbolKind)] = &[
+            (func_name_idx, func_node_idx, SymbolKind::Function),
+            (struct_name_idx, struct_node_idx, SymbolKind::Class),
+            (enum_name_idx, enum_node_idx, SymbolKind::Class),
+            (union_name_idx, union_node_idx, SymbolKind::Class),
+            (typedef_name_idx, typedef_node_idx, SymbolKind::TypeAlias),
+            (global_name_idx, global_node_idx, SymbolKind::Constant),
+        ];
 
-    for m in matches {
-        for &(name_cap, node_cap, kind) in c_def_captures {
-            if m.has_capture(name_cap) {
-                let name_node = m.get_capture(name_cap);
-                let name_text = name_node
-                    .map(|n| node_text(&n, source).to_string())
-                    .unwrap_or_default();
-                let (start_line, end_line, _node_start) = node_span(m, node_cap);
-                if !name_text.is_empty() {
-                    let name_start = name_node.map(|n| n.start_byte()).unwrap_or(0);
-                    let key = (name_start, hash_str(&name_text));
-                    if !seen_nodes.contains(&key) {
-                        seen_nodes.push(key);
-                        definitions.push(Definition {
-                            name: name_text,
-                            kind,
-                            start_line,
-                            end_line,
-                        });
+        for m in matches {
+            for &(name_cap, node_cap, kind) in c_def_captures {
+                if m.has_capture(name_cap) {
+                    let name_node = m.get_capture(name_cap);
+                    let name_text = name_node
+                        .map(|n| node_text(&n, source).to_string())
+                        .unwrap_or_default();
+                    let (start_line, end_line, _node_start) = node_span(m, node_cap);
+                    if !name_text.is_empty() {
+                        let name_start = name_node.map(|n| n.start_byte()).unwrap_or(0);
+                        let key = (name_start, hash_str(&name_text));
+                        if !seen_nodes.contains(&key) {
+                            seen_nodes.push(key);
+                            definitions.push(Definition {
+                                name: name_text,
+                                kind,
+                                start_line,
+                                end_line,
+                            });
+                        }
                     }
+                    break;
                 }
-                break;
             }
         }
-    }
     } // close `else` opened above for the standard-convention fallback
 }
-
 
 #[cfg(test)]
 #[allow(
@@ -423,5 +414,4 @@ int main() {
             callees
         );
     }
-
 }

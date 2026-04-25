@@ -5,13 +5,11 @@
 
 use crate::ast::{Definition, ImportInfo};
 use crate::languages::common::{
-    hash_str, node_span, node_text,
-    extract_definitions_standard, CollectedMatch,
+    extract_definitions_standard, hash_str, node_span, node_text, CollectedMatch,
 };
 use crate::query_engine::{QueryEngineError, QueryWithCaptures};
 use crate::types::SymbolKind;
 use tree_sitter::Node;
-
 
 pub(crate) fn extract_imports(
     root: &Node,
@@ -21,7 +19,6 @@ pub(crate) fn extract_imports(
     crate::languages::c::extract_imports(root, source, qwc)
 }
 
-
 pub(crate) fn extract_definitions(
     matches: &[CollectedMatch<'_>],
     source: &[u8],
@@ -29,82 +26,75 @@ pub(crate) fn extract_definitions(
     definitions: &mut Vec<Definition>,
     seen_nodes: &mut Vec<(usize, usize)>,
 ) {
-    if extract_definitions_standard(
-        matches,
-        source,
-        qwc,
-        definitions,
-        seen_nodes,
-    ) {
+    if extract_definitions_standard(matches, source, qwc, definitions, seen_nodes) {
         // Standard path took over.
     } else {
-    let func_name_idx = qwc.capture_index("func_name");
-    let func_node_idx = qwc.capture_index("func_node");
-    let method_name_idx = qwc.capture_index("method_name");
-    let method_node_idx = qwc.capture_index("method_node");
-    let class_name_idx = qwc.capture_index("class_name");
-    let class_node_idx = qwc.capture_index("class_node");
-    let struct_name_idx = qwc.capture_index("struct_name");
-    let struct_node_idx = qwc.capture_index("struct_node");
-    let enum_name_idx = qwc.capture_index("enum_name");
-    let enum_node_idx = qwc.capture_index("enum_node");
-    let namespace_name_idx = qwc.capture_index("namespace_name");
-    let namespace_node_idx = qwc.capture_index("namespace_node");
-    let alias_name_idx = qwc.capture_index("alias_name");
-    let alias_node_idx = qwc.capture_index("alias_node");
-    let template_func_name_idx = qwc.capture_index("template_func_name");
-    let template_func_node_idx = qwc.capture_index("template_func_node");
-    let template_class_name_idx = qwc.capture_index("template_class_name");
-    let template_class_node_idx = qwc.capture_index("template_class_node");
+        let func_name_idx = qwc.capture_index("func_name");
+        let func_node_idx = qwc.capture_index("func_node");
+        let method_name_idx = qwc.capture_index("method_name");
+        let method_node_idx = qwc.capture_index("method_node");
+        let class_name_idx = qwc.capture_index("class_name");
+        let class_node_idx = qwc.capture_index("class_node");
+        let struct_name_idx = qwc.capture_index("struct_name");
+        let struct_node_idx = qwc.capture_index("struct_node");
+        let enum_name_idx = qwc.capture_index("enum_name");
+        let enum_node_idx = qwc.capture_index("enum_node");
+        let namespace_name_idx = qwc.capture_index("namespace_name");
+        let namespace_node_idx = qwc.capture_index("namespace_node");
+        let alias_name_idx = qwc.capture_index("alias_name");
+        let alias_node_idx = qwc.capture_index("alias_node");
+        let template_func_name_idx = qwc.capture_index("template_func_name");
+        let template_func_node_idx = qwc.capture_index("template_func_node");
+        let template_class_name_idx = qwc.capture_index("template_class_name");
+        let template_class_node_idx = qwc.capture_index("template_class_node");
 
-    let cpp_def_captures: &[(Option<u32>, Option<u32>, SymbolKind)] = &[
-        (func_name_idx, func_node_idx, SymbolKind::Function),
-        (method_name_idx, method_node_idx, SymbolKind::Function),
-        (class_name_idx, class_node_idx, SymbolKind::Class),
-        (struct_name_idx, struct_node_idx, SymbolKind::Class),
-        (enum_name_idx, enum_node_idx, SymbolKind::Class),
-        (namespace_name_idx, namespace_node_idx, SymbolKind::Module),
-        (alias_name_idx, alias_node_idx, SymbolKind::TypeAlias),
-        (
-            template_func_name_idx,
-            template_func_node_idx,
-            SymbolKind::Function,
-        ),
-        (
-            template_class_name_idx,
-            template_class_node_idx,
-            SymbolKind::Class,
-        ),
-    ];
+        let cpp_def_captures: &[(Option<u32>, Option<u32>, SymbolKind)] = &[
+            (func_name_idx, func_node_idx, SymbolKind::Function),
+            (method_name_idx, method_node_idx, SymbolKind::Function),
+            (class_name_idx, class_node_idx, SymbolKind::Class),
+            (struct_name_idx, struct_node_idx, SymbolKind::Class),
+            (enum_name_idx, enum_node_idx, SymbolKind::Class),
+            (namespace_name_idx, namespace_node_idx, SymbolKind::Module),
+            (alias_name_idx, alias_node_idx, SymbolKind::TypeAlias),
+            (
+                template_func_name_idx,
+                template_func_node_idx,
+                SymbolKind::Function,
+            ),
+            (
+                template_class_name_idx,
+                template_class_node_idx,
+                SymbolKind::Class,
+            ),
+        ];
 
-    for m in matches {
-        for &(name_cap, node_cap, kind) in cpp_def_captures {
-            if m.has_capture(name_cap) {
-                let name_node = m.get_capture(name_cap);
-                let name_text = name_node
-                    .map(|n| node_text(&n, source).to_string())
-                    .unwrap_or_default();
-                let (start_line, end_line, _node_start) = node_span(m, node_cap);
-                if !name_text.is_empty() {
-                    let name_start = name_node.map(|n| n.start_byte()).unwrap_or(0);
-                    let key = (name_start, hash_str(&name_text));
-                    if !seen_nodes.contains(&key) {
-                        seen_nodes.push(key);
-                        definitions.push(Definition {
-                            name: name_text,
-                            kind,
-                            start_line,
-                            end_line,
-                        });
+        for m in matches {
+            for &(name_cap, node_cap, kind) in cpp_def_captures {
+                if m.has_capture(name_cap) {
+                    let name_node = m.get_capture(name_cap);
+                    let name_text = name_node
+                        .map(|n| node_text(&n, source).to_string())
+                        .unwrap_or_default();
+                    let (start_line, end_line, _node_start) = node_span(m, node_cap);
+                    if !name_text.is_empty() {
+                        let name_start = name_node.map(|n| n.start_byte()).unwrap_or(0);
+                        let key = (name_start, hash_str(&name_text));
+                        if !seen_nodes.contains(&key) {
+                            seen_nodes.push(key);
+                            definitions.push(Definition {
+                                name: name_text,
+                                kind,
+                                start_line,
+                                end_line,
+                            });
+                        }
                     }
+                    break;
                 }
-                break;
             }
         }
-    }
     } // close `else` opened above for the standard-convention fallback
 }
-
 
 #[cfg(test)]
 #[allow(
@@ -431,5 +421,4 @@ using UserList = std::vector<User>;
             callees
         );
     }
-
 }

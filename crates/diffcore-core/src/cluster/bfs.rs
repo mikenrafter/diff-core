@@ -105,7 +105,8 @@ pub(super) fn collect_internal_edges(
 /// Generate a human-readable name for a flow group based on its entrypoint.
 pub(super) fn generate_group_name(ep: &Entrypoint) -> String {
     // Extract file basename without extension
-    let basename = ep.file
+    let basename = ep
+        .file
         .rsplit('/')
         .next()
         .unwrap_or(&ep.file)
@@ -114,10 +115,7 @@ pub(super) fn generate_group_name(ep: &Entrypoint) -> String {
         .unwrap_or(&ep.file);
 
     // Use symbol if it differs from the file basename; otherwise just use basename
-    let label = if ep.symbol == basename
-        || ep.symbol == "default"
-        || ep.symbol == "module"
-    {
+    let label = if ep.symbol == basename || ep.symbol == "default" || ep.symbol == "module" {
         basename.to_string()
     } else {
         format!("{} ({})", ep.symbol, basename)

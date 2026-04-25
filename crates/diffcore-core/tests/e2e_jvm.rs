@@ -759,4 +759,3 @@ class CalculatorSpec extends AnyFlatSpec with Matchers {
         frameworks
     );
 }
-

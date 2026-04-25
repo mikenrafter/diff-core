@@ -364,7 +364,7 @@ export interface AppContextValue {
   setWatchedManifestPath: React.Dispatch<React.SetStateAction<string | null>>;
 
   // ─── Callbacks ────────────────────────────────────────────────────────────
-  runAnalysis: () => Promise<void>;
+  runAnalysis: (overrideRepoPath?: string) => Promise<void>;
   runAnnotateOverview: (opts?: { feedback?: string; includePreviousOutput?: boolean }) => Promise<void>;
   runDeepAnalysis: () => Promise<void>;
   runRefinement: () => Promise<void>;

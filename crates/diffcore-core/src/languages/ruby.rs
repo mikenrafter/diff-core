@@ -3,18 +3,16 @@
 //! Moved from `query_engine.rs` during the per-language module split.
 //! Pure mechanical move — no logic changes.
 
-use crate::ast::{Definition, ImportedName, ImportInfo};
+use crate::ast::{Definition, ImportInfo, ImportedName};
 use crate::languages::common::{
-    collect_matches, hash_str, node_span, node_text,
-    extract_definitions_standard, CollectedMatch,
+    collect_matches, extract_definitions_standard, hash_str, node_span, node_text, CollectedMatch,
 };
 use crate::query_engine::{QueryEngineError, QueryWithCaptures};
 use crate::types::SymbolKind;
 use tree_sitter::{Node, QueryCursor};
 
-
 pub(crate) fn extract_imports(
-root: &Node,
+    root: &Node,
     source: &[u8],
     qwc: &QueryWithCaptures,
 ) -> Result<Vec<ImportInfo>, QueryEngineError> {
@@ -127,66 +125,59 @@ pub(crate) fn extract_definitions(
     definitions: &mut Vec<Definition>,
     seen_nodes: &mut Vec<(usize, usize)>,
 ) {
-    if extract_definitions_standard(
-        matches,
-        source,
-        qwc,
-        definitions,
-        seen_nodes,
-    ) {
+    if extract_definitions_standard(matches, source, qwc, definitions, seen_nodes) {
         // Standard path took over.
     } else {
-    let method_name_idx = qwc.capture_index("method_name");
-    let method_node_idx = qwc.capture_index("method_node");
-    let singleton_method_name_idx = qwc.capture_index("singleton_method_name");
-    let singleton_method_node_idx = qwc.capture_index("singleton_method_node");
-    let class_name_idx = qwc.capture_index("class_name");
-    let class_node_idx = qwc.capture_index("class_node");
-    let module_name_idx = qwc.capture_index("module_name");
-    let module_node_idx = qwc.capture_index("module_node");
-    let const_name_idx = qwc.capture_index("const_name");
-    let const_node_idx = qwc.capture_index("const_node");
+        let method_name_idx = qwc.capture_index("method_name");
+        let method_node_idx = qwc.capture_index("method_node");
+        let singleton_method_name_idx = qwc.capture_index("singleton_method_name");
+        let singleton_method_node_idx = qwc.capture_index("singleton_method_node");
+        let class_name_idx = qwc.capture_index("class_name");
+        let class_node_idx = qwc.capture_index("class_node");
+        let module_name_idx = qwc.capture_index("module_name");
+        let module_node_idx = qwc.capture_index("module_node");
+        let const_name_idx = qwc.capture_index("const_name");
+        let const_node_idx = qwc.capture_index("const_node");
 
-    let ruby_def_captures: &[(Option<u32>, Option<u32>, SymbolKind)] = &[
-        (method_name_idx, method_node_idx, SymbolKind::Function),
-        (
-            singleton_method_name_idx,
-            singleton_method_node_idx,
-            SymbolKind::Function,
-        ),
-        (class_name_idx, class_node_idx, SymbolKind::Class),
-        (module_name_idx, module_node_idx, SymbolKind::Module),
-        (const_name_idx, const_node_idx, SymbolKind::Constant),
-    ];
+        let ruby_def_captures: &[(Option<u32>, Option<u32>, SymbolKind)] = &[
+            (method_name_idx, method_node_idx, SymbolKind::Function),
+            (
+                singleton_method_name_idx,
+                singleton_method_node_idx,
+                SymbolKind::Function,
+            ),
+            (class_name_idx, class_node_idx, SymbolKind::Class),
+            (module_name_idx, module_node_idx, SymbolKind::Module),
+            (const_name_idx, const_node_idx, SymbolKind::Constant),
+        ];
 
-    for m in matches {
-        for &(name_cap, node_cap, kind) in ruby_def_captures {
-            if m.has_capture(name_cap) {
-                let name_node = m.get_capture(name_cap);
-                let name_text = name_node
-                    .map(|n| node_text(&n, source).to_string())
-                    .unwrap_or_default();
-                let (start_line, end_line, _node_start) = node_span(m, node_cap);
-                if !name_text.is_empty() {
-                    let name_start = name_node.map(|n| n.start_byte()).unwrap_or(0);
-                    let key = (name_start, hash_str(&name_text));
-                    if !seen_nodes.contains(&key) {
-                        seen_nodes.push(key);
-                        definitions.push(Definition {
-                            name: name_text,
-                            kind,
-                            start_line,
-                            end_line,
-                        });
+        for m in matches {
+            for &(name_cap, node_cap, kind) in ruby_def_captures {
+                if m.has_capture(name_cap) {
+                    let name_node = m.get_capture(name_cap);
+                    let name_text = name_node
+                        .map(|n| node_text(&n, source).to_string())
+                        .unwrap_or_default();
+                    let (start_line, end_line, _node_start) = node_span(m, node_cap);
+                    if !name_text.is_empty() {
+                        let name_start = name_node.map(|n| n.start_byte()).unwrap_or(0);
+                        let key = (name_start, hash_str(&name_text));
+                        if !seen_nodes.contains(&key) {
+                            seen_nodes.push(key);
+                            definitions.push(Definition {
+                                name: name_text,
+                                kind,
+                                start_line,
+                                end_line,
+                            });
+                        }
                     }
+                    break;
                 }
-                break;
             }
         }
-    }
     } // close `else` opened above for the standard-convention fallback
 }
-
 
 #[cfg(test)]
 #[allow(
@@ -495,5 +486,4 @@ mod tests {
         assert!(callees.contains(&"save"));
         assert!(callees.contains(&"redirect_to"));
     }
-
 }

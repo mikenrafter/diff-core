@@ -373,7 +373,8 @@ fn repo_info_linked_worktree_is_worktree() {
         .and_then(|b| b.get().target())
         .and_then(|oid| repo.find_commit(oid).ok())
         .unwrap();
-    let main_ref = repo.find_branch("main", git2::BranchType::Local)
+    let main_ref = repo
+        .find_branch("main", git2::BranchType::Local)
         .or_else(|_| repo.find_branch("master", git2::BranchType::Local))
         .ok()
         .and_then(|b| b.get().name().map(String::from));
@@ -419,7 +420,8 @@ fn repo_info_linked_worktree_lists_branches() {
     let wt_dir = _tmp.path().join("linked-wt-branches");
     std::fs::create_dir_all(&wt_dir).unwrap();
     let repo = Repository::open(&repo_path).unwrap();
-    let main_ref = repo.find_branch("main", git2::BranchType::Local)
+    let main_ref = repo
+        .find_branch("main", git2::BranchType::Local)
         .or_else(|_| repo.find_branch("master", git2::BranchType::Local))
         .ok()
         .and_then(|b| b.get().name().map(String::from));

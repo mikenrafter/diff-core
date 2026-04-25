@@ -1421,7 +1421,6 @@ pub fn trace_data_flow_ir(files: &[IrFile]) -> Vec<DataFlowEdge> {
 // Tests
 // ---------------------------------------------------------------------------
 
-
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,

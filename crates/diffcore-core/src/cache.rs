@@ -111,7 +111,10 @@ pub fn compute_cache_key_working_dir(diff_result: &DiffResult, workdir: &Path) -
         let abs_path = workdir.join(rel_path);
         let mtime_ns = std::fs::metadata(&abs_path)
             .and_then(|m| m.modified())
-            .and_then(|t| t.duration_since(UNIX_EPOCH).map_err(|e| std::io::Error::other(e)))
+            .and_then(|t| {
+                t.duration_since(UNIX_EPOCH)
+                    .map_err(|e| std::io::Error::other(e))
+            })
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         hasher.update(rel_path.as_bytes());
@@ -512,8 +515,14 @@ mod tests {
         store_cached_refinement_in(&dir, "key_a", r#"{"a": 1}"#);
         store_cached_refinement_in(&dir, "key_b", r#"{"b": 2}"#);
 
-        assert_eq!(load_cached_refinement_in(&dir, "key_a").unwrap(), r#"{"a": 1}"#);
-        assert_eq!(load_cached_refinement_in(&dir, "key_b").unwrap(), r#"{"b": 2}"#);
+        assert_eq!(
+            load_cached_refinement_in(&dir, "key_a").unwrap(),
+            r#"{"a": 1}"#
+        );
+        assert_eq!(
+            load_cached_refinement_in(&dir, "key_b").unwrap(),
+            r#"{"b": 2}"#
+        );
         assert!(load_cached_refinement_in(&dir, "key_c").is_none());
     }
 
@@ -524,7 +533,10 @@ mod tests {
 
         store_cached_refinement_in(&dir, "key", r#"{"v": 1}"#);
         store_cached_refinement_in(&dir, "key", r#"{"v": 2}"#);
-        assert_eq!(load_cached_refinement_in(&dir, "key").unwrap(), r#"{"v": 2}"#);
+        assert_eq!(
+            load_cached_refinement_in(&dir, "key").unwrap(),
+            r#"{"v": 2}"#
+        );
     }
 
     #[test]

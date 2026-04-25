@@ -3,18 +3,16 @@
 //! Moved from `query_engine.rs` during the per-language module split.
 //! Pure mechanical move — no logic changes.
 
-use crate::ast::{Definition, ImportedName, ImportInfo};
+use crate::ast::{Definition, ImportInfo, ImportedName};
 use crate::languages::common::{
-    collect_matches, hash_str, node_span, node_text,
-    extract_definitions_standard, CollectedMatch,
+    collect_matches, extract_definitions_standard, hash_str, node_span, node_text, CollectedMatch,
 };
 use crate::query_engine::{QueryEngineError, QueryWithCaptures};
 use crate::types::SymbolKind;
 use tree_sitter::{Node, QueryCursor};
 
-
 pub(crate) fn extract_imports(
-root: &Node,
+    root: &Node,
     source: &[u8],
     qwc: &QueryWithCaptures,
 ) -> Result<Vec<ImportInfo>, QueryEngineError> {
@@ -89,76 +87,69 @@ pub(crate) fn extract_definitions(
     definitions: &mut Vec<Definition>,
     seen_nodes: &mut Vec<(usize, usize)>,
 ) {
-    if extract_definitions_standard(
-        matches,
-        source,
-        qwc,
-        definitions,
-        seen_nodes,
-    ) {
+    if extract_definitions_standard(matches, source, qwc, definitions, seen_nodes) {
         // Standard path took over.
     } else {
-    let method_name_idx = qwc.capture_index("method_name");
-    let method_node_idx = qwc.capture_index("method_node");
-    let ctor_name_idx = qwc.capture_index("ctor_name");
-    let ctor_node_idx = qwc.capture_index("ctor_node");
-    let class_name_idx = qwc.capture_index("class_name");
-    let class_node_idx = qwc.capture_index("class_node");
-    let struct_name_idx = qwc.capture_index("struct_name");
-    let struct_node_idx = qwc.capture_index("struct_node");
-    let iface_name_idx = qwc.capture_index("iface_name");
-    let iface_node_idx = qwc.capture_index("iface_node");
-    let enum_name_idx = qwc.capture_index("enum_name");
-    let enum_node_idx = qwc.capture_index("enum_node");
-    let record_name_idx = qwc.capture_index("record_name");
-    let record_node_idx = qwc.capture_index("record_node");
-    let prop_name_idx = qwc.capture_index("prop_name");
-    let prop_node_idx = qwc.capture_index("prop_node");
-    let field_name_idx = qwc.capture_index("field_name");
-    let field_node_idx = qwc.capture_index("field_node");
-    let delegate_name_idx = qwc.capture_index("delegate_name");
-    let delegate_node_idx = qwc.capture_index("delegate_node");
+        let method_name_idx = qwc.capture_index("method_name");
+        let method_node_idx = qwc.capture_index("method_node");
+        let ctor_name_idx = qwc.capture_index("ctor_name");
+        let ctor_node_idx = qwc.capture_index("ctor_node");
+        let class_name_idx = qwc.capture_index("class_name");
+        let class_node_idx = qwc.capture_index("class_node");
+        let struct_name_idx = qwc.capture_index("struct_name");
+        let struct_node_idx = qwc.capture_index("struct_node");
+        let iface_name_idx = qwc.capture_index("iface_name");
+        let iface_node_idx = qwc.capture_index("iface_node");
+        let enum_name_idx = qwc.capture_index("enum_name");
+        let enum_node_idx = qwc.capture_index("enum_node");
+        let record_name_idx = qwc.capture_index("record_name");
+        let record_node_idx = qwc.capture_index("record_node");
+        let prop_name_idx = qwc.capture_index("prop_name");
+        let prop_node_idx = qwc.capture_index("prop_node");
+        let field_name_idx = qwc.capture_index("field_name");
+        let field_node_idx = qwc.capture_index("field_node");
+        let delegate_name_idx = qwc.capture_index("delegate_name");
+        let delegate_node_idx = qwc.capture_index("delegate_node");
 
-    let csharp_def_captures: &[(Option<u32>, Option<u32>, SymbolKind)] = &[
-        (method_name_idx, method_node_idx, SymbolKind::Function),
-        (ctor_name_idx, ctor_node_idx, SymbolKind::Function),
-        (class_name_idx, class_node_idx, SymbolKind::Class),
-        (struct_name_idx, struct_node_idx, SymbolKind::Class),
-        (iface_name_idx, iface_node_idx, SymbolKind::Interface),
-        (enum_name_idx, enum_node_idx, SymbolKind::Class),
-        (record_name_idx, record_node_idx, SymbolKind::Class),
-        (prop_name_idx, prop_node_idx, SymbolKind::Constant),
-        (field_name_idx, field_node_idx, SymbolKind::Constant),
-        (delegate_name_idx, delegate_node_idx, SymbolKind::Interface),
-    ];
+        let csharp_def_captures: &[(Option<u32>, Option<u32>, SymbolKind)] = &[
+            (method_name_idx, method_node_idx, SymbolKind::Function),
+            (ctor_name_idx, ctor_node_idx, SymbolKind::Function),
+            (class_name_idx, class_node_idx, SymbolKind::Class),
+            (struct_name_idx, struct_node_idx, SymbolKind::Class),
+            (iface_name_idx, iface_node_idx, SymbolKind::Interface),
+            (enum_name_idx, enum_node_idx, SymbolKind::Class),
+            (record_name_idx, record_node_idx, SymbolKind::Class),
+            (prop_name_idx, prop_node_idx, SymbolKind::Constant),
+            (field_name_idx, field_node_idx, SymbolKind::Constant),
+            (delegate_name_idx, delegate_node_idx, SymbolKind::Interface),
+        ];
 
-    for m in matches {
-        for &(name_cap, node_cap, kind) in csharp_def_captures {
-            if m.has_capture(name_cap) {
-                let name_text = m
-                    .get_capture(name_cap)
-                    .map(|n| node_text(&n, source).to_string())
-                    .unwrap_or_default();
-                let (start_line, end_line, node_start) = node_span(m, node_cap);
-                if !name_text.is_empty() {
-                    let key = (node_start, hash_str(&name_text));
-                    if !seen_nodes.contains(&key) {
-                        seen_nodes.push(key);
-                        definitions.push(Definition {
-                            name: name_text,
-                            kind,
-                            start_line,
-                            end_line,
-                        });
+        for m in matches {
+            for &(name_cap, node_cap, kind) in csharp_def_captures {
+                if m.has_capture(name_cap) {
+                    let name_text = m
+                        .get_capture(name_cap)
+                        .map(|n| node_text(&n, source).to_string())
+                        .unwrap_or_default();
+                    let (start_line, end_line, node_start) = node_span(m, node_cap);
+                    if !name_text.is_empty() {
+                        let key = (node_start, hash_str(&name_text));
+                        if !seen_nodes.contains(&key) {
+                            seen_nodes.push(key);
+                            definitions.push(Definition {
+                                name: name_text,
+                                kind,
+                                start_line,
+                                end_line,
+                            });
+                        }
                     }
+                    break;
                 }
-                break;
             }
         }
-    }
     } // close `else` opened above for the standard-convention fallback
 }
-
 
 #[cfg(test)]
 #[allow(
@@ -642,5 +633,4 @@ namespace MyApp.Controllers
         assert!(callees.contains(&"Save"));
         assert!(callees.contains(&"Ok"));
     }
-
 }

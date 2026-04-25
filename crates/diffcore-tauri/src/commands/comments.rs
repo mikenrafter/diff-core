@@ -254,10 +254,7 @@ pub fn comment_cache_key(repo_path: &str) -> Result<String, CommandError> {
 
     // Get current branch name
     let branch = match repo.head() {
-        Ok(head) => head
-            .shorthand()
-            .unwrap_or("HEAD")
-            .to_string(),
+        Ok(head) => head.shorthand().unwrap_or("HEAD").to_string(),
         Err(_) => "HEAD".to_string(),
     };
 
@@ -291,9 +288,8 @@ fn write_cached_comments_file(
     cache_key: &str,
     file: &CachedCommentsFile,
 ) -> Result<(), CommandError> {
-    let dir = comment_cache_dir().ok_or_else(|| {
-        CommandError::Io("Cannot determine comment cache directory".to_string())
-    })?;
+    let dir = comment_cache_dir()
+        .ok_or_else(|| CommandError::Io("Cannot determine comment cache directory".to_string()))?;
     std::fs::create_dir_all(&dir)
         .map_err(|e| CommandError::Io(format!("Failed to create comment cache dir: {}", e)))?;
     let path = dir.join(format!("{}.json", cache_key));
@@ -306,10 +302,7 @@ fn write_cached_comments_file(
 
 /// Save a comment to the branch-based cache.
 #[tauri::command]
-pub fn save_comment_cached(
-    repo_path: String,
-    comment: ReviewComment,
-) -> Result<(), CommandError> {
+pub fn save_comment_cached(repo_path: String, comment: ReviewComment) -> Result<(), CommandError> {
     let key = comment_cache_key(&repo_path)?;
     let mut file = load_cached_comments_file(&key);
     file.comments.push(comment);
@@ -326,10 +319,7 @@ pub fn load_comments_cached(repo_path: String) -> Result<Vec<ReviewComment>, Com
 
 /// Delete a comment by ID from the branch-based cache.
 #[tauri::command]
-pub fn delete_comment_cached(
-    repo_path: String,
-    comment_id: String,
-) -> Result<(), CommandError> {
+pub fn delete_comment_cached(repo_path: String, comment_id: String) -> Result<(), CommandError> {
     let key = comment_cache_key(&repo_path)?;
     let mut file = load_cached_comments_file(&key);
     file.comments.retain(|c| c.id != comment_id);
