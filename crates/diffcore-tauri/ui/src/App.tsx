@@ -39,6 +39,7 @@ import { useEditorIntegration } from "./hooks/useEditorIntegration";
 import { useActivityStream } from "./hooks/useActivityStream";
 import { useManifestActions } from "./hooks/useManifestActions";
 import { useCrossFileSearch } from "./hooks/useCrossFileSearch";
+import { useDebouncedValue } from "./hooks/useDebouncedValue";
 import { IS_TAURI, STATE_SAVE_RESTORE_ENABLED, tauriInvoke } from "./utils/tauriUtils";
 import { HeaderBar } from "./components/panels/HeaderBar";
 import { LeftPane } from "./components/panels/LeftPane";
@@ -358,6 +359,12 @@ export default function App() {
   const demoLlmSettingsRef = useRef<LlmSettings>(MOCK_LLM_SETTINGS);
   const aiSetupDismissed = useRef(false);
 
+  // LLM settings IPC throttling / latest-wins guards
+  const llmSettingsLoadRequestId = useRef(0);
+  const [llmSettingsPendingSave, setLlmSettingsPendingSave] = useState<LlmSettings | null>(null);
+  const [llmSettingsSaveInFlight, setLlmSettingsSaveInFlight] = useState(false);
+  const llmSettingsPendingSaveDebounced = useDebouncedValue(llmSettingsPendingSave, 250);
+
   // Refs for keyboard nav to access latest state without re-registering listener
   const selectedGroupRef = useRef(selectedGroup);
   const selectedFileRef = useRef(selectedFile);
@@ -507,6 +514,8 @@ export default function App() {
 
   /** Load LLM settings from backend. */
   const loadLlmSettings = useCallback(async (path: string | null) => {
+    // latest-wins: prevent concurrent calls from thrashing state / UI
+    const requestId = ++llmSettingsLoadRequestId.current;
     try {
       let settings: LlmSettings;
       if (IS_TAURI) {
@@ -516,6 +525,7 @@ export default function App() {
       } else {
         settings = demoLlmSettingsRef.current;
       }
+      if (requestId !== llmSettingsLoadRequestId.current) return;
       setLlmSettings(settings);
       setHasApiKey(settings.has_api_key);
       setIncludeUncommitted(settings.include_uncommitted);
@@ -538,24 +548,48 @@ export default function App() {
       demoLlmSettingsRef.current = settings;
       return;
     }
-    try {
-      await tauriInvoke("save_llm_settings", {
-        repoPath: repoPath || "",
-        settings,
-      });
-      // Re-check API key availability after save
-      const updated = await tauriInvoke<LlmSettings>("get_llm_settings", {
-        repoPath: repoPath || null,
-      });
-      setLlmSettings(updated);
-      setHasApiKey(updated.has_api_key);
-      if (isApiProvider(updated.provider)) {
-        setApiProviderDraft(updated.provider as LlmProvider);
+    // React-driven save pipeline: we enqueue the desired settings and let an effect
+    // debounce + coalesce + serialize actual IPC writes.
+    setLlmSettingsPendingSave(settings);
+  }, [repoPath, loadLlmSettings]);
+
+  // Persist LLM settings (debounced + serialized).
+  useEffect(() => {
+    const toSave = llmSettingsPendingSaveDebounced;
+    if (!IS_TAURI || !toSave) return;
+    if (llmSettingsSaveInFlight) return;
+
+    let cancelled = false;
+    setLlmSettingsSaveInFlight(true);
+
+    (async () => {
+      try {
+        await tauriInvoke("save_llm_settings", {
+          repoPath: repoPath || "",
+          settings: toSave,
+        });
+        if (cancelled) return;
+        // Clear only if we’re still saving the same object we debounced.
+        setLlmSettingsPendingSave((current) => (current === toSave ? null : current));
+        // Refresh once after saving; loadLlmSettings has latest-wins.
+        void loadLlmSettings(repoPath || null);
+      } catch {
+        // Non-fatal: settings are still applied in-memory
+      } finally {
+        if (!cancelled) setLlmSettingsSaveInFlight(false);
       }
-    } catch {
-      // Non-fatal: settings are still applied in-memory
-    }
-  }, [repoPath]);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    IS_TAURI,
+    llmSettingsPendingSaveDebounced,
+    llmSettingsSaveInFlight,
+    repoPath,
+    loadLlmSettings,
+  ]);
 
   /** Load ignore paths from .diffcore.toml. */
   const loadIgnorePaths = useCallback(async (path: string | null) => {

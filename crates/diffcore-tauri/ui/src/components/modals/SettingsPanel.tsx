@@ -16,6 +16,9 @@ import { LLM_PROVIDERS } from "../../types";
 import Dropdown from "../Dropdown";
 import { PROVIDER_LABELS, isApiProvider } from "../../utils/llmUtils";
 import { useAppContext } from "../../hooks/AppContext";
+import { useEffect, useMemo, useState } from "react";
+import { logger, type LogLevel } from "../../utils/logger";
+import { useLogger } from "../../hooks/useLogger";
 
 export function SettingsPanel() {
   const {
@@ -50,6 +53,24 @@ export function SettingsPanel() {
     handleAddIgnorePath,
     handleRemoveIgnorePath,
   } = useAppContext();
+
+  const logState = useLogger();
+  const [logQuery, setLogQuery] = useState("");
+  const filteredLogs = useMemo(() => {
+    const q = logQuery.trim().toLowerCase();
+    if (!q) return logState.entries;
+    return logState.entries.filter((e) => {
+      const hay = `${e.level} ${e.category} ${e.event} ${e.message ?? ""}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }, [logState.entries, logQuery]);
+
+  useEffect(() => {
+    logger.log({ level: "info", category: "ui", event: "settings_open" });
+    return () => {
+      logger.log({ level: "info", category: "ui", event: "settings_close" });
+    };
+  }, []);
 
   if (!settingsOpen || !llmSettings) return null;
 
@@ -102,6 +123,87 @@ export function SettingsPanel() {
               Side-by-side shows old/new in two columns. Inline shows a unified view.
               Dynamic picks per-file based on change density.
             </p>
+          </div>
+
+          {/* Debug logs */}
+          <div className="settings-section">
+            <h3>Debug Logs</h3>
+            <label className="settings-toggle" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input
+                type="checkbox"
+                checked={logState.enabled}
+                onChange={(e) => logger.setEnabled(e.target.checked)}
+              />
+              <span>Enable in-app logging (IPC timings + UI events)</span>
+            </label>
+            <div className="settings-row" style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center" }}>
+              <label style={{ minWidth: 90 }}>Min level</label>
+              <div style={{ flex: 1 }}>
+                <Dropdown<LogLevel>
+                  value={logState.minLevel}
+                  onChange={(v) => logger.setMinLevel(v)}
+                  options={[
+                    { value: "debug", label: "debug" },
+                    { value: "info", label: "info" },
+                    { value: "warn", label: "warn" },
+                    { value: "error", label: "error" },
+                  ]}
+                />
+              </div>
+              <button className="btn btn-small" onClick={() => logger.clear()} disabled={!logState.enabled}>
+                Clear
+              </button>
+              <button
+                className="btn btn-small"
+                disabled={!logState.enabled || logState.entries.length === 0}
+                onClick={() => {
+                  const payload = JSON.stringify(logState.entries.slice().reverse(), null, 2);
+                  navigator.clipboard.writeText(payload).catch(() => {});
+                  logger.log({ level: "info", category: "ui", event: "logs_copied", data: { count: logState.entries.length } });
+                }}
+                title="Copy logs as JSON"
+              >
+                Copy JSON
+              </button>
+            </div>
+            <div className="settings-row" style={{ marginTop: 8 }}>
+              <input
+                className="settings-input"
+                placeholder="Filter logs (e.g. analyze, get_repo_info, settings)..."
+                value={logQuery}
+                onChange={(e) => setLogQuery(e.target.value)}
+                style={{ width: "100%" }}
+                disabled={!logState.enabled}
+              />
+            </div>
+            <p className="settings-hint">
+              Tip: the worst offenders usually show up as <code>ipc</code> events with high <code>duration_ms</code>.
+            </p>
+            <div style={{ maxHeight: 220, overflow: "auto", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace", fontSize: 11, border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: 8 }}>
+              {!logState.enabled && (
+                <div style={{ opacity: 0.7 }}>Logging is disabled.</div>
+              )}
+              {logState.enabled && filteredLogs.length === 0 && (
+                <div style={{ opacity: 0.7 }}>No log entries.</div>
+              )}
+              {logState.enabled && filteredLogs.slice(0, 120).map((e) => (
+                <div key={e.id} style={{ display: "flex", gap: 8, padding: "2px 0" }}>
+                  <span style={{ opacity: 0.7, minWidth: 70 }}>
+                    {new Date(e.ts).toLocaleTimeString()}
+                  </span>
+                  <span style={{ minWidth: 42 }}>{e.level}</span>
+                  <span style={{ minWidth: 46 }}>{e.category}</span>
+                  <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {e.event}{e.message ? ` — ${e.message}` : ""}
+                  </span>
+                  {typeof e.duration_ms === "number" && (
+                    <span style={{ minWidth: 60, textAlign: "right", opacity: 0.9 }}>
+                      {e.duration_ms.toFixed(1)}ms
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
           {/* LLM Access / Onboarding */}
           <div className="settings-section">

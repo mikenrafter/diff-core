@@ -7,12 +7,23 @@ use diffcore_core::llm;
 
 use super::CommandError;
 
+async fn run_blocking<T>(
+    f: impl FnOnce() -> Result<T, CommandError> + Send + 'static,
+) -> Result<T, CommandError>
+where
+    T: Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| CommandError::Analysis(format!("task join error: {}", e)))?
+}
+
 /// Check whether LLM access is configured and available.
 ///
 /// This includes API-key-based providers plus subscription-backed Codex/Claude CLIs.
 #[tauri::command]
-pub fn check_api_key(repo_path: Option<String>) -> Result<bool, CommandError> {
-    Ok(get_llm_settings(repo_path)?.has_api_key)
+pub async fn check_api_key(repo_path: Option<String>) -> Result<bool, CommandError> {
+    Ok(get_llm_settings(repo_path).await?.has_api_key)
 }
 
 /// Get LLM settings from the shared global config plus repo-local overrides.
@@ -20,100 +31,106 @@ pub fn check_api_key(repo_path: Option<String>) -> Result<bool, CommandError> {
 /// Reads `~/.diffcore/config.toml`, merges in any repo-local `[llm]` overrides, resolves
 /// CLI/API availability, and returns a unified `LlmSettings` struct for the settings panel.
 #[tauri::command]
-pub fn get_llm_settings(repo_path: Option<String>) -> Result<LlmSettings, CommandError> {
-    let (config, workdir) = super::load_config_from_path(repo_path.as_deref());
-    let codex_status = llm::codex_cli::detect_status();
-    let claude_status = llm::claude_cli::detect_status();
+pub async fn get_llm_settings(repo_path: Option<String>) -> Result<LlmSettings, CommandError> {
+    run_blocking(move || {
+        let (config, workdir) = super::load_config_from_path(repo_path.as_deref());
+        let codex_status = llm::codex_cli::detect_status();
+        let claude_status = llm::claude_cli::detect_status();
 
-    let configured_provider = config.llm.provider.as_deref();
-    let provider =
-        super::preferred_provider_for_runtime(configured_provider, &codex_status, &claude_status);
-    let model = super::preferred_model_for_runtime(
-        config.llm.model.clone(),
-        configured_provider,
-        &provider,
-    );
+        let configured_provider = config.llm.provider.as_deref();
+        let provider = super::preferred_provider_for_runtime(
+            configured_provider,
+            &codex_status,
+            &claude_status,
+        );
+        let model = super::preferred_model_for_runtime(
+            config.llm.model.clone(),
+            configured_provider,
+            &provider,
+        );
 
-    let has_api_key = match provider.as_str() {
-        "codex" => codex_status.authenticated,
-        "claude" => claude_status.authenticated,
-        _ => llm::resolve_api_key(&config.llm, &provider).is_ok(),
-    };
+        let has_api_key = match provider.as_str() {
+            "codex" => codex_status.authenticated,
+            "claude" => claude_status.authenticated,
+            _ => llm::resolve_api_key(&config.llm, &provider).is_ok(),
+        };
 
-    let api_key_source = match provider.as_str() {
-        "codex" => match (codex_status.installed, codex_status.authenticated) {
-            (true, true) => "Codex CLI login".to_string(),
-            (true, false) => "Codex CLI installed, not logged in".to_string(),
-            (false, _) => "Codex CLI not installed".to_string(),
-        },
-        "claude" => match (claude_status.installed, claude_status.authenticated) {
-            (true, true) => "Claude Code subscription".to_string(),
-            (true, false) => "Claude Code installed, not logged in".to_string(),
-            (false, _) => "Claude Code not installed".to_string(),
-        },
-        _ if config.llm.key_cmd.is_some() => "key_cmd".to_string(),
-        _ if config.llm.key.as_ref().is_some_and(|k| !k.is_empty()) => {
-            "~/.diffcore/config.toml".to_string()
-        }
-        _ if std::env::var("DIFFCORE_API_KEY").is_ok() => "DIFFCORE_API_KEY".to_string(),
-        _ => {
-            let env_var = match provider.as_str() {
-                "anthropic" => "ANTHROPIC_API_KEY",
-                "openai" => "OPENAI_API_KEY",
-                "gemini" => "GEMINI_API_KEY",
-                "openrouter" => "OPENROUTER_API_KEY",
-                "github_copilot" => "GITHUB_COPILOT_TOKEN",
-                _ => "none",
-            };
-            if std::env::var(env_var).is_ok() {
-                env_var.to_string()
-            } else if workdir.is_some() {
-                "none (configure in ~/.diffcore/config.toml or env)".to_string()
-            } else {
-                "none".to_string()
+        let api_key_source = match provider.as_str() {
+            "codex" => match (codex_status.installed, codex_status.authenticated) {
+                (true, true) => "Codex CLI login".to_string(),
+                (true, false) => "Codex CLI installed, not logged in".to_string(),
+                (false, _) => "Codex CLI not installed".to_string(),
+            },
+            "claude" => match (claude_status.installed, claude_status.authenticated) {
+                (true, true) => "Claude Code subscription".to_string(),
+                (true, false) => "Claude Code installed, not logged in".to_string(),
+                (false, _) => "Claude Code not installed".to_string(),
+            },
+            _ if config.llm.key_cmd.is_some() => "key_cmd".to_string(),
+            _ if config.llm.key.as_ref().is_some_and(|k| !k.is_empty()) => {
+                "~/.diffcore/config.toml".to_string()
             }
-        }
-    };
+            _ if std::env::var("DIFFCORE_API_KEY").is_ok() => "DIFFCORE_API_KEY".to_string(),
+            _ => {
+                let env_var = match provider.as_str() {
+                    "anthropic" => "ANTHROPIC_API_KEY",
+                    "openai" => "OPENAI_API_KEY",
+                    "gemini" => "GEMINI_API_KEY",
+                    "openrouter" => "OPENROUTER_API_KEY",
+                    "github_copilot" => "GITHUB_COPILOT_TOKEN",
+                    _ => "none",
+                };
+                if std::env::var(env_var).is_ok() {
+                    env_var.to_string()
+                } else if workdir.is_some() {
+                    "none (configure in ~/.diffcore/config.toml or env)".to_string()
+                } else {
+                    "none".to_string()
+                }
+            }
+        };
 
-    let configured_refinement_provider = config
-        .llm
-        .refinement
-        .provider
-        .as_deref()
-        .or(configured_provider);
-    let refinement_provider = super::preferred_provider_for_runtime(
-        configured_refinement_provider,
-        &codex_status,
-        &claude_status,
-    );
-    let refinement_model = super::preferred_model_for_runtime(
-        config
+        let configured_refinement_provider = config
             .llm
             .refinement
-            .model
-            .clone()
-            .or(config.llm.model.clone()),
-        configured_refinement_provider,
-        &refinement_provider,
-    );
+            .provider
+            .as_deref()
+            .or(configured_provider);
+        let refinement_provider = super::preferred_provider_for_runtime(
+            configured_refinement_provider,
+            &codex_status,
+            &claude_status,
+        );
+        let refinement_model = super::preferred_model_for_runtime(
+            config
+                .llm
+                .refinement
+                .model
+                .clone()
+                .or(config.llm.model.clone()),
+            configured_refinement_provider,
+            &refinement_provider,
+        );
 
-    Ok(LlmSettings {
-        annotations_enabled: config.llm.annotations_enabled,
-        refinement_enabled: config.llm.refinement.enabled,
-        provider,
-        model,
-        api_key_source,
-        has_api_key,
-        refinement_provider,
-        refinement_model,
-        refinement_max_iterations: config.llm.refinement.max_iterations,
-        global_config_path: display_global_config_path(),
-        codex_available: codex_status.installed,
-        codex_authenticated: codex_status.authenticated,
-        claude_available: claude_status.installed,
-        claude_authenticated: claude_status.authenticated,
-        include_uncommitted: config.diff.include_uncommitted,
+        Ok(LlmSettings {
+            annotations_enabled: config.llm.annotations_enabled,
+            refinement_enabled: config.llm.refinement.enabled,
+            provider,
+            model,
+            api_key_source,
+            has_api_key,
+            refinement_provider,
+            refinement_model,
+            refinement_max_iterations: config.llm.refinement.max_iterations,
+            global_config_path: display_global_config_path(),
+            codex_available: codex_status.installed,
+            codex_authenticated: codex_status.authenticated,
+            claude_available: claude_status.installed,
+            claude_authenticated: claude_status.authenticated,
+            include_uncommitted: config.diff.include_uncommitted,
+        })
     })
+    .await
 }
 
 /// Save LLM settings to the shared global config.
@@ -121,28 +138,34 @@ pub fn get_llm_settings(repo_path: Option<String>) -> Result<LlmSettings, Comman
 /// Loads the existing global config, updates the `[llm]` section with the provided
 /// settings, and writes back to `~/.diffcore/config.toml`.
 #[tauri::command]
-pub fn save_llm_settings(_repo_path: String, settings: LlmSettings) -> Result<(), CommandError> {
-    let mut config =
-        DiffcoreConfig::load_global().map_err(|e| CommandError::Config(format!("{}", e)))?;
+pub async fn save_llm_settings(
+    _repo_path: String,
+    settings: LlmSettings,
+) -> Result<(), CommandError> {
+    run_blocking(move || {
+        let mut config =
+            DiffcoreConfig::load_global().map_err(|e| CommandError::Config(format!("{}", e)))?;
 
-    // Update LLM section
-    config.llm.provider = Some(settings.provider);
-    config.llm.model = Some(settings.model);
-    // Don't overwrite key_cmd — that's managed manually
-    config.llm.refinement.enabled = settings.refinement_enabled;
-    config.llm.refinement.provider = Some(settings.refinement_provider);
-    config.llm.refinement.model = Some(settings.refinement_model);
-    config.llm.refinement.max_iterations = settings.refinement_max_iterations;
-    config.llm.annotations_enabled = settings.annotations_enabled;
+        // Update LLM section
+        config.llm.provider = Some(settings.provider);
+        config.llm.model = Some(settings.model);
+        // Don't overwrite key_cmd — that's managed manually
+        config.llm.refinement.enabled = settings.refinement_enabled;
+        config.llm.refinement.provider = Some(settings.refinement_provider);
+        config.llm.refinement.model = Some(settings.refinement_model);
+        config.llm.refinement.max_iterations = settings.refinement_max_iterations;
+        config.llm.annotations_enabled = settings.annotations_enabled;
 
-    // Update diff behavior
-    config.diff.include_uncommitted = settings.include_uncommitted;
+        // Update diff behavior
+        config.diff.include_uncommitted = settings.include_uncommitted;
 
-    config
-        .save_global()
-        .map_err(|e| CommandError::Config(format!("Failed to save config: {}", e)))?;
+        config
+            .save_global()
+            .map_err(|e| CommandError::Config(format!("Failed to save config: {}", e)))?;
 
-    Ok(())
+        Ok(())
+    })
+    .await
 }
 
 /// Save an API key to `~/.diffcore/config.toml` under `[llm] key = "..."`.

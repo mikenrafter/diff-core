@@ -11,6 +11,8 @@
 export const IS_TAURI =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
+import { logger } from "./logger";
+
 /**
  * Session save/restore is currently disabled. This flag gates the
  * "Restore Session" button in the HeaderBar so it never appears until
@@ -27,5 +29,10 @@ export async function tauriInvoke<T>(
   args?: Record<string, unknown>,
 ): Promise<T> {
   const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<T>(cmd, args);
+  return logger.time({
+    category: "ipc",
+    event: cmd,
+    data: logger.summarizeArgs(args),
+    fn: () => invoke<T>(cmd, args),
+  });
 }
