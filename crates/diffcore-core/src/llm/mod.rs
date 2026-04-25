@@ -340,44 +340,59 @@ pub(crate) fn parse_structured_json_response<T: serde::de::DeserializeOwned>(
     match serde_json::from_str::<T>(trimmed) {
         Ok(parsed) => return Ok(parsed),
         Err(direct_err) => {
-            if let Some(fenced) = extract_markdown_json_block(trimmed) {
+            // Stage 2: try *all* markdown-fenced JSON blocks in order.
+            // Some providers (or model failures) emit multiple fenced blocks where
+            // the first is invalid and a later block is the actual schema payload.
+            let mut last_fenced_err: Option<serde_json::Error> = None;
+            let mut fenced_attempted = false;
+            for fenced in extract_markdown_json_blocks(trimmed) {
+                fenced_attempted = true;
                 match serde_json::from_str::<T>(fenced) {
                     Ok(parsed) => return Ok(parsed),
-                    Err(fenced_err) => {
-                        if let Some(embedded) = extract_first_json_payload(trimmed) {
-                            match serde_json::from_str::<T>(embedded) {
-                                Ok(parsed) => return Ok(parsed),
-                                Err(embedded_err) => {
-                                    return Err(LlmError::ParseResponse(format!(
-                                        "Failed to parse structured output (parse_stage=embedded_json, direct_json='{}', fenced_json='{}', embedded_json='{}') — response: {}",
-                                        direct_err,
-                                        fenced_err,
-                                        embedded_err,
-                                        &trimmed[..trimmed.len().min(500)]
-                                    )));
-                                }
-                            }
-                        }
-
-                        return Err(LlmError::ParseResponse(format!(
-                            "Failed to parse structured output (parse_stage=fenced_json, direct_json='{}', fenced_json='{}') — response: {}",
-                            direct_err,
-                            fenced_err,
-                            &trimmed[..trimmed.len().min(500)]
-                        )));
-                    }
+                    Err(err) => last_fenced_err = Some(err),
                 }
             }
 
-            if let Some(embedded) = extract_first_json_payload(trimmed) {
-                return serde_json::from_str::<T>(embedded).map_err(|embedded_err| {
-                    LlmError::ParseResponse(format!(
-                        "Failed to parse structured output (parse_stage=embedded_json, direct_json='{}', embedded_json='{}') — response: {}",
-                        direct_err,
-                        embedded_err,
-                        &trimmed[..trimmed.len().min(500)]
-                    ))
-                });
+            // Stage 3: try embedded JSON payload candidates (object/array) found in prose.
+            // We consider multiple candidates because the first valid JSON value may not
+            // match the target schema, but a later one might.
+            let mut last_embedded_err: Option<serde_json::Error> = None;
+            let mut embedded_attempted = false;
+            for embedded in extract_json_payload_candidates(trimmed) {
+                embedded_attempted = true;
+                match serde_json::from_str::<T>(embedded) {
+                    Ok(parsed) => return Ok(parsed),
+                    Err(err) => last_embedded_err = Some(err),
+                }
+            }
+
+            // Prefer reporting the deepest stage that was attempted.
+            if embedded_attempted {
+                return Err(LlmError::ParseResponse(format!(
+                    "Failed to parse structured output (parse_stage=embedded_json, direct_json='{}', fenced_json='{}', embedded_json='{}') — response: {}",
+                    direct_err,
+                    last_fenced_err
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "<not_attempted>".to_string()),
+                    last_embedded_err
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "<unknown>".to_string()),
+                    &trimmed[..trimmed.len().min(500)]
+                )));
+            }
+
+            if fenced_attempted {
+                return Err(LlmError::ParseResponse(format!(
+                    "Failed to parse structured output (parse_stage=fenced_json, direct_json='{}', fenced_json='{}') — response: {}",
+                    direct_err,
+                    last_fenced_err
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "<unknown>".to_string()),
+                    &trimmed[..trimmed.len().min(500)]
+                )));
             }
 
             Err(LlmError::ParseResponse(format!(
@@ -395,58 +410,111 @@ pub(crate) fn parse_structured_json_response<T: serde::de::DeserializeOwned>(
 /// returns the original trimmed text.
 #[cfg(test)]
 pub(crate) fn strip_markdown_json(text: &str) -> String {
-    extract_markdown_json_block(text)
+    extract_markdown_json_blocks(text)
+        .next()
         .unwrap_or_else(|| text.trim())
         .trim()
         .to_string()
 }
 
-fn extract_markdown_json_block(text: &str) -> Option<&str> {
+fn extract_markdown_json_blocks(text: &str) -> impl Iterator<Item = &str> {
     let trimmed = text.trim();
-
-    if let Some(start) = trimmed.find("```json") {
-        let after_fence = &trimmed[start + 7..];
-        if let Some(end) = after_fence.find("```") {
-            return Some(after_fence[..end].trim());
-        }
-    }
-
-    if let Some(start) = trimmed.find("```") {
-        let after_fence = &trimmed[start + 3..];
-        if let Some(end) = after_fence.find("```") {
-            return Some(after_fence[..end].trim());
-        }
-    }
-
-    None
+    MarkdownJsonBlockIter { text: trimmed, pos: 0 }
 }
 
+struct MarkdownJsonBlockIter<'a> {
+    text: &'a str,
+    pos: usize,
+}
+
+impl<'a> Iterator for MarkdownJsonBlockIter<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let s = self.text;
+        if self.pos >= s.len() {
+            return None;
+        }
+
+        // Search for either ```json or ``` starting from pos, picking the earliest.
+        let rest = &s[self.pos..];
+        let json_idx = rest.find("```json").map(|i| self.pos + i);
+        let any_idx = rest.find("```").map(|i| self.pos + i);
+
+        let start = match (json_idx, any_idx) {
+            (Some(j), Some(a)) => j.min(a),
+            (Some(j), None) => j,
+            (None, Some(a)) => a,
+            (None, None) => return None,
+        };
+
+        // Determine the fence header length and advance beyond it.
+        let after_header = if s[start..].starts_with("```json") {
+            start + 7
+        } else {
+            start + 3
+        };
+
+        let after = &s[after_header..];
+        let end_rel = after.find("```")?;
+        let block = after[..end_rel].trim();
+
+        // Move past this closing fence for the next search.
+        self.pos = after_header + end_rel + 3;
+        Some(block)
+    }
+}
+
+fn extract_json_payload_candidates(text: &str) -> impl Iterator<Item = &str> {
+    JsonPayloadCandidateIter {
+        text,
+        next_idx: 0,
+        attempts: 0,
+        max_candidates: 32,
+    }
+}
+
+struct JsonPayloadCandidateIter<'a> {
+    text: &'a str,
+    next_idx: usize,
+    attempts: usize,
+    max_candidates: usize,
+}
+
+impl<'a> Iterator for JsonPayloadCandidateIter<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // Bound attempts so pathological prose with many braces cannot trigger
+        // excessive parse loops.
+        while self.next_idx < self.text.len() && self.attempts < self.max_candidates {
+            let remaining = &self.text[self.next_idx..];
+
+            let rel = remaining
+                .find(|c: char| c == '{' || c == '[')
+                .map(|i| self.next_idx + i)?;
+            self.next_idx = rel + 1;
+            self.attempts += 1;
+
+            let Some(end_idx) = find_balanced_json_end(self.text, rel) else {
+                continue;
+            };
+
+            let candidate = self.text[rel..end_idx].trim();
+            // Only yield candidates that are valid JSON values.
+            if serde_json::from_str::<serde_json::Value>(candidate).is_ok() {
+                return Some(candidate);
+            }
+        }
+        None
+    }
+}
+
+#[allow(dead_code)]
 fn extract_first_json_payload(text: &str) -> Option<&str> {
     // Bound attempts so pathological prose with many braces cannot trigger
     // excessive parse loops.
-    let max_candidates = 32;
-    let mut attempts = 0usize;
-
-    for (idx, ch) in text.char_indices() {
-        if ch != '{' && ch != '[' {
-            continue;
-        }
-        if attempts >= max_candidates {
-            break;
-        }
-        attempts += 1;
-
-        let Some(end_idx) = find_balanced_json_end(text, idx) else {
-            continue;
-        };
-
-        let candidate = text[idx..end_idx].trim();
-        if serde_json::from_str::<serde_json::Value>(candidate).is_ok() {
-            return Some(candidate);
-        }
-    }
-
-    None
+    extract_json_payload_candidates(text).next()
 }
 
 fn find_balanced_json_end(text: &str, start_idx: usize) -> Option<usize> {
@@ -1220,6 +1288,48 @@ mod tests {
         let raw = "Summary first. {\"value\": 13} trailing notes.";
         let parsed: ParseHarness = parse_structured_json_response(raw).unwrap();
         assert_eq!(parsed.value, 13);
+    }
+
+    // ── Step 15.6 / regression matrix ──
+
+    #[test]
+    fn test_parse_structured_json_response_prose_prefix_plus_bare_json_object() {
+        let raw = "Sure — here you go:\n\n{\"value\": 21}";
+        let parsed: ParseHarness = parse_structured_json_response(raw).unwrap();
+        assert_eq!(parsed.value, 21);
+    }
+
+    #[test]
+    fn test_parse_structured_json_response_multiple_fenced_json_blocks_first_invalid_later_valid() {
+        let raw = r#"
+Some preface.
+```json
+{ not valid json
+```
+
+Actual:
+```json
+{"value": 34}
+```
+"#;
+        let parsed: ParseHarness = parse_structured_json_response(raw).unwrap();
+        assert_eq!(parsed.value, 34);
+    }
+
+    #[test]
+    fn test_parse_structured_json_response_trailing_prose_after_valid_json() {
+        let raw = r#"{"value": 55}
+
+Note: done."#;
+        let parsed: ParseHarness = parse_structured_json_response(raw).unwrap();
+        assert_eq!(parsed.value, 55);
+    }
+
+    #[test]
+    fn test_parse_structured_json_response_fenced_json_with_trailing_prose() {
+        let raw = "```json\n{\"value\": 89}\n```\nTrailing notes after JSON.";
+        let parsed: ParseHarness = parse_structured_json_response(raw).unwrap();
+        assert_eq!(parsed.value, 89);
     }
 
     #[test]

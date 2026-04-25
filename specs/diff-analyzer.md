@@ -231,9 +231,13 @@ Default weights: `w₁=0.35, w₂=0.25, w₃=0.20, w₄=0.20`
 
 | Provider | API | Models |
 |----------|-----|--------|
-| Anthropic | Messages API | Claude reasoning models (claude-3-7-sonnet with extended thinking, future reasoning models) |
-| Google | Gemini API | Gemini 2.5 Pro, Gemini 2.5 Flash |
-| OpenAI | Chat Completions API | o1, o3-mini, o3, GPT-4o |
+| Anthropic | HTTP API | Default: `claude-sonnet-4-6` |
+| OpenAI | HTTP API | Default: `gpt-4.1` |
+| Google Gemini | HTTP API | Default: `gemini-2.5-flash` |
+| OpenRouter | HTTP API | Default: `anthropic/claude-sonnet-4-6` |
+| GitHub Copilot | HTTP API token | Default: `gpt-4.1` |
+| Codex | CLI (subscription) | Preferred default when installed + authenticated |
+| Claude | CLI (subscription) | Preferred default when installed + authenticated |
 
 BYOK (Bring Your Own Key): user provides API key via `.diffcore.toml` or environment variable.
 
@@ -322,10 +326,11 @@ ui = "src/components/**"
 paths = ["**/*.test.ts", "**/*.spec.ts", "migrations/**"]
 
 [llm]
-provider = "anthropic"  # "anthropic", "openai", or "gemini"
-model = "claude-sonnet-4-6"     # claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5
-# API key via DIFFCORE_API_KEY env var or:
+provider = "anthropic"  # "anthropic", "openai", "gemini", "openrouter", "github_copilot", "codex", "claude"
+model = "claude-sonnet-4-6"
+# API key sources: key_cmd (recommended), inline key, or env vars
 # key_cmd = "op read op://vault/diffcore/api-key"
+# key = "..."  # optional inline key (stored in config)
 
 [llm.refinement]
 # Optional LLM refinement pass — improves grouping/ranking using semantic understanding.
@@ -369,11 +374,13 @@ diffcore analyze --base main -o review.json
 # With LLM annotations (pass 1)
 diffcore analyze --base main --annotate
 
-# Deep analysis on a specific group
-diffcore annotate --group group_1 --input review.json
+# With LLM refinement (group split/merge/re-rank/reclassify)
+diffcore analyze --base main --refine
+# or:
+diffcore analyze --base main --refine-model gpt-4.1
 
-# Launch Tauri app with analysis
-diffcore ui --base main
+# Note: Pass 2 (per-group deep analysis) is currently exposed via the Tauri app,
+# not as a `diffcore` CLI subcommand.
 
 # Open specific files in Beyond Compare (integration)
 diffcore launch --tool bcompare --group group_1 --input review.json
@@ -1989,14 +1996,20 @@ Acceptance status:
 
 Protect improvements with targeted tests and explicit rollout checkpoints.
 
-Planned changes:
-- Add parser regression cases for:
+Implemented changes:
+- Parser regression matrix added for the shared structured-output parser:
   - prose prefix + fenced JSON
   - prose prefix + bare JSON object
-  - multiple JSON blocks with first invalid and later valid
-  - trailing prose after valid JSON
-- Add integration checks for Tauri/CLI fallback parity and warning propagation.
-- Add rollout gates requiring parser and apply-layer coverage before enabling new provider behaviors by default.
+  - multiple fenced JSON blocks with first invalid and later valid
+  - trailing prose after valid JSON (direct JSON and fenced JSON)
+- Shared structured-output parsing now iterates over **all** fenced JSON blocks (not just the first),
+  and tries multiple embedded JSON candidates so later valid payloads can recover from early junk.
+- CLI/Tauri refinement fallback parity and warning propagation remain centralized via the shared
+  `run_refinement_iterations` outcome, with surface layers consuming `stop_reason`, `attempts_used`,
+  `parse_failures`, and warning payloads.
+- Rollout gates: new provider behavior (more permissive recovery of model formatting mistakes)
+  is guarded by the regression matrix and the existing apply-layer invariants/tests in
+  `crates/diffcore-core/src/llm/refinement.rs`.
 
 Touchpoints to focus efforts:
 - Provider test modules in:

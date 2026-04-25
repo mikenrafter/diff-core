@@ -15,19 +15,17 @@ and prescribes concrete fixes.
 ### 1. HIGH — Repo-local config can drive shell execution via `key_cmd`
 
 **Evidence:**
-- Repo config is loaded from `.diffcore.toml` in the target repo (`config.rs:256`).
-- `key_cmd` is executed via `sh -c` (`llm/mod.rs:430`).
-- `apply_global_llm_defaults` merges repo-local `key_cmd` with global defaults —
-  repo-local wins (`config.rs:424`).
-- There is a metacharacter filter (`llm/mod.rs:404`), but even `op read malicious-vault`
-  can exfiltrate data if the user has `op` installed.
+- Repo config is loaded from `.diffcore.toml` in the target repo.
+- `key_cmd` is executed via `sh -c` after a metacharacter deny-list validation.
+- `apply_global_llm_defaults` enforces a trust boundary: repo-local `llm.key_cmd` and
+  `llm.refinement.key_cmd` are ignored unless provided via the user's global config.
 
 **Impact:** A malicious `.diffcore.toml` in a cloned repo can execute arbitrary simple
 commands when the user runs `diffcore analyze` with LLM features.
 
-**Fix:** Ignore repo-local `key_cmd` by default. Only allow `key_cmd` from the global
-config (`~/.diffcore/config.toml`) or environment variables. Add a log warning when a
-repo-local `key_cmd` is present but ignored.
+**Fix (implemented):** Ignore repo-local `key_cmd` by default. Only allow `key_cmd`
+from the global config (`~/.diffcore/config.toml`) or environment variables. Emit a
+warning when a repo-local `key_cmd` is present but ignored.
 
 ### 2. MEDIUM — `git2` version below patched advisory threshold
 

@@ -355,11 +355,6 @@ pub fn update_comment_cached(
 // Groups manifest import / file watching
 // ══════════════════════════════════════════════════════════════════════
 
-/// Import a groups manifest JSON and apply it to the current analysis.
-///
-/// Returns the updated `AnalysisOutput` with groups replaced by the manifest.
-#[tauri::command]
-
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,

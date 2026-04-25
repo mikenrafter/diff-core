@@ -99,6 +99,18 @@ expression: v
     }
   ],
   "infrastructure_group": {
+    "file_changes": [
+      {
+        "changes": {
+          "additions": 8,
+          "deletions": 0
+        },
+        "flow_position": 0,
+        "path": "src/workers/orderWorker.ts",
+        "role": "Infrastructure",
+        "symbols_changed": []
+      }
+    ],
     "files": [
       "src/workers/orderWorker.ts"
     ],
@@ -106,6 +118,18 @@ expression: v
     "sub_groups": [
       {
         "category": "Unclassified",
+        "file_changes": [
+          {
+            "changes": {
+              "additions": 8,
+              "deletions": 0
+            },
+            "flow_position": 0,
+            "path": "src/workers/orderWorker.ts",
+            "role": "Infrastructure",
+            "symbols_changed": []
+          }
+        ],
         "files": [
           "src/workers/orderWorker.ts"
         ],
