@@ -31,6 +31,25 @@ pub struct RefinementWarning {
     pub message: String,
 }
 
+impl RefinementWarning {
+    /// Stable event tag for activity streams/log sinks.
+    pub fn event_type(&self) -> &'static str {
+        match self.action {
+            RefinementWarningAction::Repaired { .. } => "refinement.warning.repaired",
+            RefinementWarningAction::Dropped { .. } => "refinement.warning.dropped",
+        }
+    }
+
+    /// Machine-readable warning payload for UI/log inspection.
+    pub fn audit_payload(&self) -> serde_json::Value {
+        serde_json::json!({
+            "op": self.op,
+            "action": self.action,
+            "message": self.message,
+        })
+    }
+}
+
 /// Which operation kind produced the warning.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -53,6 +72,41 @@ pub enum RefinementWarningAction {
     },
     /// The op could not be repaired and was discarded.
     Dropped { reason: String },
+}
+
+fn push_repaired_warning(
+    warnings: &mut Vec<RefinementWarning>,
+    op: RefinementOp,
+    field: &str,
+    original: String,
+    resolved: String,
+) {
+    warnings.push(RefinementWarning {
+        op: op.clone(),
+        action: RefinementWarningAction::Repaired {
+            field: field.to_string(),
+            original: original.clone(),
+            resolved: resolved.clone(),
+        },
+        message: format!(
+            "repaired op={:?} field={} original='{}' resolved='{}'",
+            op, field, original, resolved
+        ),
+    });
+}
+
+fn push_dropped_warning(
+    warnings: &mut Vec<RefinementWarning>,
+    op: RefinementOp,
+    reason: String,
+) {
+    warnings.push(RefinementWarning {
+        op: op.clone(),
+        action: RefinementWarningAction::Dropped {
+            reason: reason.clone(),
+        },
+        message: format!("dropped op={:?} reason={}", op, reason),
+    });
 }
 
 /// Errors that can occur during refinement application.
@@ -353,13 +407,11 @@ pub fn apply_refinement_lenient(
     match apply_refinement(groups, infrastructure, &sanitized) {
         Ok((refined, infra)) => (refined, infra, warnings),
         Err(e) => {
-            warnings.push(RefinementWarning {
-                op: RefinementOp::Reclassify,
-                action: RefinementWarningAction::Dropped {
-                    reason: format!("apply_refinement failed after sanitization: {}", e),
-                },
-                message: "Refinement fell back to deterministic groups".to_string(),
-            });
+            push_dropped_warning(
+                &mut warnings,
+                RefinementOp::Reclassify,
+                format!("apply_refinement failed after sanitization: {}", e),
+            );
             (groups.to_vec(), infrastructure.cloned(), warnings)
         }
     }
@@ -393,18 +445,7 @@ pub fn repair_refinement_response(
             if let Some(id) = name_to_id.get(&normalize_name(val)) {
                 let original = val.clone();
                 *val = id.clone();
-                ws.push(RefinementWarning {
-                    op: op.clone(),
-                    action: RefinementWarningAction::Repaired {
-                        field: field.to_string(),
-                        original: original.clone(),
-                        resolved: id.clone(),
-                    },
-                    message: format!(
-                        "Repaired {:?}.{} '{}' → '{}' via name match",
-                        op, field, original, id
-                    ),
-                });
+                push_repaired_warning(ws, op.clone(), field, original, id.clone());
             }
         };
 
@@ -458,13 +499,7 @@ pub fn sanitize_refinement_response(
         groups.iter().map(|g| (g.id.as_str(), g)).collect();
 
     let push_drop = |ws: &mut Vec<RefinementWarning>, op: RefinementOp, reason: String| {
-        ws.push(RefinementWarning {
-            op,
-            action: RefinementWarningAction::Dropped {
-                reason: reason.clone(),
-            },
-            message: reason,
-        });
+        push_dropped_warning(ws, op, reason);
     };
 
     // Splits
@@ -1027,6 +1062,7 @@ mod tests {
         let infra = InfrastructureGroup {
             files: vec!["config.ts".to_string()],
             sub_groups: vec![],
+            file_changes: vec![],
             reason: "test".to_string(),
         };
         let response = RefinementResponse {
@@ -1184,6 +1220,7 @@ mod tests {
         let infra = InfrastructureGroup {
             files: vec!["token.ts".to_string()],
             sub_groups: vec![],
+            file_changes: vec![],
             reason: "test".to_string(),
         };
         let response = RefinementResponse {
@@ -1437,13 +1474,16 @@ mod tests {
                     name: "Infrastructure".to_string(),
                     category: InfraCategory::Infrastructure,
                     files: vec!["Dockerfile".to_string()],
+                    file_changes: vec![],
                 },
                 InfraSubGroup {
                     name: "Unclassified".to_string(),
                     category: InfraCategory::Unclassified,
                     files: vec!["token.ts".to_string()],
+                    file_changes: vec![],
                 },
             ],
+            file_changes: vec![],
             reason: "test".to_string(),
         };
         let response = RefinementResponse {
@@ -1518,7 +1558,9 @@ mod tests {
                 name: "Infrastructure".to_string(),
                 category: InfraCategory::Infrastructure,
                 files: vec!["Dockerfile".to_string()],
+                file_changes: vec![],
             }],
+            file_changes: vec![],
             reason: "test".to_string(),
         };
         let response = RefinementResponse {
@@ -1594,18 +1636,22 @@ mod tests {
                     name: "Infrastructure".to_string(),
                     category: InfraCategory::Infrastructure,
                     files: vec!["Dockerfile".to_string()],
+                    file_changes: vec![],
                 },
                 InfraSubGroup {
                     name: "Scripts".to_string(),
                     category: InfraCategory::Script,
                     files: vec!["scripts/deploy.sh".to_string()],
+                    file_changes: vec![],
                 },
                 InfraSubGroup {
                     name: "Documentation".to_string(),
                     category: InfraCategory::Documentation,
                     files: vec!["README.md".to_string()],
+                    file_changes: vec![],
                 },
             ],
+            file_changes: vec![],
             reason: "test".to_string(),
         };
         let response = RefinementResponse {
@@ -1803,7 +1849,9 @@ mod tests {
                         name: display,
                         category,
                         files: vec![file_path.clone()],
+                        file_changes: vec![],
                     }],
+                    file_changes: vec![],
                     reason: "test".to_string(),
                 };
                 let response = RefinementResponse {

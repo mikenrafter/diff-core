@@ -345,6 +345,7 @@ mod tests {
             infrastructure_group: Some(InfrastructureGroup {
                 files: vec!["tsconfig.json".into(), "package.json".into()],
                 sub_groups: vec![],
+                file_changes: vec![],
                 reason: "Not reachable from any detected entrypoint".into(),
             }),
             annotations: None,
@@ -1053,7 +1054,12 @@ mod tests {
                 cat in arb_infra_category(),
                 files in prop::collection::vec("[a-z/]{1,30}\\.[a-z]{1,4}", 0..5)
             ) {
-                let sg = InfraSubGroup { name, category: cat, files };
+                let sg = InfraSubGroup {
+                    name,
+                    category: cat,
+                    files,
+                    file_changes: vec![],
+                };
                 let json = serde_json::to_string(&sg).unwrap();
                 let back: InfraSubGroup = serde_json::from_str(&json).unwrap();
                 prop_assert_eq!(&sg, &back);
@@ -1129,6 +1135,7 @@ mod tests {
             name: "Schemas".into(),
             category: InfraCategory::Schema,
             files: vec!["schemas/user.ts".into(), "schemas/billing.ts".into()],
+            file_changes: vec![],
         };
         let json = serde_json::to_string(&sg).unwrap();
         let back: InfraSubGroup = serde_json::from_str(&json).unwrap();
@@ -1144,13 +1151,16 @@ mod tests {
                     name: "Infrastructure".into(),
                     category: InfraCategory::Infrastructure,
                     files: vec!["Dockerfile".into()],
+                    file_changes: vec![],
                 },
                 InfraSubGroup {
                     name: "Schemas".into(),
                     category: InfraCategory::Schema,
                     files: vec!["schemas/user.ts".into()],
+                    file_changes: vec![],
                 },
             ],
+            file_changes: vec![],
             reason: "test".into(),
         };
         let json = serde_json::to_string(&ig).unwrap();
@@ -1172,6 +1182,7 @@ mod tests {
         let ig = InfrastructureGroup {
             files: vec!["tsconfig.json".into()],
             sub_groups: vec![],
+            file_changes: vec![],
             reason: "test".into(),
         };
         let json = serde_json::to_string(&ig).unwrap();

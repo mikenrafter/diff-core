@@ -1354,6 +1354,7 @@ mod tests {
                 Some(InfrastructureGroup {
                     files: infra_files.into_iter().map(|s| s.to_string()).collect(),
                     sub_groups: vec![],
+                    file_changes: vec![],
                     reason: "test".to_string(),
                 })
             },
@@ -1409,6 +1410,7 @@ mod tests {
                 name: name.to_string(),
                 category,
                 files: files.into_iter().map(|path| path.to_string()).collect(),
+                file_changes: vec![],
             })
             .collect();
 
@@ -1431,6 +1433,7 @@ mod tests {
             infrastructure_group: Some(InfrastructureGroup {
                 files: infra_files,
                 sub_groups,
+                file_changes: vec![],
                 reason: "test".to_string(),
             }),
             annotations: None,

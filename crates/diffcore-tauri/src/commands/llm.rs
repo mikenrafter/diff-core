@@ -401,12 +401,19 @@ async fn run_refinement_with_activity(
     );
 
     for warning in &warnings {
-        job.emit(ActivityEntry::info(
+        let mut entry = ActivityEntry::info(
             provider_name.clone(),
-            format!("Refinement repair: {}", warning.message),
-            Some("refinement.repair".to_string()),
-        ))
-        .await;
+            format!("Refinement warning: {}", warning.message),
+            Some(warning.event_type().to_string()),
+        );
+        if matches!(
+            &warning.action,
+            diffcore_core::llm::refinement::RefinementWarningAction::Dropped { .. }
+        ) {
+            entry.level = "warning".to_string();
+        }
+        entry.payload = Some(warning.audit_payload());
+        job.emit(entry).await;
     }
 
     emit_diffcore_activity(
@@ -924,7 +931,11 @@ pub async fn refine_groups(
     );
 
     for w in &warnings {
-        warn!("Refinement repair: {}", w.message);
+        warn!(
+            "Refinement warning [{}]: {}",
+            w.event_type(),
+            w.message
+        );
     }
 
     // Update cached analysis with refined groups

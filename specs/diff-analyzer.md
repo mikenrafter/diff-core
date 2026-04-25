@@ -1900,18 +1900,21 @@ Touchpoints to focus efforts:
 Acceptance intent:
 - Contract is explicit enough that a failing response can be categorized as: format violation (non-JSON prefix/shape), schema violation (JSON shape/type mismatch), or semantic-reference violation (unknown IDs/files).
 
-### 15.3 Step 3: Harden Provider Parser Pipeline (Shared Strategy)
+### 15.3 Step 3: Harden Provider Parser Pipeline (Executed)
 
-Unify parser behavior across providers with a staged fallback policy that handles mixed prose/JSON outputs without relaxing schema expectations.
+Provider parser behavior is now unified behind a shared staged fallback helper in the core LLM module.
 
-Planned changes:
-- Specify staged parse pipeline:
-  1. Direct JSON parse
-  2. Markdown-fence extraction
-  3. Embedded-object extraction from mixed text
-  4. Bounded re-ask retry with stricter "JSON only" reminder
-- Consolidate duplicate parser utilities into a shared helper to keep behavior consistent across providers.
-- Standardize parse-stage error tags for observability.
+Implemented behavior:
+- Shared staged parse pipeline in `crates/diffcore-core/src/llm/mod.rs`:
+  1. Direct JSON parse of the full trimmed response
+  2. Markdown-fence extraction (` ```json ... ``` ` and bare fenced blocks)
+  3. Embedded-object extraction from mixed prose/JSON text using bounded candidate scanning and balanced JSON boundary detection
+- Provider-specific `parse_json_response` helpers in OpenAI, OpenRouter, GitHub Copilot, Gemini, and Anthropic now delegate to the shared parser helper instead of maintaining divergent local logic.
+- Parse failures now include parse-stage tags in the error message (`direct_json`, `fenced_json`, `embedded_json`) so failures can be categorized without inspecting provider-specific code paths.
+- Compatibility `strip_markdown_json` helpers remain test-visible for provider unit tests, but runtime parsing no longer depends on duplicated fence-only logic.
+
+Deliberate non-goal for this step:
+- The bounded retry / re-ask policy remains deferred to Step 15.5. Step 15.3 stops at deterministic local parse recovery; it does not trigger additional provider round-trips.
 
 Touchpoints to focus efforts:
 - `crates/diffcore-core/src/llm/openai.rs` (`parse_json_response`, `strip_markdown_json`)
@@ -1924,14 +1927,26 @@ Touchpoints to focus efforts:
 Acceptance intent:
 - A prose-prefixed fenced JSON response is recoverable by parser fallback, while malformed or schema-incompatible content still fails deterministically.
 
-### 15.4 Step 4: Preserve Semantic Safety During Apply
+### 15.4 Step 4: Preserve Semantic Safety During Apply (Executed)
 
-Ensure post-parse operations cannot corrupt grouping state, even when responses contain partial hallucinations.
+The lenient refinement apply path now preserves strict semantic safety while surfacing machine-readable repair/drop diagnostics.
 
-Planned changes:
-- Keep strict semantic invariants for split/merge/re-rank/reclassify references and file membership checks.
-- Continue using repair-first, drop-invalid-second semantics for lenient application.
-- Standardize warning payloads so repaired and dropped operations are clearly auditable in UI and logs.
+Implemented behavior:
+- Strict semantic invariants remain enforced in `validate_refinement` / `apply_refinement` for unknown IDs, invalid file membership, incomplete splits, and bad reclassifications.
+- `apply_refinement_lenient` still follows repair-first, drop-invalid-second semantics:
+  1. `repair_refinement_response` rewrites likely name-for-ID substitutions
+  2. `sanitize_refinement_response` removes any residual invalid operations
+  3. `apply_refinement` runs only on the sanitized operation set
+- Warning construction is now standardized in `crates/diffcore-core/src/llm/refinement.rs` through shared helper paths for repaired and dropped operations.
+- Each warning now exposes:
+  - stable event type classification (`refinement.warning.repaired`, `refinement.warning.dropped`)
+  - structured audit payload content suitable for logs and UI activity streams
+  - normalized human-readable messages that encode whether an op was repaired or dropped
+- Tauri refinement job activity now emits these warnings with event-type and payload data, and dropped operations are surfaced at warning level rather than being indistinguishable from repairs.
+- CLI warning output now uses the same standardized event tags, keeping fallback diagnostics aligned between desktop and CLI flows.
+
+Fallback rule retained:
+- If sanitized apply still fails unexpectedly, refinement falls back to deterministic groups instead of returning partially corrupted grouping state.
 
 Touchpoints to focus efforts:
 - `crates/diffcore-core/src/llm/refinement.rs` (`apply_refinement_lenient`, `repair_refinement_response`, `sanitize_refinement_response`, `apply_refinement`)

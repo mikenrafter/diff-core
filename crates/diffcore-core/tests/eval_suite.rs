@@ -387,6 +387,7 @@ mod scoring_properties {
                             .map(|i| format!("infra_{}.ts", i))
                             .collect(),
                         sub_groups: vec![],
+                        file_changes: vec![],
                         reason: "Not reachable".to_string(),
                     })
                 } else {

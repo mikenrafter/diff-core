@@ -271,33 +271,14 @@ impl LlmProvider for AnthropicProvider {
 /// Parse a JSON response, stripping any markdown fencing the LLM may add.
 /// Kept as defensive fallback — with tool_use, responses are already clean JSON.
 fn parse_json_response<T: serde::de::DeserializeOwned>(text: &str) -> Result<T, LlmError> {
-    let cleaned = strip_markdown_json(text);
-    serde_json::from_str(&cleaned).map_err(|e| {
-        LlmError::ParseResponse(format!(
-            "Failed to parse structured output: {} — response: {}",
-            e,
-            &cleaned[..cleaned.len().min(500)]
-        ))
-    })
+    super::parse_structured_json_response(text)
 }
 
 /// Strip markdown code fences from JSON responses.
 /// Defensive fallback for text responses (tool_use responses don't need this).
+#[cfg(test)]
 fn strip_markdown_json(text: &str) -> String {
-    let trimmed = text.trim();
-    if trimmed.starts_with("```json") {
-        let after_fence = &trimmed[7..]; // Skip ```json
-        if let Some(end) = after_fence.rfind("```") {
-            return after_fence[..end].trim().to_string();
-        }
-    }
-    if trimmed.starts_with("```") {
-        let after_fence = &trimmed[3..]; // Skip ```
-        if let Some(end) = after_fence.rfind("```") {
-            return after_fence[..end].trim().to_string();
-        }
-    }
-    trimmed.to_string()
+    super::strip_markdown_json(text)
 }
 
 // ── Anthropic API Types ──

@@ -323,6 +323,170 @@ fn timestamp_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// Parse provider structured-output text using a staged fallback pipeline.
+///
+/// Stages:
+/// 1. Parse the full trimmed response as JSON
+/// 2. Parse the first markdown-fenced JSON block (```json ... ``` or ``` ... ```)
+/// 3. Parse the first embedded JSON object/array found in prose
+///
+/// This keeps schema expectations strict (we still deserialize directly into `T`)
+/// while recovering from common model formatting mistakes.
+pub(crate) fn parse_structured_json_response<T: serde::de::DeserializeOwned>(
+    text: &str,
+) -> Result<T, LlmError> {
+    let trimmed = text.trim();
+
+    match serde_json::from_str::<T>(trimmed) {
+        Ok(parsed) => return Ok(parsed),
+        Err(direct_err) => {
+            if let Some(fenced) = extract_markdown_json_block(trimmed) {
+                match serde_json::from_str::<T>(fenced) {
+                    Ok(parsed) => return Ok(parsed),
+                    Err(fenced_err) => {
+                        if let Some(embedded) = extract_first_json_payload(trimmed) {
+                            match serde_json::from_str::<T>(embedded) {
+                                Ok(parsed) => return Ok(parsed),
+                                Err(embedded_err) => {
+                                    return Err(LlmError::ParseResponse(format!(
+                                        "Failed to parse structured output (parse_stage=embedded_json, direct_json='{}', fenced_json='{}', embedded_json='{}') — response: {}",
+                                        direct_err,
+                                        fenced_err,
+                                        embedded_err,
+                                        &trimmed[..trimmed.len().min(500)]
+                                    )));
+                                }
+                            }
+                        }
+
+                        return Err(LlmError::ParseResponse(format!(
+                            "Failed to parse structured output (parse_stage=fenced_json, direct_json='{}', fenced_json='{}') — response: {}",
+                            direct_err,
+                            fenced_err,
+                            &trimmed[..trimmed.len().min(500)]
+                        )));
+                    }
+                }
+            }
+
+            if let Some(embedded) = extract_first_json_payload(trimmed) {
+                return serde_json::from_str::<T>(embedded).map_err(|embedded_err| {
+                    LlmError::ParseResponse(format!(
+                        "Failed to parse structured output (parse_stage=embedded_json, direct_json='{}', embedded_json='{}') — response: {}",
+                        direct_err,
+                        embedded_err,
+                        &trimmed[..trimmed.len().min(500)]
+                    ))
+                });
+            }
+
+            Err(LlmError::ParseResponse(format!(
+                "Failed to parse structured output (parse_stage=direct_json, direct_json='{}') — response: {}",
+                direct_err,
+                &trimmed[..trimmed.len().min(500)]
+            )))
+        }
+    }
+}
+
+/// Strip markdown code fences from a response if present.
+///
+/// Returned value is always trimmed. If no fenced block is present,
+/// returns the original trimmed text.
+#[cfg(test)]
+pub(crate) fn strip_markdown_json(text: &str) -> String {
+    extract_markdown_json_block(text)
+        .unwrap_or_else(|| text.trim())
+        .trim()
+        .to_string()
+}
+
+fn extract_markdown_json_block(text: &str) -> Option<&str> {
+    let trimmed = text.trim();
+
+    if let Some(start) = trimmed.find("```json") {
+        let after_fence = &trimmed[start + 7..];
+        if let Some(end) = after_fence.find("```") {
+            return Some(after_fence[..end].trim());
+        }
+    }
+
+    if let Some(start) = trimmed.find("```") {
+        let after_fence = &trimmed[start + 3..];
+        if let Some(end) = after_fence.find("```") {
+            return Some(after_fence[..end].trim());
+        }
+    }
+
+    None
+}
+
+fn extract_first_json_payload(text: &str) -> Option<&str> {
+    // Bound attempts so pathological prose with many braces cannot trigger
+    // excessive parse loops.
+    let max_candidates = 32;
+    let mut attempts = 0usize;
+
+    for (idx, ch) in text.char_indices() {
+        if ch != '{' && ch != '[' {
+            continue;
+        }
+        if attempts >= max_candidates {
+            break;
+        }
+        attempts += 1;
+
+        let Some(end_idx) = find_balanced_json_end(text, idx) else {
+            continue;
+        };
+
+        let candidate = text[idx..end_idx].trim();
+        if serde_json::from_str::<serde_json::Value>(candidate).is_ok() {
+            return Some(candidate);
+        }
+    }
+
+    None
+}
+
+fn find_balanced_json_end(text: &str, start_idx: usize) -> Option<usize> {
+    let mut depth = 0u32;
+    let mut in_string = false;
+    let mut escaping = false;
+
+    for (offset, ch) in text[start_idx..].char_indices() {
+        if in_string {
+            if escaping {
+                escaping = false;
+                continue;
+            }
+            match ch {
+                '\\' => escaping = true,
+                '"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => in_string = true,
+            '{' | '[' => depth += 1,
+            '}' | ']' => {
+                if depth == 0 {
+                    return None;
+                }
+                depth -= 1;
+                if depth == 0 {
+                    return Some(start_idx + offset + ch.len_utf8());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    None
+}
+
 /// Provider-agnostic LLM client trait.
 ///
 /// Implementations exist for Anthropic and OpenAI. Each provider
@@ -902,6 +1066,7 @@ pub fn pass2_user_prompt(request: &Pass2Request) -> String {
 )]
 mod tests {
     use super::*;
+    use serde::Deserialize;
 
     // ── API Key Resolution Tests ──
 
@@ -1030,6 +1195,38 @@ mod tests {
             LlmError::UnsupportedProvider(p) => assert_eq!(p, "unknown"),
             other => panic!("Expected UnsupportedProvider, got: {:?}", other),
         }
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct ParseHarness {
+        value: i64,
+    }
+
+    #[test]
+    fn test_parse_structured_json_response_direct_json() {
+        let parsed: ParseHarness = parse_structured_json_response(r#"{"value": 7}"#).unwrap();
+        assert_eq!(parsed.value, 7);
+    }
+
+    #[test]
+    fn test_parse_structured_json_response_fenced_json_with_prose_prefix() {
+        let raw = "Here is the output:\n```json\n{\"value\": 11}\n```\nThanks.";
+        let parsed: ParseHarness = parse_structured_json_response(raw).unwrap();
+        assert_eq!(parsed.value, 11);
+    }
+
+    #[test]
+    fn test_parse_structured_json_response_embedded_json_with_prose() {
+        let raw = "Summary first. {\"value\": 13} trailing notes.";
+        let parsed: ParseHarness = parse_structured_json_response(raw).unwrap();
+        assert_eq!(parsed.value, 13);
+    }
+
+    #[test]
+    fn test_parse_structured_json_response_reports_parse_stage() {
+        let err = parse_structured_json_response::<ParseHarness>("not valid json").unwrap_err();
+        let text = format!("{}", err);
+        assert!(text.contains("parse_stage="));
     }
 
     #[test]

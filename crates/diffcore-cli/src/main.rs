@@ -764,7 +764,7 @@ async fn run_refinement(
     );
 
     for w in &warnings {
-        eprintln!("refinement repair: {}", w.message);
+        eprintln!("{}: {}", w.event_type(), w.message);
     }
 
     analysis_output.groups = refined_groups;
