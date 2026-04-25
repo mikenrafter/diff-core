@@ -23,6 +23,17 @@ use diffcore_core::query_engine::QueryEngine;
 use diffcore_core::rank;
 use diffcore_core::types::{AnalysisOutput, GroupRankInput};
 
+async fn run_blocking<T>(
+    f: impl FnOnce() -> Result<T, CommandError> + Send + 'static,
+) -> Result<T, CommandError>
+where
+    T: Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| CommandError::Analysis(format!("task join error: {}", e)))?
+}
+
 /// Application state shared across commands.
 pub struct AppState {
     /// The most recent analysis result, available for subsequent queries.
@@ -171,7 +182,7 @@ impl serde::Serialize for CommandError {
 /// When `pr_preview` is true, uses merge-base diff (shows what the branch introduces
 /// relative to where it diverged from the base).
 #[tauri::command]
-pub fn analyze(
+pub async fn analyze(
     repo_path: String,
     base: Option<String>,
     head: Option<String>,
@@ -182,194 +193,201 @@ pub fn analyze(
     include_uncommitted: Option<bool>,
     state: tauri::State<'_, AppState>,
 ) -> Result<AnalysisOutput, CommandError> {
-    let repo_path = PathBuf::from(&repo_path);
-    let repo_path = std::fs::canonicalize(&repo_path)
-        .map_err(|e| CommandError::Io(format!("Invalid repo path: {}", e)))?;
+    #[derive(Clone)]
+    struct AnalyzeResult {
+        repo_path: PathBuf,
+        base: Option<String>,
+        diff_result: git::DiffResult,
+        cache_key: Option<String>,
+        analysis_output: AnalysisOutput,
+    }
 
-    let repo = git2::Repository::discover(&repo_path)
-        .map_err(|e| CommandError::Git(format!("Not a git repository: {}", e)))?;
+    let state_last_diff = &state.last_diff;
+    let state_last_analysis = &state.last_analysis;
+    let state_last_cache_key = &state.last_cache_key;
 
-    let workdir = repo
-        .workdir()
-        .ok_or_else(|| CommandError::Git("Bare repositories are not supported".to_string()))?
-        .to_path_buf();
+    let res = run_blocking(move || {
+        let repo_path_buf = PathBuf::from(&repo_path);
+        let repo_path_buf = std::fs::canonicalize(&repo_path_buf)
+            .map_err(|e| CommandError::Io(format!("Invalid repo path: {}", e)))?;
 
-    // Load config
-    let config = DiffcoreConfig::load_with_global_llm_from_dir(&workdir)
-        .map_err(|e| CommandError::Config(format!("{}", e)))?;
+        let repo = git2::Repository::discover(&repo_path_buf)
+            .map_err(|e| CommandError::Git(format!("Not a git repository: {}", e)))?;
 
-    // Resolve include_uncommitted: UI override > config > default (true)
-    let effective_include_uncommitted =
-        include_uncommitted.unwrap_or(config.diff.include_uncommitted);
+        let workdir = repo
+            .workdir()
+            .ok_or_else(|| CommandError::Git("Bare repositories are not supported".to_string()))?
+            .to_path_buf();
 
-    // Extract diff
-    let (diff_result, diff_source) = extract_diff(
-        &repo,
-        base.clone(),
-        head,
-        range,
-        staged,
-        unstaged,
-        pr_preview.unwrap_or(false),
-        effective_include_uncommitted,
-    )?;
+        let config = DiffcoreConfig::load_with_global_llm_from_dir(&workdir)
+            .map_err(|e| CommandError::Config(format!("{}", e)))?;
+
+        let effective_include_uncommitted =
+            include_uncommitted.unwrap_or(config.diff.include_uncommitted);
+
+        let (diff_result, diff_source) = extract_diff(
+            &repo,
+            base.clone(),
+            head,
+            range,
+            staged,
+            unstaged,
+            pr_preview.unwrap_or(false),
+            effective_include_uncommitted,
+        )?;
+
+        if diff_result.files.is_empty() {
+            let empty_output = AnalysisOutput {
+                version: "1.0.0".to_string(),
+                diff_source: diff_source.clone(),
+                summary: diffcore_core::types::AnalysisSummary {
+                    total_files_changed: 0,
+                    total_groups: 0,
+                    languages_detected: vec![],
+                    frameworks_detected: vec![],
+                },
+                groups: vec![],
+                infrastructure_group: None,
+                annotations: None,
+            };
+            return Ok(AnalyzeResult {
+                repo_path: repo_path_buf,
+                base,
+                diff_result,
+                cache_key: None,
+                analysis_output: empty_output,
+            });
+        }
+
+        let cache_key = if staged || unstaged {
+            cache::compute_cache_key_working_dir(&diff_result, &workdir)
+        } else {
+            cache::compute_cache_key(&diff_result)
+        };
+
+        if let Some(cached) = cache::load_cached(&workdir, &cache_key) {
+            return Ok(AnalyzeResult {
+                repo_path: repo_path_buf,
+                base,
+                diff_result,
+                cache_key: Some(cache_key),
+                analysis_output: cached,
+            });
+        }
+
+        let file_inputs: Vec<(&str, &str)> = diff_result
+            .files
+            .iter()
+            .filter_map(|file_diff| {
+                let content = file_diff
+                    .new_content
+                    .as_deref()
+                    .or(file_diff.old_content.as_deref())?;
+                let path = file_diff.path();
+                if config.is_ignored(path) {
+                    return None;
+                }
+                Some((path, content))
+            })
+            .collect();
+        let parsed_files = pipeline::parse_files_parallel(&file_inputs);
+
+        let workspace_map = diffcore_core::graph::build_workspace_map(&workdir);
+        let mut graph = SymbolGraph::build_with_workspace(&parsed_files, &workspace_map);
+        let entrypoints = entrypoint::detect_entrypoints(&parsed_files);
+
+        let flow_analysis = flow::analyze_data_flow(&parsed_files, &FlowConfig::default());
+        flow::enrich_graph(&mut graph, &flow_analysis);
+
+        let changed_files: Vec<String> = diff_result
+            .files
+            .iter()
+            .filter(|f| !config.is_ignored(f.path()))
+            .map(|f| f.path().to_string())
+            .collect();
+        let cluster_result = cluster::cluster_files(&graph, &entrypoints, &changed_files);
+
+        let weights = config.ranking.clone();
+        let rank_inputs: Vec<GroupRankInput> = cluster_result
+            .groups
+            .iter()
+            .map(|group| {
+                let risk_flags = output::compute_group_risk_flags(
+                    &group
+                        .files
+                        .iter()
+                        .map(|f| f.path.as_str())
+                        .collect::<Vec<_>>(),
+                );
+                let total_add: u32 = group.files.iter().map(|f| f.changes.additions).sum();
+                let total_del: u32 = group.files.iter().map(|f| f.changes.deletions).sum();
+
+                GroupRankInput {
+                    group_id: group.id.clone(),
+                    risk: rank::compute_risk_score(
+                        risk_flags.has_schema_change,
+                        risk_flags.has_api_change,
+                        risk_flags.has_auth_change,
+                        false,
+                    ),
+                    centrality: 0.5,
+                    surface_area: rank::compute_surface_area(total_add, total_del, 1000),
+                    uncertainty: if risk_flags.has_test_only { 0.1 } else { 0.5 },
+                }
+            })
+            .collect();
+
+        let ranked = rank::rank_groups(&rank_inputs, &weights);
+
+        let analysis_output = build_analysis_output(
+            &diff_result,
+            diff_source.clone(),
+            &parsed_files,
+            &cluster_result,
+            &ranked,
+        );
+
+        cache::store_cached(&workdir, &cache_key, &analysis_output);
+
+        Ok(AnalyzeResult {
+            repo_path: repo_path_buf,
+            base,
+            diff_result,
+            cache_key: Some(cache_key),
+            analysis_output,
+        })
+    })
+    .await?;
 
     // Cache the diff result for subsequent get_file_diff() calls
-    match state.last_diff.lock() {
+    match state_last_diff.lock() {
         Ok(mut cached) => {
             *cached = Some(CachedDiff {
-                repo_path: repo_path.clone(),
-                base: base,
-                diff_result: diff_result.clone(),
+                repo_path: res.repo_path.clone(),
+                base: res.base.clone(),
+                diff_result: res.diff_result.clone(),
             });
         }
         Err(e) => warn!("Failed to update last_diff state (lock poisoned): {}", e),
     }
 
-    if diff_result.files.is_empty() {
-        let empty_output = AnalysisOutput {
-            version: "1.0.0".to_string(),
-            diff_source,
-            summary: diffcore_core::types::AnalysisSummary {
-                total_files_changed: 0,
-                total_groups: 0,
-                languages_detected: vec![],
-                frameworks_detected: vec![],
-            },
-            groups: vec![],
-            infrastructure_group: None,
-            annotations: None,
-        };
-        match state.last_analysis.lock() {
-            Ok(mut last) => *last = Some(empty_output.clone()),
-            Err(e) => warn!(
-                "Failed to update last_analysis state (lock poisoned): {}",
-                e
-            ),
-        }
-        return Ok(empty_output);
-    }
-
-    // Check cache for previously computed results
-    let cache_key = if staged || unstaged {
-        cache::compute_cache_key_working_dir(&diff_result, &workdir)
-    } else {
-        cache::compute_cache_key(&diff_result)
-    };
-    if let Some(cached) = cache::load_cached(&workdir, &cache_key) {
-        match state.last_analysis.lock() {
-            Ok(mut last) => *last = Some(cached.clone()),
-            Err(e) => warn!(
-                "Failed to update last_analysis state (lock poisoned): {}",
-                e
-            ),
-        }
-        if let Ok(mut key) = state.last_cache_key.lock() {
-            *key = Some(cache_key);
-        }
-        return Ok(cached);
-    }
-
-    // Parse all changed files in parallel
-    let file_inputs: Vec<(&str, &str)> = diff_result
-        .files
-        .iter()
-        .filter_map(|file_diff| {
-            let content = file_diff
-                .new_content
-                .as_deref()
-                .or(file_diff.old_content.as_deref())?;
-            let path = file_diff.path();
-            if config.is_ignored(path) {
-                return None;
-            }
-            Some((path, content))
-        })
-        .collect();
-    let parsed_files = pipeline::parse_files_parallel(&file_inputs);
-
-    // Build workspace map for monorepo cross-package import resolution
-    let workspace_map = diffcore_core::graph::build_workspace_map(&workdir);
-
-    // Build symbol graph
-    let mut graph = SymbolGraph::build_with_workspace(&parsed_files, &workspace_map);
-
-    // Detect entrypoints
-    let entrypoints = entrypoint::detect_entrypoints(&parsed_files);
-
-    // Run data flow analysis and enrich graph
-    let flow_analysis = flow::analyze_data_flow(&parsed_files, &FlowConfig::default());
-    flow::enrich_graph(&mut graph, &flow_analysis);
-
-    // Cluster changed files
-    let changed_files: Vec<String> = diff_result
-        .files
-        .iter()
-        .filter(|f| !config.is_ignored(f.path()))
-        .map(|f| f.path().to_string())
-        .collect();
-    let cluster_result = cluster::cluster_files(&graph, &entrypoints, &changed_files);
-
-    // Rank groups
-    let weights = config.ranking.clone();
-    let rank_inputs: Vec<GroupRankInput> = cluster_result
-        .groups
-        .iter()
-        .map(|group| {
-            let risk_flags = output::compute_group_risk_flags(
-                &group
-                    .files
-                    .iter()
-                    .map(|f| f.path.as_str())
-                    .collect::<Vec<_>>(),
-            );
-            let total_add: u32 = group.files.iter().map(|f| f.changes.additions).sum();
-            let total_del: u32 = group.files.iter().map(|f| f.changes.deletions).sum();
-
-            GroupRankInput {
-                group_id: group.id.clone(),
-                risk: rank::compute_risk_score(
-                    risk_flags.has_schema_change,
-                    risk_flags.has_api_change,
-                    risk_flags.has_auth_change,
-                    false,
-                ),
-                centrality: 0.5,
-                surface_area: rank::compute_surface_area(total_add, total_del, 1000),
-                uncertainty: if risk_flags.has_test_only { 0.1 } else { 0.5 },
-            }
-        })
-        .collect();
-
-    let ranked = rank::rank_groups(&rank_inputs, &weights);
-
-    // Build output
-    let analysis_output = build_analysis_output(
-        &diff_result,
-        diff_source,
-        &parsed_files,
-        &cluster_result,
-        &ranked,
-    );
-
-    // Cache the deterministic analysis result
-    cache::store_cached(&workdir, &cache_key, &analysis_output);
-
-    // Store cache key for refinement cache lookups
-    if let Ok(mut key) = state.last_cache_key.lock() {
-        *key = Some(cache_key);
-    }
-
-    // Store for subsequent queries
-    match state.last_analysis.lock() {
-        Ok(mut last) => *last = Some(analysis_output.clone()),
+    // Store analysis for subsequent queries
+    match state_last_analysis.lock() {
+        Ok(mut last) => *last = Some(res.analysis_output.clone()),
         Err(e) => warn!(
             "Failed to update last_analysis state (lock poisoned): {}",
             e
         ),
     }
 
-    Ok(analysis_output)
+    // Store cache key for refinement cache lookups when available
+    if let Some(cache_key) = res.cache_key {
+        if let Ok(mut key) = state_last_cache_key.lock() {
+            *key = Some(cache_key);
+        }
+    }
+
+    Ok(res.analysis_output)
 }
 
 /// Get the most recent analysis result without re-running.
@@ -413,7 +431,7 @@ pub fn get_mermaid(
 /// Uses the cached DiffResult from the last `analyze()` call when parameters match,
 /// avoiding redundant git diff extraction for every file navigation.
 #[tauri::command]
-pub fn get_file_diff(
+pub async fn get_file_diff(
     repo_path: String,
     file_path: String,
     base: Option<String>,
@@ -454,16 +472,19 @@ pub fn get_file_diff(
     }
 
     // Cache miss — fall back to extracting from git
-    get_file_diff_uncached(
-        repo_path,
-        file_path,
-        base,
-        head,
-        range,
-        staged,
-        unstaged,
-        include_uncommitted.unwrap_or(true),
-    )
+    run_blocking(move || {
+        get_file_diff_uncached(
+            repo_path,
+            file_path,
+            base,
+            head,
+            range,
+            staged,
+            unstaged,
+            include_uncommitted.unwrap_or(true),
+        )
+    })
+    .await
 }
 
 /// Core file diff logic without caching — also callable from integration tests.

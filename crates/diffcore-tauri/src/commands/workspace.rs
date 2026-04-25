@@ -11,6 +11,17 @@ use diffcore_core::git;
 
 use super::{AppState, CommandError, FileDiffContent};
 
+async fn run_blocking<T>(
+    f: impl FnOnce() -> Result<T, CommandError> + Send + 'static,
+) -> Result<T, CommandError>
+where
+    T: Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| CommandError::Analysis(format!("task join error: {}", e)))?
+}
+
 /// Summary of repository state for the UI.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RepoInfo {
@@ -27,58 +38,77 @@ pub struct RepoInfo {
 ///
 /// Returns branches sorted with current branch first, then alphabetically.
 #[tauri::command]
-pub fn list_branches(repo_path: String) -> Result<Vec<git::BranchInfo>, CommandError> {
-    let repo = super::open_repo(&repo_path)?;
-    git::list_branches(&repo).map_err(|e| CommandError::Git(format!("{}", e)))
+pub async fn list_branches(repo_path: String) -> Result<Vec<git::BranchInfo>, CommandError> {
+    run_blocking(move || {
+        let repo = super::open_repo(&repo_path)?;
+        git::list_branches(&repo).map_err(|e| CommandError::Git(format!("{}", e)))
+    })
+    .await
 }
 
 /// List recent commits for commit-level ref selection in the UI.
 #[tauri::command]
-pub fn list_commits(
+pub async fn list_commits(
     repo_path: String,
     limit: Option<usize>,
 ) -> Result<Vec<git::CommitInfo>, CommandError> {
-    let repo = super::open_repo(&repo_path)?;
-    let bounded_limit = limit.unwrap_or(50).clamp(1, 200);
-    git::list_recent_commits(&repo, bounded_limit).map_err(|e| CommandError::Git(format!("{}", e)))
+    run_blocking(move || {
+        let repo = super::open_repo(&repo_path)?;
+        let bounded_limit = limit.unwrap_or(50).clamp(1, 200);
+        git::list_recent_commits(&repo, bounded_limit)
+            .map_err(|e| CommandError::Git(format!("{}", e)))
+    })
+    .await
 }
 
 /// List all git worktrees for the repository.
 #[tauri::command]
-pub fn list_worktrees(repo_path: String) -> Result<Vec<git::WorktreeInfo>, CommandError> {
-    let repo = super::open_repo(&repo_path)?;
-    git::list_worktrees(&repo).map_err(|e| CommandError::Git(format!("{}", e)))
+pub async fn list_worktrees(repo_path: String) -> Result<Vec<git::WorktreeInfo>, CommandError> {
+    run_blocking(move || {
+        let repo = super::open_repo(&repo_path)?;
+        git::list_worktrees(&repo).map_err(|e| CommandError::Git(format!("{}", e)))
+    })
+    .await
 }
 
 /// Get the current branch's tracking status (ahead/behind upstream).
 #[tauri::command]
-pub fn get_branch_status(repo_path: String) -> Result<git::BranchStatus, CommandError> {
-    let repo = super::open_repo(&repo_path)?;
-    git::get_branch_status(&repo).map_err(|e| CommandError::Git(format!("{}", e)))
+pub async fn get_branch_status(repo_path: String) -> Result<git::BranchStatus, CommandError> {
+    run_blocking(move || {
+        let repo = super::open_repo(&repo_path)?;
+        git::get_branch_status(&repo).map_err(|e| CommandError::Git(format!("{}", e)))
+    })
+    .await
 }
 
 /// Auto-detect the default branch and current branch for a repository.
 ///
 /// Returns a summary useful for the UI to set up initial state.
 #[tauri::command]
-pub fn get_repo_info(repo_path: String) -> Result<RepoInfo, CommandError> {
-    let repo = super::open_repo(&repo_path)?;
+pub async fn get_repo_info(repo_path: String) -> Result<RepoInfo, CommandError> {
+    run_blocking(move || {
+        let repo = super::open_repo(&repo_path)?;
 
-    let current = git::current_branch(&repo);
-    let default_branch = git::detect_default_branch(&repo).unwrap_or_else(|_| "main".to_string());
-    let branches = git::list_branches(&repo).map_err(|e| CommandError::Git(format!("{}", e)))?;
-    let worktrees = git::list_worktrees(&repo).map_err(|e| CommandError::Git(format!("{}", e)))?;
-    let status = git::get_branch_status(&repo).ok();
-    let is_worktree = git::is_linked_worktree(&repo);
+        let current = git::current_branch(&repo);
+        let default_branch =
+            git::detect_default_branch(&repo).unwrap_or_else(|_| "main".to_string());
+        let branches =
+            git::list_branches(&repo).map_err(|e| CommandError::Git(format!("{}", e)))?;
+        let worktrees =
+            git::list_worktrees(&repo).map_err(|e| CommandError::Git(format!("{}", e)))?;
+        let status = git::get_branch_status(&repo).ok();
+        let is_worktree = git::is_linked_worktree(&repo);
 
-    Ok(RepoInfo {
-        current_branch: current,
-        default_branch,
-        branches,
-        worktrees,
-        status,
-        is_worktree,
+        Ok(RepoInfo {
+            current_branch: current,
+            default_branch,
+            branches,
+            worktrees,
+            status,
+            is_worktree,
+        })
     })
+    .await
 }
 
 /// Return the first directory argument passed at app launch, if any.
@@ -198,92 +228,101 @@ fn workspace_files(workdir: &std::path::Path) -> Vec<String> {
 }
 
 #[tauri::command]
-pub fn cross_file_search(
+pub async fn cross_file_search(
     repo_path: String,
     query: String,
     show_unchanged_files: bool,
     max_results: Option<usize>,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<CrossFileSearchResult>, CommandError> {
-    let query = query.trim();
+    let query = query.trim().to_string();
     if query.is_empty() {
         return Ok(vec![]);
     }
 
-    let repo = super::open_repo(&repo_path)?;
-    let workdir = repo
-        .workdir()
-        .ok_or_else(|| CommandError::Git("Bare repositories are not supported".to_string()))?
-        .to_path_buf();
-
-    let mut candidates: Vec<String> = if show_unchanged_files {
-        workspace_files(&workdir)
+    let changed_files: Vec<String> = if show_unchanged_files {
+        vec![]
     } else {
         changed_files_from_state(&state).into_iter().collect()
     };
-    candidates.sort();
 
-    let matcher = RegexMatcherBuilder::new()
-        .case_insensitive(true)
-        .fixed_strings(true)
-        .build(query)
-        .map_err(|e| CommandError::Analysis(format!("Invalid search query: {}", e)))?;
+    run_blocking(move || {
+        let repo = super::open_repo(&repo_path)?;
+        let workdir = repo
+            .workdir()
+            .ok_or_else(|| CommandError::Git("Bare repositories are not supported".to_string()))?
+            .to_path_buf();
 
-    let mut searcher = SearcherBuilder::new()
-        .line_number(true)
-        .multi_line(false)
-        .binary_detection(grep_searcher::BinaryDetection::quit(b'\x00'))
-        .build();
-
-    let max_file_results = max_results.unwrap_or(200).max(1);
-    let mut results = Vec::new();
-    let mut total_matches = 0usize;
-
-    for relative_path in candidates {
-        if results.len() >= max_file_results || total_matches >= 1000 {
-            break;
-        }
-
-        let absolute_path = workdir.join(&relative_path);
-        let metadata = match std::fs::metadata(&absolute_path) {
-            Ok(meta) => meta,
-            Err(_) => continue,
+        let mut candidates: Vec<String> = if show_unchanged_files {
+            workspace_files(&workdir)
+        } else {
+            changed_files
         };
-        if metadata.len() > 2 * 1024 * 1024 {
-            continue;
-        }
+        candidates.sort();
 
-        let mut file_matches = Vec::new();
+        let matcher = RegexMatcherBuilder::new()
+            .case_insensitive(true)
+            .fixed_strings(true)
+            .build(&query)
+            .map_err(|e| CommandError::Analysis(format!("Invalid search query: {}", e)))?;
 
-        let sink = sinks::UTF8(|line_number: u64, line: &str| {
-            if total_matches >= 1000 || file_matches.len() >= 50 {
-                return Ok(false);
+        let mut searcher = SearcherBuilder::new()
+            .line_number(true)
+            .multi_line(false)
+            .binary_detection(grep_searcher::BinaryDetection::quit(b'\x00'))
+            .build();
+
+        let max_file_results = max_results.unwrap_or(200).max(1);
+        let mut results = Vec::new();
+        let mut total_matches = 0usize;
+
+        for relative_path in candidates {
+            if results.len() >= max_file_results || total_matches >= 1000 {
+                break;
             }
-            let clean = line.trim_end_matches(&['\r', '\n'][..]).to_string();
-            file_matches.push(CrossFileSearchMatch {
-                line_number: line_number as u32,
-                line_text: clean,
-            });
-            total_matches += 1;
-            Ok(true)
-        });
 
-        if searcher
-            .search_path(&matcher, &absolute_path, sink)
-            .is_err()
-        {
-            continue;
+            let absolute_path = workdir.join(&relative_path);
+            let metadata = match std::fs::metadata(&absolute_path) {
+                Ok(meta) => meta,
+                Err(_) => continue,
+            };
+            if metadata.len() > 2 * 1024 * 1024 {
+                continue;
+            }
+
+            let mut file_matches = Vec::new();
+
+            let sink = sinks::UTF8(|line_number: u64, line: &str| {
+                if total_matches >= 1000 || file_matches.len() >= 50 {
+                    return Ok(false);
+                }
+                let clean = line.trim_end_matches(&['\r', '\n'][..]).to_string();
+                file_matches.push(CrossFileSearchMatch {
+                    line_number: line_number as u32,
+                    line_text: clean,
+                });
+                total_matches += 1;
+                Ok(true)
+            });
+
+            if searcher
+                .search_path(&matcher, &absolute_path, sink)
+                .is_err()
+            {
+                continue;
+            }
+
+            if !file_matches.is_empty() {
+                results.push(CrossFileSearchResult {
+                    file_path: relative_path,
+                    matches: file_matches,
+                });
+            }
         }
 
-        if !file_matches.is_empty() {
-            results.push(CrossFileSearchResult {
-                file_path: relative_path,
-                matches: file_matches,
-            });
-        }
-    }
-
-    Ok(results)
+        Ok(results)
+    })
+    .await
 }
 
 #[tauri::command]
