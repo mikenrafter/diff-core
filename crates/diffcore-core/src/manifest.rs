@@ -114,6 +114,7 @@ pub fn import_manifest(analysis: &AnalysisOutput, manifest: &GroupsManifest) -> 
                         changes: crate::types::ChangeStats {
                             additions: 0,
                             deletions: 0,
+                            hunks: 0,
                         },
                         symbols_changed: vec![],
                     })

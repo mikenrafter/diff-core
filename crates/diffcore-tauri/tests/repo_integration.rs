@@ -115,17 +115,17 @@ fn create_minimal_repo() -> (tempfile::TempDir, String) {
 
 // ── get_repo_info ────────────────────────────────────────────────────
 
-#[test]
-fn repo_info_returns_current_branch() {
+#[tokio::test]
+async fn repo_info_returns_current_branch() {
     let (_tmp, repo_path, _) = create_test_repo_with_branch();
-    let info = get_repo_info(repo_path).unwrap();
+    let info = get_repo_info(repo_path).await.unwrap();
     assert_eq!(info.current_branch, Some("feature/test".to_string()));
 }
 
-#[test]
-fn repo_info_lists_branches() {
+#[tokio::test]
+async fn repo_info_lists_branches() {
     let (_tmp, repo_path, _) = create_test_repo_with_branch();
-    let info = get_repo_info(repo_path).unwrap();
+    let info = get_repo_info(repo_path).await.unwrap();
 
     let branch_names: Vec<&str> = info.branches.iter().map(|b| b.name.as_str()).collect();
     assert!(
@@ -136,10 +136,10 @@ fn repo_info_lists_branches() {
     // main branch should also be listed (created implicitly by initial commit)
 }
 
-#[test]
-fn repo_info_has_worktrees() {
+#[tokio::test]
+async fn repo_info_has_worktrees() {
     let (_tmp, repo_path, _) = create_test_repo_with_branch();
-    let info = get_repo_info(repo_path).unwrap();
+    let info = get_repo_info(repo_path).await.unwrap();
 
     // Should have at least the main worktree
     assert!(
@@ -148,16 +148,16 @@ fn repo_info_has_worktrees() {
     );
 }
 
-#[test]
-fn repo_info_errors_on_invalid_path() {
+#[tokio::test]
+async fn repo_info_errors_on_invalid_path() {
     let result = get_repo_info("/tmp/__nonexistent_repo_12345__".to_string());
-    assert!(result.is_err());
+    assert!(result.await.is_err());
 }
 
-#[test]
-fn repo_info_detects_default_branch() {
+#[tokio::test]
+async fn repo_info_detects_default_branch() {
     let (_tmp, repo_path) = create_minimal_repo();
-    let info = get_repo_info(repo_path).unwrap();
+    let info = get_repo_info(repo_path).await.unwrap();
 
     // Default branch detection should return something reasonable
     assert!(
@@ -168,10 +168,10 @@ fn repo_info_detects_default_branch() {
 
 // ── list_branches ────────────────────────────────────────────────────
 
-#[test]
-fn list_branches_returns_all_branches() {
+#[tokio::test]
+async fn list_branches_returns_all_branches() {
     let (_tmp, repo_path, _) = create_test_repo_with_branch();
-    let branches = list_branches(repo_path).unwrap();
+    let branches = list_branches(repo_path).await.unwrap();
 
     assert!(
         branches.len() >= 2,
@@ -180,10 +180,10 @@ fn list_branches_returns_all_branches() {
     );
 }
 
-#[test]
-fn list_branches_marks_current() {
+#[tokio::test]
+async fn list_branches_marks_current() {
     let (_tmp, repo_path, _) = create_test_repo_with_branch();
-    let branches = list_branches(repo_path).unwrap();
+    let branches = list_branches(repo_path).await.unwrap();
 
     let current_branches: Vec<_> = branches.iter().filter(|b| b.is_current).collect();
     assert_eq!(
@@ -196,10 +196,10 @@ fn list_branches_marks_current() {
 
 // ── list_worktrees ───────────────────────────────────────────────────
 
-#[test]
-fn list_worktrees_returns_main_worktree() {
+#[tokio::test]
+async fn list_worktrees_returns_main_worktree() {
     let (_tmp, repo_path, _) = create_test_repo_with_branch();
-    let worktrees = list_worktrees(repo_path).unwrap();
+    let worktrees = list_worktrees(repo_path).await.unwrap();
 
     assert!(
         !worktrees.is_empty(),
@@ -337,28 +337,28 @@ fn file_diff_detects_language_correctly() {
 
 // ── is_worktree detection ───────────────────────────────────────────
 
-#[test]
-fn repo_info_regular_repo_is_not_worktree() {
+#[tokio::test]
+async fn repo_info_regular_repo_is_not_worktree() {
     let (_tmp, repo_path, _) = create_test_repo_with_branch();
-    let info = get_repo_info(repo_path).unwrap();
+    let info = get_repo_info(repo_path).await.unwrap();
     assert!(
         !info.is_worktree,
         "A regular (non-worktree) repo should have is_worktree = false"
     );
 }
 
-#[test]
-fn repo_info_minimal_repo_is_not_worktree() {
+#[tokio::test]
+async fn repo_info_minimal_repo_is_not_worktree() {
     let (_tmp, repo_path) = create_minimal_repo();
-    let info = get_repo_info(repo_path).unwrap();
+    let info = get_repo_info(repo_path).await.unwrap();
     assert!(
         !info.is_worktree,
         "A minimal repo should have is_worktree = false"
     );
 }
 
-#[test]
-fn repo_info_linked_worktree_is_worktree() {
+#[tokio::test]
+async fn repo_info_linked_worktree_is_worktree() {
     let (_tmp, repo_path, _) = create_test_repo_with_branch();
 
     // Create a linked worktree
@@ -398,22 +398,24 @@ fn repo_info_linked_worktree_is_worktree() {
     );
 
     // Now get_repo_info on the linked worktree path
-    let wt_info = get_repo_info(wt_dir.to_str().unwrap().to_string()).unwrap();
+    let wt_info = get_repo_info(wt_dir.to_str().unwrap().to_string())
+        .await
+        .unwrap();
     assert!(
         wt_info.is_worktree,
         "A linked worktree should have is_worktree = true"
     );
 
     // The main repo should still be is_worktree = false
-    let main_info = get_repo_info(repo_path).unwrap();
+    let main_info = get_repo_info(repo_path).await.unwrap();
     assert!(
         !main_info.is_worktree,
         "The main repo should still have is_worktree = false after adding a worktree"
     );
 }
 
-#[test]
-fn repo_info_linked_worktree_lists_branches() {
+#[tokio::test]
+async fn repo_info_linked_worktree_lists_branches() {
     let (_tmp, repo_path, _) = create_test_repo_with_branch();
 
     // Create a linked worktree
@@ -437,7 +439,9 @@ fn repo_info_linked_worktree_lists_branches() {
         .expect("git worktree add should succeed");
     assert!(status.status.success());
 
-    let wt_info = get_repo_info(wt_dir.to_str().unwrap().to_string()).unwrap();
+    let wt_info = get_repo_info(wt_dir.to_str().unwrap().to_string())
+        .await
+        .unwrap();
 
     // Should still be able to list all branches from a worktree
     assert!(

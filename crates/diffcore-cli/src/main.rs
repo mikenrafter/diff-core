@@ -410,7 +410,22 @@ fn run_analyze_and_return(args: AnalyzeArgs) -> Result<AnalysisOutput, Box<dyn s
         .filter(|f| !config.is_ignored(f.path()))
         .map(|f| f.path().to_string())
         .collect();
-    let cluster_result = cluster::cluster_files(&graph, &entrypoints, &changed_files);
+    let diff_stats: std::collections::HashMap<&str, (u32, u32, u32)> = diff_result
+        .files
+        .iter()
+        .map(|f| (f.path(), (f.additions, f.deletions, f.hunks.len() as u32)))
+        .collect();
+
+    let mut cluster_result = cluster::cluster_files(&graph, &entrypoints, &changed_files);
+    for group in cluster_result.groups.iter_mut() {
+        for fc in group.files.iter_mut() {
+            if let Some(&(additions, deletions, hunks)) = diff_stats.get(fc.path.as_str()) {
+                fc.changes.additions = additions;
+                fc.changes.deletions = deletions;
+                fc.changes.hunks = hunks;
+            }
+        }
+    }
     let weights = config.ranking.clone();
     let rank_inputs: Vec<GroupRankInput> = cluster_result
         .groups
@@ -567,7 +582,22 @@ fn run_analyze(args: AnalyzeArgs) -> Result<(), Box<dyn std::error::Error>> {
         .filter(|f| !config.is_ignored(f.path()))
         .map(|f| f.path().to_string())
         .collect();
-    let cluster_result = cluster::cluster_files(&graph, &entrypoints, &changed_files);
+    let diff_stats: std::collections::HashMap<&str, (u32, u32, u32)> = diff_result
+        .files
+        .iter()
+        .map(|f| (f.path(), (f.additions, f.deletions, f.hunks.len() as u32)))
+        .collect();
+
+    let mut cluster_result = cluster::cluster_files(&graph, &entrypoints, &changed_files);
+    for group in cluster_result.groups.iter_mut() {
+        for fc in group.files.iter_mut() {
+            if let Some(&(additions, deletions, hunks)) = diff_stats.get(fc.path.as_str()) {
+                fc.changes.additions = additions;
+                fc.changes.deletions = deletions;
+                fc.changes.hunks = hunks;
+            }
+        }
+    }
 
     // Rank groups
     let weights = config.ranking.clone();

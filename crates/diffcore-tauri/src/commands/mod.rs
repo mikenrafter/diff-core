@@ -305,7 +305,22 @@ pub async fn analyze(
             .filter(|f| !config.is_ignored(f.path()))
             .map(|f| f.path().to_string())
             .collect();
-        let cluster_result = cluster::cluster_files(&graph, &entrypoints, &changed_files);
+        let diff_stats: std::collections::HashMap<&str, (u32, u32, u32)> = diff_result
+            .files
+            .iter()
+            .map(|f| (f.path(), (f.additions, f.deletions, f.hunks.len() as u32)))
+            .collect();
+
+        let mut cluster_result = cluster::cluster_files(&graph, &entrypoints, &changed_files);
+        for group in cluster_result.groups.iter_mut() {
+            for fc in group.files.iter_mut() {
+                if let Some(&(additions, deletions, hunks)) = diff_stats.get(fc.path.as_str()) {
+                    fc.changes.additions = additions;
+                    fc.changes.deletions = deletions;
+                    fc.changes.hunks = hunks;
+                }
+            }
+        }
 
         let weights = config.ranking.clone();
         let rank_inputs: Vec<GroupRankInput> = cluster_result
@@ -1060,20 +1075,20 @@ mod tests {
         assert!(back.status.is_none());
     }
 
-    #[test]
-    fn test_check_api_key_no_repo() {
+    #[tokio::test]
+    async fn test_check_api_key_no_repo() {
         // Without any env vars or config, should return false (no key configured)
         // Note: this test may pass or fail depending on whether env vars are set,
         // but it should never panic.
         let result = check_api_key(None);
-        assert!(result.is_ok());
+        assert!(result.await.is_ok());
     }
 
-    #[test]
-    fn test_check_api_key_invalid_path() {
+    #[tokio::test]
+    async fn test_check_api_key_invalid_path() {
         // Invalid path should not panic, should return Ok(bool)
         let result = check_api_key(Some("/nonexistent/path/to/repo".to_string()));
-        assert!(result.is_ok());
+        assert!(result.await.is_ok());
     }
 
     #[test]
@@ -1164,9 +1179,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_get_llm_settings_no_repo() {
-        let result = get_llm_settings(None);
+    #[tokio::test]
+    async fn test_get_llm_settings_no_repo() {
+        let result = get_llm_settings(None).await;
         assert!(result.is_ok());
         let settings = result.unwrap();
         assert!(!settings.provider.is_empty());
@@ -1174,9 +1189,9 @@ mod tests {
         assert!(!settings.global_config_path.is_empty());
     }
 
-    #[test]
-    fn test_get_llm_settings_invalid_path() {
-        let result = get_llm_settings(Some("/nonexistent/path".to_string()));
+    #[tokio::test]
+    async fn test_get_llm_settings_invalid_path() {
+        let result = get_llm_settings(Some("/nonexistent/path".to_string())).await;
         assert!(result.is_ok());
         let settings = result.unwrap();
         assert!(!settings.provider.is_empty());
@@ -1245,6 +1260,7 @@ mod tests {
                     changes: ChangeStats {
                         additions: 10,
                         deletions: 5,
+                        hunks: 1,
                     },
                     symbols_changed: vec![],
                 }],
