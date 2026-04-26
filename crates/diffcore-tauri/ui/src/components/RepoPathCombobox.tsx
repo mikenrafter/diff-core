@@ -39,17 +39,27 @@ export function RepoPathCombobox({
   const [activeIndex, setActiveIndex] = useState(0);
   const [backendSuggestions, setBackendSuggestions] = useState<string[]>([]);
 
-  useEffect(() => setDraft(value), [value]);
+  // Keep draft in sync while closed; while open, draft is user-owned.
+  useEffect(() => {
+    if (!open) setDraft(value);
+  }, [value, open]);
 
   // Close on outside click / Escape.
   useEffect(() => {
     if (!open) return;
     function onMouseDown(e: MouseEvent) {
       const t = e.target as Node | null;
-      if (t && wrapperRef.current && !wrapperRef.current.contains(t)) setOpen(false);
+      if (t && wrapperRef.current && !wrapperRef.current.contains(t)) {
+        setOpen(false);
+        commit(draft);
+      }
     }
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key === "Escape") {
+        setOpen(false);
+        // Revert uncommitted edits on Escape.
+        setDraft(value);
+      }
     }
     window.addEventListener("mousedown", onMouseDown);
     window.addEventListener("keydown", onKeyDown);
@@ -57,7 +67,7 @@ export function RepoPathCombobox({
       window.removeEventListener("mousedown", onMouseDown);
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [open]);
+  }, [open, draft, value]);
 
   const debouncedDraft = useDebouncedValue(draft, 200);
 
@@ -108,10 +118,14 @@ export function RepoPathCombobox({
     return out;
   }, [favorites, recents, backendSuggestions]);
 
+  // Favorites should always display, even while typing; other options are filtered.
   const filteredOptions = useMemo(() => {
     const q = draft.trim().toLowerCase();
-    if (!q) return allOptions;
-    return allOptions.filter((opt) => opt.path.toLowerCase().includes(q));
+    const favs = allOptions.filter((opt) => opt.kind === "favorite");
+    const others = allOptions.filter((opt) => opt.kind !== "favorite");
+    if (!q) return [...favs, ...others];
+    const filteredOthers = others.filter((opt) => opt.path.toLowerCase().includes(q));
+    return [...favs, ...filteredOthers];
   }, [allOptions, draft]);
 
   useEffect(() => {
@@ -135,35 +149,26 @@ export function RepoPathCombobox({
 
   return (
     <div ref={wrapperRef} className="repo-combobox">
-      <input
-        ref={(node) => {
-          localInputRef.current = node;
-          if (inputRef) inputRef.current = node;
-        }}
-        className="input repo-input"
-        type="text"
-        placeholder="Repository path…"
-        value={draft}
-        disabled={disabled}
-        onFocus={() => setOpen(true)}
-        onChange={(e) => {
-          setDraft(e.target.value);
-          setOpen(true);
-          setActiveIndex(0);
-        }}
-        onBlur={() => {
-          // Allow click selection to run first.
-          window.setTimeout(() => {
-            if (!wrapperRef.current?.contains(document.activeElement)) {
-              setOpen(false);
-              commit(draft);
-            }
-          }, 0);
+      <button
+        type="button"
+        className="btn branch-dropdown-trigger repo-combobox-trigger"
+        style={{ flex: 1, maxWidth: 400, justifyContent: "space-between" }}
+        onClick={() => {
+          if (disabled) return;
+          setOpen((v) => {
+            const next = !v;
+            if (next) setDraft(value);
+            return next;
+          });
         }}
         onKeyDown={(e) => {
-          if (!open && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
-            e.preventDefault();
-            setOpen(true);
+          if (disabled) return;
+          if (!open) {
+            if (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              setDraft(value);
+              setOpen(true);
+            }
             return;
           }
 
@@ -177,19 +182,27 @@ export function RepoPathCombobox({
             setActiveIndex((i) => (i - 1 + filteredOptions.length) % filteredOptions.length);
           } else if (e.key === "Enter") {
             e.preventDefault();
-            if (open && filteredOptions.length > 0) {
+            if (filteredOptions.length > 0) {
               pickAt(activeIndex);
-              return;
+            } else {
+              commit(draft);
+              setOpen(false);
             }
-            commit(draft);
-            if (draft.trim()) onAnalyze(draft.trim());
-            localInputRef.current?.blur();
           } else if (e.key === "Tab") {
             setOpen(false);
             commit(draft);
           }
         }}
-      />
+        disabled={disabled}
+        title={value ? value : "Select repository"}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
+        <span className="branch-name" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {value ? shortPath(value) : "Select repository…"}
+        </span>
+        <span className="dropdown-arrow">&#9662;</span>
+      </button>
 
       <button className="btn" onClick={onBrowse} disabled={disabled} title="Browse for a repository folder">
         Browse
@@ -208,27 +221,80 @@ export function RepoPathCombobox({
       </button>
 
       {open && (
-        <div className="branch-dropdown repo-combobox-menu" style={{ maxHeight: 220, overflowY: "auto", minWidth: 360 }}>
-          {filteredOptions.length === 0 ? (
-            <li className="branch-option disabled">No matches</li>
-          ) : (
-            filteredOptions.map((opt, idx) => {
-              const prefix = opt.kind === "favorite" ? "★ " : opt.kind === "recent" ? "" : "↳ ";
-              const isActive = idx === activeIndex;
-              return (
-                <li
-                  key={opt.key}
-                  className={`branch-option ${isActive ? "selected" : ""}`}
-                  onMouseEnter={() => setActiveIndex(idx)}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => pickAt(idx)}
-                  title={opt.path}
-                >
-                  <span className="branch-option-name">{prefix}{shortPath(opt.path)}</span>
-                </li>
-              );
-            })
-          )}
+        <div className="branch-dropdown repo-combobox-menu" style={{ minWidth: 420, paddingTop: 6 }}>
+          <div style={{ padding: "0 8px 8px 8px" }}>
+            <input
+              ref={(node) => {
+                localInputRef.current = node;
+                if (inputRef) inputRef.current = node;
+              }}
+              className="input"
+              type="text"
+              placeholder="Type to search or paste a repo path…"
+              value={draft}
+              onChange={(e) => {
+                setDraft(e.target.value);
+                setActiveIndex(0);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  if (filteredOptions.length === 0) return;
+                  setActiveIndex((i) => (i + 1) % filteredOptions.length);
+                } else if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  if (filteredOptions.length === 0) return;
+                  setActiveIndex((i) => (i - 1 + filteredOptions.length) % filteredOptions.length);
+                } else if (e.key === "Enter") {
+                  e.preventDefault();
+                  if (filteredOptions.length > 0) {
+                    pickAt(activeIndex);
+                    return;
+                  }
+                  commit(draft);
+                  if (draft.trim()) onAnalyze(draft.trim());
+                  setOpen(false);
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  setOpen(false);
+                  setDraft(value);
+                }
+              }}
+              onBlur={() => {
+                // If focus moved fully outside the combobox, close and commit.
+                window.setTimeout(() => {
+                  if (!wrapperRef.current?.contains(document.activeElement)) {
+                    setOpen(false);
+                    commit(draft);
+                  }
+                }, 0);
+              }}
+              style={{ width: "100%" }}
+              autoFocus
+            />
+          </div>
+          <div style={{ maxHeight: 220, overflowY: "auto" }}>
+            {filteredOptions.length === 0 ? (
+              <li className="branch-option disabled">No matches</li>
+            ) : (
+              filteredOptions.map((opt, idx) => {
+                const prefix = opt.kind === "favorite" ? "★ " : opt.kind === "recent" ? "" : "↳ ";
+                const isActive = idx === activeIndex;
+                return (
+                  <li
+                    key={opt.key}
+                    className={`branch-option ${isActive ? "selected" : ""}`}
+                    onMouseEnter={() => setActiveIndex(idx)}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => pickAt(idx)}
+                    title={opt.path}
+                  >
+                    <span className="branch-option-name">{prefix}{shortPath(opt.path)}</span>
+                  </li>
+                );
+              })
+            )}
+          </div>
         </div>
       )}
     </div>

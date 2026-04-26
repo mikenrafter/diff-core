@@ -130,6 +130,73 @@ pub async fn list_repo_path_suggestions(query: String) -> Result<Vec<String>, Co
             return Ok(vec![]);
         }
 
+        // If the user is typing a path, treat this as filesystem completion rather
+        // than fuzzy substring matching. This avoids suggesting non-existent
+        // "prefix" paths like ".../abcd" when only ".../abcdef" exists.
+        let is_path_like = query.contains('/') || query.contains('\\');
+        if is_path_like {
+            let raw = query.trim();
+            let raw_path = PathBuf::from(raw);
+
+            // Split into (existing_parent_dir, final_fragment)
+            let mut parent = raw_path.clone();
+            let mut fragment = String::new();
+            if raw.ends_with('/') || raw.ends_with('\\') {
+                fragment.clear();
+            } else {
+                fragment = raw_path
+                    .file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                parent = raw_path.parent().map(PathBuf::from).unwrap_or_else(|| raw_path.clone());
+            }
+
+            // Walk up until we find an existing directory (or give up).
+            let mut existing_parent = parent.clone();
+            while !existing_parent.is_dir() {
+                let Some(next) = existing_parent.parent().map(PathBuf::from) else {
+                    return Ok(vec![]);
+                };
+                existing_parent = next;
+            }
+
+            let frag_lower = fragment.to_lowercase();
+            let mut out: Vec<String> = Vec::new();
+            let read_dir = match std::fs::read_dir(&existing_parent) {
+                Ok(rd) => rd,
+                Err(_) => return Ok(vec![]),
+            };
+
+            for entry in read_dir.filter_map(Result::ok) {
+                let path = entry.path();
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with('.') || name == "node_modules" || name == "target" {
+                    continue;
+                }
+                let is_dir = match entry.file_type() {
+                    Ok(ft) => ft.is_dir(),
+                    Err(_) => path.is_dir(),
+                };
+                if !is_dir {
+                    continue;
+                }
+                if !frag_lower.is_empty() && !name.to_lowercase().starts_with(&frag_lower) {
+                    continue;
+                }
+                // Never traverse into `.git` itself; but it's fine to suggest the repo dir.
+                if name == ".git" {
+                    continue;
+                }
+                out.push(path.to_string_lossy().to_string());
+                if out.len() >= 25 {
+                    break;
+                }
+            }
+
+            out.sort();
+            return Ok(out);
+        }
+
         let root = std::env::current_dir()
             .map_err(|e| CommandError::Analysis(format!("cwd error: {}", e)))?;
 
@@ -166,6 +233,10 @@ pub async fn list_repo_path_suggestions(query: String) -> Result<Vec<String>, Co
                 if file_name.starts_with('.') || file_name == "node_modules" || file_name == "target" {
                     continue;
                 }
+                // Never suggest or descend into `.git` itself.
+                if file_name == ".git" {
+                    continue;
+                }
 
                 let is_dir = match entry.file_type() {
                     Ok(ft) => ft.is_dir(),
@@ -175,7 +246,10 @@ pub async fn list_repo_path_suggestions(query: String) -> Result<Vec<String>, Co
                     continue;
                 }
 
-                if depth < max_depth && seen.insert(path.clone()) {
+                // If this directory looks like a git repo (has a `.git` dir),
+                // treat it as a leaf: suggest it but don't descend into it.
+                let has_dot_git = path.join(".git").is_dir();
+                if depth < max_depth && !has_dot_git && seen.insert(path.clone()) {
                     queue.push_back((path.clone(), depth + 1));
                 }
 

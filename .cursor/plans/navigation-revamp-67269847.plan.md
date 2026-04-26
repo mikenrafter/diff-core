@@ -45,9 +45,10 @@ isProject: false
 ## Implementation plan (after spec approval)
 ### A) Repo path selection revamp
 - Replace repo path `<input>` + separate “Recent” popover with a **single combobox** control:
-  - An always-visible text box.
+  - A dropdown-style closed state (like the model selection dropdowns): shows the current repo (or a placeholder) and a caret.
+  - When opened, the dropdown contains a searchable text field (typeahead) plus the option list.
   - A dropdown of options containing:
-    - Favorites (pinned) entries (same rendering/behavior as other selectable entries).
+    - Favorites (pinned) entries (same rendering/behavior as other selectable entries). **Favorites are always displayed**, even when the user types a query (i.e. they are not filtered away).
     - Recent entries.
     - Typeahead suggestions.
   - Selecting an option commits `repoPath` immediately.
@@ -63,8 +64,13 @@ isProject: false
   - Debounce **backend** calls by ~200ms in UI (so backend work is throttled) while keeping the **UI filter immediate** for already-fetched results.
   - Suggested algorithm:
     - Never search global home.
-    - Search forward from the current repo-path working directory (PWD) only, breadth-first, **max depth 2**, **max 15 folders searched**.
-    - Rank candidates by fuzzy pertinence (must contain the query substring; then score by closeness/position).
+    - Suggestions must be **real existing directories** (never synthesize “prefix” paths that don’t exist).
+    - If the query looks like a path (contains `/` or `\`), treat it as **path completion**:
+      - Find the nearest existing parent directory and list its direct child directories whose names start with the final fragment.
+      - This should avoid junk suggestions like `.../abcd`, `.../abcde` when only `.../abcdef` exists.
+    - Otherwise, search forward from the current working directory (PWD) only, breadth-first, **max depth 2**, **max 15 folders searched**.
+    - When scanning, if a directory contains a `.git` subdirectory, treat it as a repository candidate **and do not descend into it** (don’t retrieve its subfolders).
+    - Rank candidates by fuzzy pertinence (substring match against the full path; then score by closeness/position).
     - Example: query `/home/tester/source/repos/pro` can suggest sibling/descendant dirs within lookahead: `.../projectA`, `.../projectB`, `.../example/professor`, `.../example/rocket-propellant`.
 - Fix Browse:
   - Add required dialog permission in `crates/diffcore-tauri/capabilities/default.json` for Tauri v2 plugin dialog.
