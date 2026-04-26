@@ -689,9 +689,17 @@ pub(super) fn extract_diff(
             output::diff_source_range(range, diff.base_sha.as_deref(), diff.head_sha.as_deref());
         Ok((diff, source))
     } else if staged {
-        let diff = git::diff_staged(repo).map_err(|e| CommandError::Git(format!("{}", e)))?;
-        let source = output::diff_source_staged();
-        Ok((diff, source))
+        if let Some(ref base_ref) = base {
+            let diff = git::diff_commit_to_staged(repo, base_ref)
+                .map_err(|e| CommandError::Git(format!("{}", e)))?;
+            let source =
+                output::diff_source_worktree(Some(base_ref.as_str()), Some("staged"), diff.base_sha.as_deref(), None);
+            Ok((diff, source))
+        } else {
+            let diff = git::diff_staged(repo).map_err(|e| CommandError::Git(format!("{}", e)))?;
+            let source = output::diff_source_staged();
+            Ok((diff, source))
+        }
     } else if unstaged {
         let diff = git::diff_unstaged(repo).map_err(|e| CommandError::Git(format!("{}", e)))?;
         let source = output::diff_source_unstaged();

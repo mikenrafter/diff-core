@@ -51,11 +51,11 @@ pub fn build_analysis_output(
         langs
     };
 
-    // Build diff stats lookup: file path → (additions, deletions)
-    let diff_stats: std::collections::HashMap<&str, (u32, u32)> = diff_result
+    // Build diff stats lookup: file path → (additions, deletions, hunks)
+    let diff_stats: std::collections::HashMap<&str, (u32, u32, u32)> = diff_result
         .files
         .iter()
-        .map(|f| (f.path(), (f.additions, f.deletions)))
+        .map(|f| (f.path(), (f.additions, f.deletions, f.hunks.len() as u32)))
         .collect();
 
     // Apply ranking to groups: update risk_score, review_order, and enrich change stats.
@@ -68,11 +68,12 @@ pub fn build_analysis_output(
                 .files
                 .iter()
                 .map(|fc| {
-                    if let Some(&(additions, deletions)) = diff_stats.get(fc.path.as_str()) {
+                    if let Some(&(additions, deletions, hunks)) = diff_stats.get(fc.path.as_str()) {
                         FileChange {
                             changes: ChangeStats {
                                 additions,
                                 deletions,
+                                hunks,
                             },
                             ..fc.clone()
                         }
@@ -104,7 +105,7 @@ pub fn build_analysis_output(
     // compatibility; `file_changes` carries the enriched data for UI consumers.
     let infrastructure_group = cluster_result.infrastructure.as_ref().map(|ig| {
         let make_fc = |path: &String| -> FileChange {
-            let (additions, deletions) = diff_stats.get(path.as_str()).copied().unwrap_or((0, 0));
+            let (additions, deletions, hunks) = diff_stats.get(path.as_str()).copied().unwrap_or((0, 0, 0));
             FileChange {
                 path: path.clone(),
                 flow_position: 0,
@@ -112,6 +113,7 @@ pub fn build_analysis_output(
                 changes: ChangeStats {
                     additions,
                     deletions,
+                    hunks,
                 },
                 symbols_changed: vec![],
             }
@@ -444,6 +446,7 @@ mod tests {
                     changes: ChangeStats {
                         additions: 25,
                         deletions: 10,
+                        hunks: 0,
                     },
                     symbols_changed: vec!["POST".to_string()],
                 },
@@ -454,6 +457,7 @@ mod tests {
                     changes: ChangeStats {
                         additions: 15,
                         deletions: 5,
+                        hunks: 0,
                     },
                     symbols_changed: vec!["createUser".to_string()],
                 },
@@ -464,6 +468,7 @@ mod tests {
                     changes: ChangeStats {
                         additions: 8,
                         deletions: 2,
+                        hunks: 0,
                     },
                     symbols_changed: vec!["insert".to_string()],
                 },
@@ -500,6 +505,7 @@ mod tests {
                         changes: ChangeStats {
                             additions: 3,
                             deletions: 1,
+                            hunks: 0,
                         },
                         symbols_changed: vec!["healthCheck".to_string()],
                     }],
@@ -992,6 +998,7 @@ mod tests {
                     changes: ChangeStats {
                         additions: 1,
                         deletions: 0,
+                        hunks: 0,
                     },
                     symbols_changed: vec![],
                 },
@@ -1002,6 +1009,7 @@ mod tests {
                     changes: ChangeStats {
                         additions: 1,
                         deletions: 0,
+                        hunks: 0,
                     },
                     symbols_changed: vec![],
                 },
@@ -1043,6 +1051,7 @@ mod tests {
                 changes: ChangeStats {
                     additions: 1,
                     deletions: 0,
+                    hunks: 0,
                 },
                 symbols_changed: vec![],
             }],
@@ -1072,6 +1081,7 @@ mod tests {
                 changes: ChangeStats {
                     additions: 1,
                     deletions: 0,
+                    hunks: 0,
                 },
                 symbols_changed: vec![],
             }],
@@ -1110,6 +1120,7 @@ mod tests {
                         changes: ChangeStats {
                             additions: 1,
                             deletions: 0,
+                            hunks: 0,
                         },
                         symbols_changed: vec![],
                     },
@@ -1120,6 +1131,7 @@ mod tests {
                         changes: ChangeStats {
                             additions: 1,
                             deletions: 0,
+                            hunks: 0,
                         },
                         symbols_changed: vec![],
                     },

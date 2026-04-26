@@ -25,6 +25,7 @@ export interface DiffSource {
 export interface ChangeStats {
   additions: number;
   deletions: number;
+  hunks: number;
 }
 
 export interface FlowEdge {

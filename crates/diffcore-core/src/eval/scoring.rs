@@ -395,6 +395,7 @@ mod tests {
                     changes: ChangeStats {
                         additions: 5,
                         deletions: 2,
+                        hunks: 0,
                     },
                     symbols_changed: vec![],
                 }],
@@ -437,6 +438,7 @@ mod tests {
                     changes: ChangeStats {
                         additions: 5,
                         deletions: 2,
+                        hunks: 0,
                     },
                     symbols_changed: vec![],
                 }],

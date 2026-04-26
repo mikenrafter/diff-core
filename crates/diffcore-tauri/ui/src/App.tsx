@@ -63,7 +63,7 @@ type ReplayHunk = {
 const ACTIVITY_STREAM_LIMIT = 10;
 // STATE_SAVE_RESTORE_ENABLED and IS_TAURI are imported from ./utils/tauriUtils
 
-type CompareMode = "branch" | "unstaged_to_staged" | "invalid";
+type CompareMode = "branch" | "unstaged_to_staged" | "staged_to_commit" | "invalid";
 
 type PersistedAppState = {
   version: number;
@@ -180,9 +180,12 @@ export default function App() {
     const targetIsSpecial = targetIsStaged || baseRef === COMPARE_TARGET_UNSTAGED;
 
     if (sourceIsUnstaged && targetIsStaged) return "unstaged_to_staged";
+    if (headRef === COMPARE_TARGET_STAGED && recentCommits.some((c) => c.sha === baseRef)) {
+      return "staged_to_commit";
+    }
     if (!sourceIsSpecial && !targetIsSpecial) return "branch";
     return "invalid";
-  }, [headRef, baseRef]);
+  }, [headRef, baseRef, recentCommits]);
 
   const analysisDiffArgs = useMemo(() => {
     if (comparisonMode === "unstaged_to_staged") {
@@ -191,6 +194,16 @@ export default function App() {
         head: null as string | null,
         staged: false,
         unstaged: true,
+        prPreview: false,
+        includeUncommitted: false,
+      };
+    }
+    if (comparisonMode === "staged_to_commit") {
+      return {
+        base: baseRef,
+        head: null as string | null,
+        staged: true,
+        unstaged: false,
         prPreview: false,
         includeUncommitted: false,
       };
@@ -214,6 +227,15 @@ export default function App() {
         head: null as string | null,
         staged: false,
         unstaged: true,
+        includeUncommitted: false,
+      };
+    }
+    if (comparisonMode === "staged_to_commit") {
+      return {
+        base: baseRef,
+        head: null as string | null,
+        staged: true,
+        unstaged: false,
         includeUncommitted: false,
       };
     }
@@ -296,6 +318,9 @@ export default function App() {
   const [infraExpanded, setInfraExpanded] = useState(false);
   const [infraShowAll, setInfraShowAll] = useState(false);
   const [infraSubGroupsExpanded, setInfraSubGroupsExpanded] = useState<Set<string>>(new Set());
+
+  // Flow group expansion state (independent of selection)
+  const [expandedGroupIds, setExpandedGroupIds] = useState<Set<string>>(new Set());
 
   // Right panel collapse/resize state
   const [rightPanelCollapsed, setRightPanelCollapsed] = useState(false);
@@ -1328,6 +1353,7 @@ export default function App() {
     // Reset infrastructure group state
     setInfraExpanded(false);
     setInfraShowAll(false);
+    setExpandedGroupIds(new Set());
     // Reset comments
     setComments([]);
     setCommentInput(null);
@@ -1363,6 +1389,9 @@ export default function App() {
         const sorted = [...result.groups].sort(
           (a, b) => a.review_order - b.review_order,
         );
+        // Defaults after analysis: first group expanded, Ungrouped expanded
+        setExpandedGroupIds(new Set([sorted[0].id]));
+        setInfraExpanded(true);
         handleSelectGroup(sorted[0]);
       }
       // Check for cached refinement and auto-apply if found
@@ -3078,6 +3107,7 @@ export default function App() {
     currentReplayHunks, replayHunks, hasNextReplayHunk, hasPrevReplayHunk,
     infraExpanded, setInfraExpanded, infraShowAll, setInfraShowAll,
     infraSubGroupsExpanded, setInfraSubGroupsExpanded,
+    expandedGroupIds, setExpandedGroupIds,
     originalGroups, refinedGroups, refinementResponse, showRefined, groupListTransitionState,
     refinementVerdict, resolvedRefinementProvider, resolvedRefinementModel,
     refinementProvider, refinementModel,

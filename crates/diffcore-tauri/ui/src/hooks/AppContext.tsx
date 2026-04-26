@@ -58,7 +58,7 @@ export type ReplayHunk = {
 };
 
 /** How the two selected refs are being compared. */
-export type CompareMode = "branch" | "unstaged_to_staged" | "invalid";
+export type CompareMode = "branch" | "unstaged_to_staged" | "staged_to_commit" | "invalid";
 
 /** External editor launched from the "Open With" toolbar button. */
 export type EditorId = "vscode" | "cursor" | "zed" | "vim" | "terminal";
@@ -285,6 +285,8 @@ export interface AppContextValue {
   setInfraShowAll: React.Dispatch<React.SetStateAction<boolean>>;
   infraSubGroupsExpanded: Set<string>;
   setInfraSubGroupsExpanded: React.Dispatch<React.SetStateAction<Set<string>>>;
+  expandedGroupIds: Set<string>;
+  setExpandedGroupIds: React.Dispatch<React.SetStateAction<Set<string>>>;
 
   // ─── Refinement ───────────────────────────────────────────────────────────
   originalGroups: FlowGroup[] | null;

@@ -331,6 +331,7 @@ mod tests {
                         changes: ChangeStats {
                             additions: 20,
                             deletions: 0,
+                            hunks: 0,
                         },
                         symbols_changed: vec!["POST".to_string()],
                     },
@@ -341,6 +342,7 @@ mod tests {
                         changes: ChangeStats {
                             additions: 15,
                             deletions: 0,
+                            hunks: 0,
                         },
                         symbols_changed: vec!["createUser".to_string()],
                     },

@@ -922,6 +922,7 @@ fn remove_file_from_group_or_infra(
             changes: ChangeStats {
                 additions: 0,
                 deletions: 0,
+                hunks: 0,
             },
             symbols_changed: vec![],
         });
@@ -1022,6 +1023,7 @@ fn apply_split(source: &FlowGroup, split: &RefinementSplit, offset: usize) -> Ve
                             changes: ChangeStats {
                                 additions: 0,
                                 deletions: 0,
+                                hunks: 0,
                             },
                             symbols_changed: vec![],
                         }
@@ -1080,6 +1082,7 @@ mod tests {
             changes: ChangeStats {
                 additions: 10,
                 deletions: 5,
+                hunks: 0,
             },
             symbols_changed: vec![],
         }

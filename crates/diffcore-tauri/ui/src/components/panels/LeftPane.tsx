@@ -32,6 +32,7 @@ export function LeftPane({ embedded = false }: { embedded?: boolean }) {
     infraExpanded, setInfraExpanded,
     infraShowAll, setInfraShowAll,
     infraSubGroupsExpanded, setInfraSubGroupsExpanded,
+    expandedGroupIds, setExpandedGroupIds,
     aiAccessReady, repoPath, showToast,
     pendingScrollToCommentRef, setActiveCommentId,
   } = useAppContext();
@@ -247,6 +248,7 @@ export function LeftPane({ embedded = false }: { embedded?: boolean }) {
                 const changeIndicator = showRefined
                   ? getGroupChangeIndicator(group, refinementResponse)
                   : null;
+                const expanded = expandedGroupIds.has(group.id);
 
                 return (
                   <div
@@ -254,7 +256,22 @@ export function LeftPane({ embedded = false }: { embedded?: boolean }) {
                     className={`group-item ${selectedGroup?.id === group.id ? "selected" : ""} ${changeIndicator ? "refined-change" : ""} ${reviewedGroupIds.has(group.id) ? "group-reviewed" : ""}`}
                     onClick={() => handleSelectGroup(group)}
                   >
-                    <div className="group-header">
+                    <div
+                      className="group-header"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setExpandedGroupIds((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(group.id)) next.delete(group.id);
+                          else next.add(group.id);
+                          return next;
+                        });
+                      }}
+                      title="Toggle flow group"
+                    >
+                      <span className="group-expand-indicator">
+                        {expanded ? "\u25BC" : "\u25B6"}
+                      </span>
                       <span
                         className={`group-review-check ${reviewedGroupIds.has(group.id) ? "checked" : ""}`}
                         title={reviewedGroupIds.has(group.id) ? "Mark as unreviewed" : "Mark as reviewed"}
@@ -292,7 +309,7 @@ export function LeftPane({ embedded = false }: { embedded?: boolean }) {
                         </span>
                       </div>
                     )}
-                    {selectedGroup?.id === group.id && (
+                    {expanded && (
                       <ul className={`file-list ${reviewedGroupIds.has(group.id) ? "file-list-collapsed" : ""}`}>
                         {group.files.map((file) => {
                           const fileMoved = showRefined
@@ -317,6 +334,7 @@ export function LeftPane({ embedded = false }: { embedded?: boolean }) {
                                 roleBadge={file.role}
                                 additions={file.changes.additions}
                                 deletions={file.changes.deletions}
+                                hunks={file.changes.hunks}
                                 reviewedInReplay={replayActive && replayVisited.has(file.path)}
                                 variant="two-line"
                                 movedFrom={fileMoved?.from}

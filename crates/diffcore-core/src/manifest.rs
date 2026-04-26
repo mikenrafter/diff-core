@@ -255,6 +255,7 @@ mod tests {
                             changes: ChangeStats {
                                 additions: 10,
                                 deletions: 2,
+                                hunks: 0,
                             },
                             symbols_changed: vec!["login".to_string()],
                         },
@@ -265,6 +266,7 @@ mod tests {
                             changes: ChangeStats {
                                 additions: 5,
                                 deletions: 0,
+                                hunks: 0,
                             },
                             symbols_changed: vec!["getUser".to_string()],
                         },
@@ -288,6 +290,7 @@ mod tests {
                         changes: ChangeStats {
                             additions: 3,
                             deletions: 1,
+                            hunks: 0,
                         },
                         symbols_changed: vec![],
                     }],

@@ -158,6 +158,31 @@ pub fn diff_staged(repo: &Repository) -> Result<DiffResult, GitError> {
     })
 }
 
+/// Extract staged (index) changes relative to a specific commit/tree.
+///
+/// Equivalent to: `git diff <commit> --cached`
+pub fn diff_commit_to_staged(repo: &Repository, base_ref: &str) -> Result<DiffResult, GitError> {
+    let obj = repo
+        .revparse_single(base_ref)
+        .map_err(|_| GitError::RefNotFound(base_ref.to_string()))?;
+    let base_commit = obj
+        .peel_to_commit()
+        .map_err(|_| GitError::RefNotFound(base_ref.to_string()))?;
+    let base_tree = base_commit.tree()?;
+
+    let mut opts = DiffOptions::new();
+    opts.context_lines(3);
+
+    let diff = repo.diff_tree_to_index(Some(&base_tree), None, Some(&mut opts))?;
+    let files = extract_file_diffs(repo, &diff)?;
+
+    Ok(DiffResult {
+        files,
+        base_sha: Some(base_commit.id().to_string()),
+        head_sha: None,
+    })
+}
+
 /// Extract unstaged (working directory) changes.
 pub fn diff_unstaged(repo: &Repository) -> Result<DiffResult, GitError> {
     let mut opts = DiffOptions::new();

@@ -1527,6 +1527,15 @@ body {
   padding: 10px 12px;
 }
 
+.group-expand-indicator {
+  width: 14px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .group-name {
   font-size: 12px;
   font-weight: 500;
@@ -3798,6 +3807,8 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  max-height: 100vh;
+  overflow-y: auto;
   transition:
     opacity 160ms ease,
     transform 160ms ease,
@@ -3956,6 +3967,11 @@ body {
 
 .file-display-deletions {
   color: #f38ba8;
+}
+
+.file-display-hunks {
+  color: var(--text-muted);
+  opacity: 0.8;
 }
 
 .file-display-role-label {

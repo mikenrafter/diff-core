@@ -45,6 +45,8 @@ pub struct FlowEdge {
 pub struct ChangeStats {
     pub additions: u32,
     pub deletions: u32,
+    /// Number of diff hunks for this file in the active diff.
+    pub hunks: u32,
 }
 
 /// A changed file within a flow group.
@@ -288,6 +290,7 @@ mod tests {
         ChangeStats {
             additions: 25,
             deletions: 10,
+            hunks: 3,
         }
     }
 
@@ -430,6 +433,7 @@ mod tests {
                 changes: ChangeStats {
                     additions: 1,
                     deletions: 0,
+                    hunks: 0,
                 },
                 symbols_changed: vec![],
             };
@@ -806,6 +810,7 @@ mod tests {
             changes: ChangeStats {
                 additions: 1,
                 deletions: 0,
+                hunks: 0,
             },
             symbols_changed: vec!["default".into()],
         };
@@ -941,9 +946,10 @@ mod tests {
         }
 
         fn arb_change_stats() -> impl Strategy<Value = ChangeStats> {
-            (0u32..10000, 0u32..10000).prop_map(|(additions, deletions)| ChangeStats {
+            (0u32..10000, 0u32..10000, 0u32..1000).prop_map(|(additions, deletions, hunks)| ChangeStats {
                 additions,
                 deletions,
+                hunks,
             })
         }
 

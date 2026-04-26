@@ -14,6 +14,8 @@ export interface FileDisplayProps {
   additions?: number;
   /** Deletions count for the red `-N` chip. */
   deletions?: number;
+  /** Number of diff hunks for this file. Rendered as muted `(N)` in the diffcount chip. */
+  hunks?: number;
   /** Suppresses the `+adds -dels` chip even if numbers are provided. */
   hideChanges?: boolean;
   /** Visual variant. One-line is the existing compact row; two-line adds a
@@ -48,6 +50,7 @@ export default function FileDisplay({
   roleBadge,
   additions,
   deletions,
+  hunks,
   hideChanges,
   variant = "one-line",
   movedFrom,
@@ -68,6 +71,9 @@ export default function FileDisplay({
       <span className="file-display-additions">+{additions ?? 0}</span>
       <span className="file-display-changes-sep">/</span>
       <span className="file-display-deletions">-{deletions ?? 0}</span>
+      {hunks != null && (
+        <span className="file-display-hunks">&nbsp;({hunks})</span>
+      )}
     </span>
   );
 

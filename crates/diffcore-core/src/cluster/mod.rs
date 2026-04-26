@@ -170,6 +170,7 @@ fn build_no_entrypoint_component_groups(
                     changes: ChangeStats {
                         additions: 0,
                         deletions: 0,
+                        hunks: 0,
                     },
                     symbols_changed: vec![],
                 })
@@ -225,6 +226,7 @@ fn build_no_entrypoint_directory_groups(source_files: &[String]) -> Vec<FlowGrou
                         changes: ChangeStats {
                             additions: 0,
                             deletions: 0,
+                            hunks: 0,
                         },
                         symbols_changed: vec![],
                     })
@@ -552,6 +554,7 @@ fn cluster_files_internal(
                     changes: ChangeStats {
                         additions: 0,
                         deletions: 0,
+                        hunks: 0,
                     },
                     symbols_changed: vec![],
                 }
@@ -590,6 +593,7 @@ fn cluster_files_internal(
                 changes: ChangeStats {
                     additions: 0,
                     deletions: 0,
+                    hunks: 0,
                 },
                 symbols_changed: vec![],
             });
@@ -643,6 +647,7 @@ fn cluster_files_internal(
                 changes: ChangeStats {
                     additions: 0,
                     deletions: 0,
+                    hunks: 0,
                 },
                 symbols_changed: vec![],
             });
