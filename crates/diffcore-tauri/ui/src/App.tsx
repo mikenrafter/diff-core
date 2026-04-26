@@ -302,6 +302,7 @@ export default function App() {
   const diffViewerRef = useRef<DiffViewerHandle>(null);
   const repoInputRef = useRef<HTMLInputElement>(null);
   const launchDirectoryCheckedRef = useRef(false);
+  const [diffSplitRatio, setDiffSplitRatio] = useState(0.5);
 
   // Annotation sub-tab: "info" | "graph" | "edges"
   const [annotationSubTab, setAnnotationSubTab] = useState<"info" | "graph" | "edges">("info");
@@ -809,6 +810,7 @@ export default function App() {
     const favoriteRaw = window.localStorage.getItem("diffcore.favoriteRepos");
     const inspectorWidthRaw = window.localStorage.getItem("diffcore.inspectorWidth");
     const groupsWidthRaw = window.localStorage.getItem("diffcore.groupsWidth");
+    const diffSplitRatioRaw = window.localStorage.getItem("diffcore.diffSplitRatio");
     if (recentRaw) {
       try {
         const parsed = JSON.parse(recentRaw);
@@ -834,6 +836,11 @@ export default function App() {
     if (Number.isFinite(groupsWidth) && groupsWidth > 0) {
       setGroupsPanelWidth(Math.max(240, Math.min(900, groupsWidth)));
     }
+
+    const ratio = Number(diffSplitRatioRaw);
+    if (Number.isFinite(ratio) && ratio > 0) {
+      setDiffSplitRatio(Math.max(0.15, Math.min(0.85, ratio)));
+    }
   }, []);
 
   useEffect(() => {
@@ -851,6 +858,10 @@ export default function App() {
   useEffect(() => {
     window.localStorage.setItem("diffcore.groupsWidth", String(groupsPanelWidth));
   }, [groupsPanelWidth]);
+
+  useEffect(() => {
+    window.localStorage.setItem("diffcore.diffSplitRatio", String(diffSplitRatio));
+  }, [diffSplitRatio]);
 
   useEffect(() => {
     const path = repoPath.trim();
@@ -3163,6 +3174,7 @@ export default function App() {
     navigateReplayHunk, commentOnCurrentReplayHunk,
     goToReplayStep, exitReplay,
     diffViewerRef, editsEnabled, shouldRenderSideBySide,
+    diffSplitRatio, setDiffSplitRatio,
     codeCommentsForSelectedFile,
     setActiveCommentId, setRightPanelTab, rightPanelCollapsed, setRightPanelCollapsed,
     handleGoToDefinition,
@@ -3178,6 +3190,7 @@ export default function App() {
     navigateReplayHunk, commentOnCurrentReplayHunk,
     goToReplayStep, exitReplay,
     diffViewerRef, editsEnabled, shouldRenderSideBySide,
+    diffSplitRatio, setDiffSplitRatio,
     codeCommentsForSelectedFile,
     setActiveCommentId, setRightPanelTab, rightPanelCollapsed, setRightPanelCollapsed,
     handleGoToDefinition,

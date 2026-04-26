@@ -38,6 +38,9 @@ export interface DiffContextValue {
   diffViewerRef: MutableRefObject<DiffViewerHandle | null>;
   editsEnabled: boolean;
   shouldRenderSideBySide: boolean;
+  /** Persisted Monaco split-view ratio when side-by-side is enabled. */
+  diffSplitRatio: number;
+  setDiffSplitRatio: React.Dispatch<React.SetStateAction<number>>;
   codeCommentsForSelectedFile: ReviewComment[];
   setActiveCommentId: React.Dispatch<React.SetStateAction<string | null>>;
   setRightPanelTab: React.Dispatch<React.SetStateAction<"activity" | "annotations" | "source" | "comments">>;

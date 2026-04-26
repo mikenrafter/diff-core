@@ -24,6 +24,7 @@ export const CenterPane = memo(function CenterPane() {
     goToReplayStep, exitReplay,
     openTabs, handleSelectFile, closeTab, setTabContextMenu,
     diffViewerRef, editsEnabled, shouldRenderSideBySide,
+    diffSplitRatio, setDiffSplitRatio,
     codeCommentsForSelectedFile,
     setActiveCommentId, setRightPanelTab, rightPanelCollapsed, setRightPanelCollapsed,
     handleGoToDefinition,
@@ -212,6 +213,8 @@ export const CenterPane = memo(function CenterPane() {
                 fileDiff={fileDiff}
                 editable={editsEnabled}
                 renderSideBySide={shouldRenderSideBySide}
+                splitViewRatio={diffSplitRatio}
+                onSplitViewRatioChange={setDiffSplitRatio}
                 onCommentRequest={handleDiffCommentRequest}
                 codeComments={codeCommentsForSelectedFile}
                 onGlyphClick={(commentId) => {

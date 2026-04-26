@@ -30,6 +30,10 @@ interface DiffViewerProps {
   editable?: boolean;
   /** Whether to render side-by-side (true) or inline/unified (false). Default: true. */
   renderSideBySide?: boolean;
+  /** Initial / persisted split ratio for side-by-side mode (originalWidth / totalWidth). */
+  splitViewRatio?: number;
+  /** Fired when the user drags the split-view handle (side-by-side only). */
+  onSplitViewRatioChange?: (ratio: number) => void;
   /** Called when user selects lines and clicks "Comment" in the modified editor. */
   onCommentRequest?: (startLine: number, endLine: number, selectedCode: string) => void;
   /** Comments for the current file (code-level only). */
@@ -45,7 +49,7 @@ interface DiffViewerProps {
 }
 
 /** Monaco-based side-by-side diff viewer for the center panel. */
-const DiffViewer = forwardRef<DiffViewerHandle, DiffViewerProps>(function DiffViewer({ fileDiff, editable = false, onCommentRequest, codeComments, onGlyphClick, onGoToDefinition, renderSideBySide: renderSideBySideProp = true, onEditedContentChange, onDiffHunksChange }, ref) {
+const DiffViewer = forwardRef<DiffViewerHandle, DiffViewerProps>(function DiffViewer({ fileDiff, editable = false, onCommentRequest, codeComments, onGlyphClick, onGoToDefinition, renderSideBySide: renderSideBySideProp = true, splitViewRatio, onSplitViewRatioChange, onEditedContentChange, onDiffHunksChange }, ref) {
   const [selectionRange, setSelectionRange] = useState<{ startLine: number; endLine: number } | null>(null);
   const [commentBtnPos, setCommentBtnPos] = useState<{ top: number; left: number } | null>(null);
   const editorRef = useRef<any>(null);
@@ -55,6 +59,8 @@ const DiffViewer = forwardRef<DiffViewerHandle, DiffViewerProps>(function DiffVi
 
   const decorationsRef = useRef<any>(null);
   const baselineModifiedContentRef = useRef(fileDiff?.new_content || "");
+  const splitRatioTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastSplitRatioRef = useRef<number | null>(null);
 
   useEffect(() => {
     baselineModifiedContentRef.current = fileDiff?.new_content || "";
@@ -246,6 +252,36 @@ const DiffViewer = forwardRef<DiffViewerHandle, DiffViewerProps>(function DiffVi
         onEditedContentChange(newContent, hunks);
       });
 
+      // Persist split ratio whenever the user drags the diff split sash.
+      // We infer it from layout widths, throttled to avoid spamming state while dragging.
+      if (renderSideBySideProp && onSplitViewRatioChange && originalEditor?.onDidLayoutChange) {
+        const recomputeAndEmit = () => {
+          try {
+            const o = originalEditor.getLayoutInfo?.();
+            const m = modifiedEditor.getLayoutInfo?.();
+            const ow = o?.width ?? 0;
+            const mw = m?.width ?? 0;
+            const total = ow + mw;
+            if (total <= 0) return;
+            const raw = ow / total;
+            // Keep within a reasonable range so weird layout transitions don't poison persistence.
+            const ratio = Math.max(0.15, Math.min(0.85, raw));
+            if (lastSplitRatioRef.current != null && Math.abs(lastSplitRatioRef.current - ratio) < 0.002) {
+              return;
+            }
+            lastSplitRatioRef.current = ratio;
+            if (splitRatioTimerRef.current) clearTimeout(splitRatioTimerRef.current);
+            splitRatioTimerRef.current = setTimeout(() => {
+              onSplitViewRatioChange(ratio);
+            }, 150);
+          } catch {
+            // ignore layout inference failures
+          }
+        };
+        originalEditor.onDidLayoutChange(recomputeAndEmit);
+        modifiedEditor.onDidLayoutChange(recomputeAndEmit);
+      }
+
       editor.onDidUpdateDiff?.(() => {
         if (!onDiffHunksChange) return;
         const model = modifiedEditor.getModel();
@@ -291,6 +327,12 @@ const DiffViewer = forwardRef<DiffViewerHandle, DiffViewerProps>(function DiffVi
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
+
+  useEffect(() => {
+    return () => {
+      if (splitRatioTimerRef.current) clearTimeout(splitRatioTimerRef.current);
+    };
+  }, []);
 
   // Re-apply decorations when codeComments changes (e.g., after adding/deleting a comment)
   useEffect(() => {
@@ -428,6 +470,7 @@ const DiffViewer = forwardRef<DiffViewerHandle, DiffViewerProps>(function DiffVi
           readOnlyMessage: { value: "" },
           renderSideBySide: renderSideBySideProp,
           enableSplitViewResizing: true,
+          splitViewDefaultRatio: splitViewRatio,
           automaticLayout: true,
           scrollBeyondLastLine: false,
           minimap: { enabled: false },
