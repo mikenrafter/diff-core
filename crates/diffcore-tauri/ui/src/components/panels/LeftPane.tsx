@@ -16,6 +16,7 @@ export function LeftPane({ embedded = false }: { embedded?: boolean }) {
     handleSelectGroup, openFileInTab, reviewedGroupIds, toggleGroupReviewed,
     replayActive, replayVisited,
     comments, exportComments,
+    monacoHunkCounts,
     showRefined, refinedGroups, originalGroups, refinementProvider, refinementModel,
     refinementResponse, refining, runRefinement, toggleRefinedView,
     resolvedRefinementProvider, resolvedRefinementModel,
@@ -334,7 +335,7 @@ export function LeftPane({ embedded = false }: { embedded?: boolean }) {
                                 roleBadge={file.role}
                                 additions={file.changes.additions}
                                 deletions={file.changes.deletions}
-                                hunks={file.changes.hunks}
+                                hunks={monacoHunkCounts.get(file.path) ?? file.changes.hunks}
                                 reviewedInReplay={replayActive && replayVisited.has(file.path)}
                                 variant="two-line"
                                 movedFrom={fileMoved?.from}

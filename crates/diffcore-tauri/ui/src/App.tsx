@@ -273,6 +273,7 @@ export default function App() {
   const [replayHunkIndex, setReplayHunkIndex] = useState(0);
   const [replayViewedHunkIds, setReplayViewedHunkIds] = useState<Set<string>>(new Set());
   const [currentReplayHunks, setCurrentReplayHunks] = useState<ReplayHunk[]>([]);
+  const [monacoHunkCounts, setMonacoHunkCounts] = useState<Map<string, number>>(new Map());
 
   // Refinement state
   const [originalGroups, setOriginalGroups] = useState<FlowGroup[] | null>(null);
@@ -3019,6 +3020,11 @@ export default function App() {
     (hunks: EditedHunk[]) => {
       const file = selectedFileRef.current;
       if (!file) return;
+      setMonacoHunkCounts((prev) => {
+        const next = new Map(prev);
+        next.set(file, hunks.length);
+        return next;
+      });
       const visible = mapEditedHunksToReplayHunks(file, hunks);
       setCurrentReplayHunks(visible);
 
@@ -3142,6 +3148,7 @@ export default function App() {
     openInEditor, runCrossFileSearch, openCrossFileSearchResult, startRightPanelDrag, startGroupsPanelDrag,
     restoreLastSessionState,
     handleDiffCommentRequest, handleDiffEditorContentChange, handleDiffHunksChanged,
+    monacoHunkCounts,
   };
 
   // Dedicated diff/Monaco context to isolate expensive rerenders from unrelated state changes.

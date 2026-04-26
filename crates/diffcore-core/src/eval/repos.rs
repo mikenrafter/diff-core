@@ -1377,6 +1377,7 @@ mod tests {
                     changes: crate::types::ChangeStats {
                         additions: 0,
                         deletions: 0,
+                        hunks: 0,
                     },
                     symbols_changed: vec![],
                 })

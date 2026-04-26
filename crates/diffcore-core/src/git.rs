@@ -113,7 +113,9 @@ pub fn diff_refs(
     let head_tree = head_commit.tree()?;
 
     let mut opts = DiffOptions::new();
-    opts.context_lines(3);
+    // Use 0 context lines so "hunk count" matches discrete change blocks
+    // (closer to what reviewers/UI diff viewers consider a hunk).
+    opts.context_lines(0);
 
     let mut diff = repo.diff_tree_to_tree(Some(&base_tree), Some(&head_tree), Some(&mut opts))?;
     find_renames(&mut diff)?;
@@ -146,7 +148,7 @@ pub fn diff_staged(repo: &Repository) -> Result<DiffResult, GitError> {
     let head_tree = head_commit.tree()?;
 
     let mut opts = DiffOptions::new();
-    opts.context_lines(3);
+    opts.context_lines(0);
 
     let diff = repo.diff_tree_to_index(Some(&head_tree), None, Some(&mut opts))?;
     let files = extract_file_diffs(repo, &diff)?;
@@ -171,7 +173,7 @@ pub fn diff_commit_to_staged(repo: &Repository, base_ref: &str) -> Result<DiffRe
     let base_tree = base_commit.tree()?;
 
     let mut opts = DiffOptions::new();
-    opts.context_lines(3);
+    opts.context_lines(0);
 
     let diff = repo.diff_tree_to_index(Some(&base_tree), None, Some(&mut opts))?;
     let files = extract_file_diffs(repo, &diff)?;
@@ -186,7 +188,7 @@ pub fn diff_commit_to_staged(repo: &Repository, base_ref: &str) -> Result<DiffRe
 /// Extract unstaged (working directory) changes.
 pub fn diff_unstaged(repo: &Repository) -> Result<DiffResult, GitError> {
     let mut opts = DiffOptions::new();
-    opts.context_lines(3);
+    opts.context_lines(0);
     // Include untracked paths so unstaged-vs-staged mode can surface added files.
     opts.include_untracked(true);
     opts.recurse_untracked_dirs(true);
@@ -215,7 +217,7 @@ pub fn diff_worktree(repo: &Repository) -> Result<DiffResult, GitError> {
     let head_tree = head_commit.tree()?;
 
     let mut opts = DiffOptions::new();
-    opts.context_lines(3);
+    opts.context_lines(0);
     opts.include_untracked(true);
     opts.recurse_untracked_dirs(true);
     opts.show_untracked_content(true);
@@ -247,7 +249,7 @@ pub fn diff_branch_to_workdir(repo: &Repository, base_ref: &str) -> Result<DiffR
     let base_tree = base_commit.tree()?;
 
     let mut opts = DiffOptions::new();
-    opts.context_lines(3);
+    opts.context_lines(0);
     opts.include_untracked(true);
     opts.recurse_untracked_dirs(true);
     opts.show_untracked_content(true);
@@ -301,7 +303,7 @@ pub fn diff_merge_base_to_workdir(
     let merge_base_tree = merge_base_commit.tree()?;
 
     let mut opts = DiffOptions::new();
-    opts.context_lines(3);
+    opts.context_lines(0);
     opts.include_untracked(true);
     opts.recurse_untracked_dirs(true);
     opts.show_untracked_content(true);
@@ -617,7 +619,7 @@ pub fn diff_merge_base(
     let head_tree = head_commit.tree()?;
 
     let mut opts = DiffOptions::new();
-    opts.context_lines(3);
+    opts.context_lines(0);
 
     let mut diff =
         repo.diff_tree_to_tree(Some(&merge_base_tree), Some(&head_tree), Some(&mut opts))?;

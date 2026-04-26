@@ -461,6 +461,13 @@ export interface AppContextValue {
    * Updates replay hunk state and handles any pending scroll requests.
    */
   handleDiffHunksChanged: (hunks: EditedHunk[]) => void;
+
+  // ─── Monaco-derived hunk counts (UI truth) ────────────────────────────────
+  /**
+   * Per-file hunk counts as computed by Monaco for the currently-loaded content.
+   * Used to display accurate counts even when git/libgit2 hunk splitting differs.
+   */
+  monacoHunkCounts: Map<string, number>;
 }
 
 // ── Context instance ────────────────────────────────────────────────────────

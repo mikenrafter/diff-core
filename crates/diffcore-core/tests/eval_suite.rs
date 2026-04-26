@@ -343,6 +343,7 @@ mod scoring_properties {
                 changes: ChangeStats {
                     additions: adds,
                     deletions: dels,
+                    hunks: 0,
                 },
                 symbols_changed: vec![],
             });
@@ -500,7 +501,11 @@ mod scoring_properties {
                         path: format!("file_{}.ts", i),
                         flow_position: 0,
                         role: FileRole::Utility,
-                        changes: ChangeStats { additions: 10, deletions: 5 },
+                        changes: ChangeStats {
+                            additions: 10,
+                            deletions: 5,
+                            hunks: 1,
+                        },
                         symbols_changed: vec![],
                     }],
                     edges: vec![],
