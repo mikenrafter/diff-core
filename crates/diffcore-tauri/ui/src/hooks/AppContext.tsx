@@ -277,6 +277,8 @@ export interface AppContextValue {
   replayHunks: ReplayHunk[];
   hasNextReplayHunk: boolean;
   hasPrevReplayHunk: boolean;
+  hasNextFileInGroup: boolean;
+  hasPrevFileInGroup: boolean;
 
   // ─── Infrastructure group ─────────────────────────────────────────────────
   infraExpanded: boolean;
@@ -395,7 +397,8 @@ export interface AppContextValue {
   goToReplayStep: (step: number) => void;
   navigateReplayHunk: (direction: 1 | -1) => void;
   jumpToReplayHunk: (index: number) => void;
-  commentOnCurrentReplayHunk: () => void;
+  goToNextFileInGroup: () => void;
+  goToPrevFileInGroup: () => void;
   openCommentInput: (overrideInput?: CommentInput) => void;
   submitComment: () => void;
   cancelComment: () => void;
@@ -468,6 +471,9 @@ export interface AppContextValue {
    * Used to display accurate counts even when git/libgit2 hunk splitting differs.
    */
   monacoHunkCounts: Map<string, number>;
+
+  /** Per-file reviewed hunk counts (derived from replay viewed-hunk IDs). */
+  reviewedHunksByFile: Map<string, number>;
 }
 
 // ── Context instance ────────────────────────────────────────────────────────

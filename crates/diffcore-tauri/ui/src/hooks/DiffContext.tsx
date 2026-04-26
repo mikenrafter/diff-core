@@ -31,7 +31,6 @@ export interface DiffContextValue {
   hasNextReplayHunk: boolean;
   hasPrevReplayHunk: boolean;
   navigateReplayHunk: (direction: 1 | -1) => void;
-  commentOnCurrentReplayHunk: () => void;
   goToReplayStep: (step: number) => void;
   exitReplay: () => void;
 

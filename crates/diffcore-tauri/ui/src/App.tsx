@@ -40,6 +40,7 @@ import { useManifestActions } from "./hooks/useManifestActions";
 import { useCrossFileSearch } from "./hooks/useCrossFileSearch";
 import { useDebouncedValue } from "./hooks/useDebouncedValue";
 import { IS_TAURI, STATE_SAVE_RESTORE_ENABLED, tauriInvoke } from "./utils/tauriUtils";
+import { filePathFromMonacoHunkId, makeMonacoHunkId } from "./utils/monacoHunkId";
 import { HeaderBar } from "./components/panels/HeaderBar";
 import { CenterPane } from "./components/panels/CenterPane";
 import { RightPane } from "./components/panels/RightPane";
@@ -274,6 +275,16 @@ export default function App() {
   const [replayViewedHunkIds, setReplayViewedHunkIds] = useState<Set<string>>(new Set());
   const [currentReplayHunks, setCurrentReplayHunks] = useState<ReplayHunk[]>([]);
   const [monacoHunkCounts, setMonacoHunkCounts] = useState<Map<string, number>>(new Map());
+
+  const reviewedHunksByFile = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const id of replayViewedHunkIds) {
+      const filePath = filePathFromMonacoHunkId(id);
+      if (!filePath) continue;
+      counts.set(filePath, (counts.get(filePath) ?? 0) + 1);
+    }
+    return counts;
+  }, [replayViewedHunkIds]);
 
   // Refinement state
   const [originalGroups, setOriginalGroups] = useState<FlowGroup[] | null>(null);
@@ -967,7 +978,7 @@ export default function App() {
 
   const mapEditedHunksToReplayHunks = useCallback((filePath: string, hunks: EditedHunk[]): ReplayHunk[] => {
     return hunks.map((h, index) => ({
-      id: `monaco_hunk_${filePath}_${h.modifiedStartLine}_${h.modifiedEndLine}_${index}`,
+      id: makeMonacoHunkId(filePath, h.modifiedStartLine, h.modifiedEndLine, index),
       filePath,
       startLine: h.modifiedStartLine,
       endLine: h.modifiedEndLine,
@@ -990,13 +1001,11 @@ export default function App() {
       const clamped = Math.max(0, Math.min(index, replayHunks.length - 1));
       const hunk = replayHunks[clamped];
       setReplayHunkIndex(clamped);
-      if (replayActiveRef.current) {
-        setReplayViewedHunkIds((prev) => {
-          const next = new Set(prev);
-          next.add(hunk.id);
-          return next;
-        });
-      }
+      setReplayViewedHunkIds((prev) => {
+        const next = new Set(prev);
+        next.add(hunk.id);
+        return next;
+      });
 
       if (selectedFileRef.current !== hunk.filePath) {
         const fileStepIndex = group.files.findIndex((f) => f.path === hunk.filePath);
@@ -1030,23 +1039,6 @@ export default function App() {
     },
     [replayHunks, openFileInTab],
   );
-
-  const commentOnCurrentReplayHunk = useCallback(() => {
-    const group = selectedGroupRef.current;
-    if (!group || replayHunks.length === 0) return;
-    const hunk = replayHunks[Math.max(0, Math.min(replayHunkIndex, replayHunks.length - 1))];
-    jumpToReplayHunk(replayHunkIndex);
-    setCommentInput({
-      type: "code",
-      group_id: group.id,
-      file_path: hunk.filePath,
-      start_line: hunk.startLine,
-      end_line: hunk.endLine,
-      selected_code: hunk.selectedCode ?? undefined,
-    });
-    setCommentText("");
-    setTimeout(() => commentInputRef.current?.focus(), 50);
-  }, [replayHunkIndex, replayHunks, jumpToReplayHunk]);
 
   // When fileDiff loads and a pending scroll-to-comment is queued, scroll the diff viewer
   useEffect(() => {
@@ -2668,6 +2660,30 @@ export default function App() {
     || !!selectedGroup?.files[replayStep - 1]
   );
 
+  const fileIndexInSelectedGroup = useMemo(() => {
+    if (!selectedGroup || !selectedFile) return -1;
+    return selectedGroup.files.findIndex((f) => f.path === selectedFile);
+  }, [selectedGroup, selectedFile]);
+
+  const hasNextFileInGroup = !!selectedGroup?.files[fileIndexInSelectedGroup + 1];
+  const hasPrevFileInGroup = !!selectedGroup?.files[fileIndexInSelectedGroup - 1];
+
+  const goToNextFileInGroup = useCallback(() => {
+    if (!selectedGroup) return;
+    const idx = selectedGroup.files.findIndex((f) => f.path === selectedFile);
+    if (idx < 0 || idx >= selectedGroup.files.length - 1) return;
+    const nextPath = selectedGroup.files[idx + 1].path;
+    openFileInTab(nextPath, selectedGroup.id);
+  }, [openFileInTab, selectedFile, selectedGroup]);
+
+  const goToPrevFileInGroup = useCallback(() => {
+    if (!selectedGroup) return;
+    const idx = selectedGroup.files.findIndex((f) => f.path === selectedFile);
+    if (idx <= 0) return;
+    const prevPath = selectedGroup.files[idx - 1].path;
+    openFileInTab(prevPath, selectedGroup.id);
+  }, [openFileInTab, selectedFile, selectedGroup]);
+
   const navigateReplayHunk = useCallback(
     (direction: 1 | -1) => {
       const group = selectedGroupRef.current;
@@ -3122,6 +3138,7 @@ export default function App() {
     annotationSubTab, setAnnotationSubTab, graphGranularity, setGraphGranularity,
     replayActive, replayStep, replayVisited, replayHunkIndex, replayViewedHunkIds,
     currentReplayHunks, replayHunks, hasNextReplayHunk, hasPrevReplayHunk,
+    hasNextFileInGroup, hasPrevFileInGroup, goToNextFileInGroup, goToPrevFileInGroup,
     infraExpanded, setInfraExpanded, infraShowAll, setInfraShowAll,
     infraSubGroupsExpanded, setInfraSubGroupsExpanded,
     expandedGroupIds, setExpandedGroupIds,
@@ -3146,7 +3163,7 @@ export default function App() {
     handleGraphNodeClick, handleEdgeEndpointClick, handleGraphEdgeClick,
     handleSourceNavigate, handleGoToDefinition, handleSelectBase, handleSelectHead,
     handleFileContextMenu, enterReplay, exitReplay, goToReplayStep, navigateReplayHunk,
-    jumpToReplayHunk, commentOnCurrentReplayHunk,
+    jumpToReplayHunk,
     openCommentInput, submitComment, cancelComment, saveComment, deleteComment, updateComment,
     exportComments, copyPrDescription, toggleGroupReviewed, copyFilePath, copyFlowPaths,
     syncEditedFileAndComments,
@@ -3160,6 +3177,7 @@ export default function App() {
     restoreLastSessionState,
     handleDiffCommentRequest, handleDiffEditorContentChange, handleDiffHunksChanged,
     monacoHunkCounts,
+    reviewedHunksByFile,
   };
 
   // Dedicated diff/Monaco context to isolate expensive rerenders from unrelated state changes.
@@ -3171,7 +3189,7 @@ export default function App() {
     replayActive, replayStep, replayVisited,
     replayHunks, replayHunkIndex, replayViewedHunkIds,
     hasNextReplayHunk, hasPrevReplayHunk,
-    navigateReplayHunk, commentOnCurrentReplayHunk,
+    navigateReplayHunk,
     goToReplayStep, exitReplay,
     diffViewerRef, editsEnabled, shouldRenderSideBySide,
     diffSplitRatio, setDiffSplitRatio,
@@ -3187,7 +3205,7 @@ export default function App() {
     replayActive, replayStep, replayVisited,
     replayHunks, replayHunkIndex, replayViewedHunkIds,
     hasNextReplayHunk, hasPrevReplayHunk,
-    navigateReplayHunk, commentOnCurrentReplayHunk,
+    navigateReplayHunk,
     goToReplayStep, exitReplay,
     diffViewerRef, editsEnabled, shouldRenderSideBySide,
     diffSplitRatio, setDiffSplitRatio,

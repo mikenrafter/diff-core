@@ -17,11 +17,8 @@ export const CenterPane = memo(function CenterPane() {
     fileDiff, selectedFile, selectedGroup,
     openWithRef, openWithDropdown, setOpenWithDropdown,
     lastEditor, editorOptions, openInEditor,
-    replayActive, replayStep, replayVisited,
-    replayHunks, replayHunkIndex, replayViewedHunkIds,
-    hasNextReplayHunk, hasPrevReplayHunk,
-    navigateReplayHunk, commentOnCurrentReplayHunk,
-    goToReplayStep, exitReplay,
+    replayActive, replayStep,
+    exitReplay,
     openTabs, handleSelectFile, closeTab, setTabContextMenu,
     diffViewerRef, editsEnabled, shouldRenderSideBySide,
     diffSplitRatio, setDiffSplitRatio,
@@ -69,21 +66,10 @@ export const CenterPane = memo(function CenterPane() {
                   </div>
                 )}
 
-                {/* Replay + hunk controls. Always rendered to keep the toolbar
-                    layout stable; replay-only controls are disabled when
-                    replay is inactive. Hunk navigation and "+ Hunk Comment"
-                    work any time a diff is open because `currentReplayHunks`
-                    is populated by `onDiffHunksChange` regardless of replay
-                    state. */}
                 <span className="diff-toolbar-divider" aria-hidden="true" />
 
                 {replayActive && selectedGroup && (
                   <span className="replay-badge">REPLAY</span>
-                )}
-                {replayActive && selectedGroup && (
-                  <span className="replay-step-label">
-                    Step {replayStep + 1} of {selectedGroup.files.length}
-                  </span>
                 )}
                 {replayActive && selectedGroup && selectedGroup.files[replayStep] && (
                   <span className="replay-file-role">
@@ -91,71 +77,6 @@ export const CenterPane = memo(function CenterPane() {
                   </span>
                 )}
 
-                {selectedGroup && selectedGroup.files.length > 0 && (
-                  <div className="replay-progress" data-disabled={!replayActive || undefined}>
-                    {selectedGroup.files.map((f, i) => (
-                      <button
-                        key={f.path}
-                        type="button"
-                        className={`replay-dot ${i === replayStep && replayActive ? "active" : ""} ${replayVisited.has(f.path) ? "visited" : ""}`}
-                        onClick={() => goToReplayStep(i)}
-                        disabled={!replayActive}
-                        title={replayActive ? shortPath(f.path) : "Replay-only navigation"}
-                      />
-                    ))}
-                  </div>
-                )}
-
-                <span className="replay-hunk-status">
-                  Hunk {replayHunks.length === 0 ? 0 : Math.min(replayHunkIndex + 1, replayHunks.length)}/{replayHunks.length}
-                  {replayActive && replayHunks[replayHunkIndex] && replayViewedHunkIds.has(replayHunks[replayHunkIndex].id) ? " viewed" : ""}
-                </span>
-
-                <button
-                  type="button"
-                  className="btn replay-btn replay-comment-btn"
-                  onClick={commentOnCurrentReplayHunk}
-                  disabled={replayHunks.length === 0}
-                  title={replayHunks.length === 0 ? "No hunks in this file" : "Comment on current hunk"}
-                >
-                  + Hunk Comment
-                </button>
-                <button
-                  type="button"
-                  className="btn replay-btn replay-hunk-btn"
-                  onClick={() => navigateReplayHunk(-1)}
-                  disabled={!hasPrevReplayHunk}
-                  title="Jump to previous hunk"
-                >
-                  &#9664;&nbsp;Hunk
-                </button>
-                <button
-                  type="button"
-                  className="btn replay-btn replay-hunk-btn"
-                  onClick={() => navigateReplayHunk(1)}
-                  disabled={!hasNextReplayHunk}
-                  title="Jump to next hunk"
-                >
-                  Hunk&nbsp;&#9654;
-                </button>
-                <button
-                  type="button"
-                  className="btn replay-btn"
-                  onClick={() => goToReplayStep(replayStep - 1)}
-                  disabled={!replayActive || replayStep === 0}
-                  title={replayActive ? "Previous file (p / Left Arrow)" : "Replay-only navigation"}
-                >
-                  &#9664;&nbsp;File
-                </button>
-                <button
-                  type="button"
-                  className="btn replay-btn"
-                  onClick={() => goToReplayStep(replayStep + 1)}
-                  disabled={!replayActive || !selectedGroup || replayStep >= selectedGroup.files.length - 1}
-                  title={replayActive ? "Next file (n / Right Arrow / Space)" : "Replay-only navigation"}
-                >
-                  File&nbsp;&#9654;
-                </button>
                 <button
                   type="button"
                   className="btn replay-btn replay-exit"
@@ -202,9 +123,7 @@ export const CenterPane = memo(function CenterPane() {
               })}
             </div>
           )}
-          {/* Replay bar — controls were merged into the diff toolbar above
-              (`.editor-toolbar.diff-toolbar`) so they remain visible (and
-              partially enabled) at all times, not just during replay. */}
+          {/* Hunk/file navigation lives in the flow-groups pane (left / embedded). */}
           <div className="panel-body diff-viewer">
             <ErrorBoundary panelName="Diff Viewer">
               <CrashTest panel="Diff Viewer" />

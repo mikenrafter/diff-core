@@ -17,6 +17,7 @@ export function LeftPane({ embedded = false }: { embedded?: boolean }) {
     replayActive, replayVisited,
     comments, exportComments,
     monacoHunkCounts,
+    reviewedHunksByFile,
     showRefined, refinedGroups, originalGroups, refinementProvider, refinementModel,
     refinementResponse, refining, runRefinement, toggleRefinedView,
     resolvedRefinementProvider, resolvedRefinementModel,
@@ -36,6 +37,9 @@ export function LeftPane({ embedded = false }: { embedded?: boolean }) {
     expandedGroupIds, setExpandedGroupIds,
     aiAccessReady, repoPath, showToast,
     pendingScrollToCommentRef, setActiveCommentId,
+    fileDiff,
+    hasNextReplayHunk, hasPrevReplayHunk, navigateReplayHunk,
+    hasNextFileInGroup, hasPrevFileInGroup, goToNextFileInGroup, goToPrevFileInGroup,
   } = useAppContext();
 
   const Wrapper = embedded ? "div" : "aside";
@@ -160,6 +164,57 @@ export function LeftPane({ embedded = false }: { embedded?: boolean }) {
                 >
                   Refined
                 </button>
+              </div>
+            )}
+
+            {/* Hunk / file navigation — same banner pattern as cross-file search */}
+            {analysis && selectedGroup && fileDiff && (
+              <div className="refinement-banner left-pane-hunk-file-nav">
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
+                  <span>Hunk &amp; file navigation</span>
+                </div>
+                <div className="left-pane-hunk-file-nav-buttons">
+                  <button
+                    type="button"
+                    className="btn btn-refine"
+                    style={{ fontSize: 10 }}
+                    onClick={() => navigateReplayHunk(-1)}
+                    disabled={!hasPrevReplayHunk}
+                    title="Previous hunk"
+                  >
+                    &lt; hunk
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-refine"
+                    style={{ fontSize: 10 }}
+                    onClick={() => navigateReplayHunk(1)}
+                    disabled={!hasNextReplayHunk}
+                    title="Next hunk"
+                  >
+                    hunk &gt;
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-refine"
+                    style={{ fontSize: 10 }}
+                    onClick={goToPrevFileInGroup}
+                    disabled={!hasPrevFileInGroup}
+                    title="Previous file in group"
+                  >
+                    &lt; file
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-refine"
+                    style={{ fontSize: 10 }}
+                    onClick={goToNextFileInGroup}
+                    disabled={!hasNextFileInGroup}
+                    title="Next file in group"
+                  >
+                    file &gt;
+                  </button>
+                </div>
               </div>
             )}
 
@@ -336,6 +391,7 @@ export function LeftPane({ embedded = false }: { embedded?: boolean }) {
                                 additions={file.changes.additions}
                                 deletions={file.changes.deletions}
                                 hunks={monacoHunkCounts.get(file.path) ?? file.changes.hunks}
+                                reviewedHunks={reviewedHunksByFile.get(file.path) ?? 0}
                                 reviewedInReplay={replayActive && replayVisited.has(file.path)}
                                 variant="two-line"
                                 movedFrom={fileMoved?.from}

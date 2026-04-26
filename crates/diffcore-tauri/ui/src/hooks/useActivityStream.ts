@@ -68,12 +68,22 @@ export function useActivityStream({
   // Clean up the SSE connection on unmount
   useEffect(() => () => closeActivityStream(), [closeActivityStream]);
 
-  // Switch to the activity tab whenever a job fires or entries arrive
+  // Switch to the activity tab only when a job becomes active (or first error).
+  // Avoid re-selecting the Activity tab on every streamed entry; that prevents
+  // users from navigating away while a run is in progress or after it completes.
+  const lastJobIdRef = useRef<string | null>(null);
+  const lastErrorRef = useRef<string | null>(null);
   useEffect(() => {
-    if (activityJob || activityEntries.length > 0 || activityError) {
+    if (activityJob?.job_id && activityJob.job_id !== lastJobIdRef.current) {
+      lastJobIdRef.current = activityJob.job_id;
+      onJobActive();
+      return;
+    }
+    if (activityError && activityError !== lastErrorRef.current) {
+      lastErrorRef.current = activityError;
       onJobActive();
     }
-  }, [activityEntries.length, activityError, activityJob, onJobActive]);
+  }, [activityError, activityJob?.job_id, onJobActive]);
 
   const appendActivityEntry = useCallback((entry: LlmActivityEntry) => {
     setActivityEntries((prev) => [...prev, entry]);

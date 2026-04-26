@@ -16,6 +16,8 @@ export interface FileDisplayProps {
   deletions?: number;
   /** Number of diff hunks for this file. Rendered as muted `(N)` in the diffcount chip. */
   hunks?: number;
+  /** Number of hunks reviewed for this file (used for `(reviewed/total)` display). */
+  reviewedHunks?: number;
   /** Suppresses the `+adds -dels` chip even if numbers are provided. */
   hideChanges?: boolean;
   /** Visual variant. One-line is the existing compact row; two-line adds a
@@ -51,6 +53,7 @@ export default function FileDisplay({
   additions,
   deletions,
   hunks,
+  reviewedHunks,
   hideChanges,
   variant = "one-line",
   movedFrom,
@@ -72,7 +75,13 @@ export default function FileDisplay({
       <span className="file-display-changes-sep">/</span>
       <span className="file-display-deletions">-{deletions ?? 0}</span>
       {hunks != null && (
-        <span className="file-display-hunks">&nbsp;({hunks})</span>
+        <span className="file-display-hunks">
+          &nbsp;(
+            <span className="file-display-hunks-reviewed">{typeof reviewedHunks === "number" ? reviewedHunks : 0}</span>
+            <span className="file-display-hunks-sep">/</span>
+            <span className="file-display-hunks-total">{hunks}</span>
+          )
+        </span>
       )}
     </span>
   );
