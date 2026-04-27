@@ -72,9 +72,11 @@ export default function Dropdown<T extends string>({
   searchPlaceholder = "Filter…",
 }: DropdownProps<T>) {
   const [open, setOpen] = useState(false);
+  const [openUpwards, setOpenUpwards] = useState(false);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const optionRefs = useRef<Array<HTMLLIElement | null>>([]);
 
@@ -148,6 +150,38 @@ export default function Dropdown<T extends string>({
     const node = optionRefs.current[activeIndex];
     node?.scrollIntoView({ block: "nearest" });
   }, [open, activeIndex]);
+
+  // Choose menu direction dynamically so long option lists remain visible near
+  // the bottom edge of the viewport (including inside scrollable panes).
+  useEffect(() => {
+    if (!open) {
+      setOpenUpwards(false);
+      return;
+    }
+
+    const updateMenuDirection = () => {
+      const wrapper = wrapperRef.current;
+      const menu = menuRef.current;
+      if (!wrapper || !menu) return;
+
+      const wrapperRect = wrapper.getBoundingClientRect();
+      const menuHeight = menu.getBoundingClientRect().height;
+      const spaceBelow = window.innerHeight - wrapperRect.bottom;
+      const spaceAbove = wrapperRect.top;
+      const shouldOpenUp = menuHeight > spaceBelow && spaceAbove > spaceBelow;
+      setOpenUpwards(shouldOpenUp);
+    };
+
+    const rafId = requestAnimationFrame(updateMenuDirection);
+    window.addEventListener("resize", updateMenuDirection);
+    window.addEventListener("scroll", updateMenuDirection, true);
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      window.removeEventListener("resize", updateMenuDirection);
+      window.removeEventListener("scroll", updateMenuDirection, true);
+    };
+  }, [open, filteredOptions.length, showSearch]);
 
   const handlePick = useCallback(
     (next: T) => {
@@ -233,7 +267,10 @@ export default function Dropdown<T extends string>({
         <span className="dropdown-arrow">▾</span>
       </button>
       {open && (
-        <div className="dropdown-menu">
+        <div
+          ref={menuRef}
+          className={`dropdown-menu ${openUpwards ? "dropdown-menu-up" : ""}`}
+        >
           {showSearch && (
             <input
               ref={searchRef}

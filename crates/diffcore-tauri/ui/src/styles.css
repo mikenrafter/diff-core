@@ -2140,7 +2140,10 @@ body {
 
 .repo-nav-row-2 .branch-dropdown-trigger {
   width: 100%;
-  display: block;
+  min-width: 0;
+  max-width: none;
+  display: flex;
+  align-items: center;
   justify-content: space-between;
 }
 
@@ -2163,10 +2166,15 @@ body {
 
 .repo-nav-row-3 .branch-dropdown-wrapper {
   width: 100%;
+  display: block;
 }
 
 .repo-nav-row-3 .branch-dropdown-trigger {
   width: 100%;
+  min-width: 0;
+  max-width: none;
+  display: flex;
+  align-items: center;
   justify-content: space-between;
 }
 
@@ -2804,7 +2812,7 @@ body {
 
 .ai-actions-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 10px;
   margin-top: 8px;
 }
@@ -2852,6 +2860,11 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.ai-action-controls .dropdown-wrapper {
+  width: 100%;
+  max-width: none;
 }
 
 .ai-action-badges {
@@ -3037,6 +3050,12 @@ body {
   list-style: none;
   z-index: 100;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4), 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+
+.branch-dropdown-up {
+  top: auto;
+  bottom: calc(100% + 4px);
+  margin-top: 0;
 }
 
 .branch-option {
@@ -5711,6 +5730,12 @@ body {
   padding: 4px;
   z-index: 200;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4), 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+
+.dropdown-menu-up {
+  top: auto;
+  bottom: calc(100% + 4px);
+  margin-top: 0;
 }
 
 .dropdown-search {

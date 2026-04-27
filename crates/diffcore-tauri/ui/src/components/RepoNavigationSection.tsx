@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { useAppContext } from "../hooks/AppContext";
 import { COMPARE_TARGET_STAGED, COMPARE_TARGET_UNSTAGED } from "../utils/gitUtils";
 import { RepoPathCombobox } from "./RepoPathCombobox";
@@ -21,12 +22,79 @@ export function RepoNavigationSection({ title }: { title?: string }) {
     showBaseCommits, setShowBaseCommits,
     repoInfo, comparisonMode, runAnalysis,
   } = useAppContext();
+  const headDropdownWrapperRef = useRef<HTMLDivElement>(null);
+  const headDropdownMenuRef = useRef<HTMLUListElement>(null);
+  const baseDropdownWrapperRef = useRef<HTMLDivElement>(null);
+  const baseDropdownMenuRef = useRef<HTMLUListElement>(null);
+  const [headDropdownOpensUp, setHeadDropdownOpensUp] = useState(false);
+  const [baseDropdownOpensUp, setBaseDropdownOpensUp] = useState(false);
 
   const commitRepoPath = (nextRaw: string) => {
     const next = nextRaw.trim();
     if (next === repoPath) return;
     setRepoPath(next);
   };
+
+  const updateDropdownDirection = (
+    wrapper: HTMLDivElement | null,
+    menu: HTMLUListElement | null,
+    setOpenUpward: (next: boolean) => void,
+  ) => {
+    if (!wrapper || !menu) return;
+    const wrapperRect = wrapper.getBoundingClientRect();
+    const menuHeight = menu.getBoundingClientRect().height;
+    const spaceBelow = window.innerHeight - wrapperRect.bottom;
+    const spaceAbove = wrapperRect.top;
+    setOpenUpward(menuHeight > spaceBelow && spaceAbove > spaceBelow);
+  };
+
+  useEffect(() => {
+    if (!headBranchDropdownOpen) {
+      setHeadDropdownOpensUp(false);
+      return;
+    }
+
+    const recalc = () => {
+      updateDropdownDirection(
+        headDropdownWrapperRef.current,
+        headDropdownMenuRef.current,
+        setHeadDropdownOpensUp,
+      );
+    };
+
+    const rafId = requestAnimationFrame(recalc);
+    window.addEventListener("resize", recalc);
+    window.addEventListener("scroll", recalc, true);
+    return () => {
+      cancelAnimationFrame(rafId);
+      window.removeEventListener("resize", recalc);
+      window.removeEventListener("scroll", recalc, true);
+    };
+  }, [headBranchDropdownOpen]);
+
+  useEffect(() => {
+    if (!branchDropdownOpen) {
+      setBaseDropdownOpensUp(false);
+      return;
+    }
+
+    const recalc = () => {
+      updateDropdownDirection(
+        baseDropdownWrapperRef.current,
+        baseDropdownMenuRef.current,
+        setBaseDropdownOpensUp,
+      );
+    };
+
+    const rafId = requestAnimationFrame(recalc);
+    window.addEventListener("resize", recalc);
+    window.addEventListener("scroll", recalc, true);
+    return () => {
+      cancelAnimationFrame(rafId);
+      window.removeEventListener("resize", recalc);
+      window.removeEventListener("scroll", recalc, true);
+    };
+  }, [branchDropdownOpen]);
 
   return (
     <div className="annotation-section" data-testid="repo-navigation-section">
@@ -77,7 +145,11 @@ export function RepoNavigationSection({ title }: { title?: string }) {
 
         {/* Row 2: ([source]) */}
         <div className="repo-nav-row repo-nav-row-2">
-          <div className="branch-dropdown-wrapper" data-testid="head-branch-dropdown">
+          <div
+            ref={headDropdownWrapperRef}
+            className="branch-dropdown-wrapper"
+            data-testid="head-branch-dropdown"
+          >
           <button
             className="btn branch-dropdown-trigger"
             onClick={() => {
@@ -92,7 +164,10 @@ export function RepoNavigationSection({ title }: { title?: string }) {
             <span className="dropdown-arrow">&#9662;</span>
           </button>
           {headBranchDropdownOpen && (
-            <ul className="branch-dropdown">
+            <ul
+              ref={headDropdownMenuRef}
+              className={`branch-dropdown ${headDropdownOpensUp ? "branch-dropdown-up" : ""}`}
+            >
               <li
                 className={`branch-option ${headRef === COMPARE_TARGET_UNSTAGED ? "selected" : ""}`}
                 onClick={() => handleSelectHead(COMPARE_TARGET_UNSTAGED)}
@@ -149,7 +224,11 @@ export function RepoNavigationSection({ title }: { title?: string }) {
 
         {/* Row 3: ([target]) */}
         <div className="repo-nav-row repo-nav-row-3">
-          <div className="branch-dropdown-wrapper" data-testid="base-branch-dropdown">
+          <div
+            ref={baseDropdownWrapperRef}
+            className="branch-dropdown-wrapper"
+            data-testid="base-branch-dropdown"
+          >
           <button
             className="btn branch-dropdown-trigger"
             onClick={() => {
@@ -164,7 +243,10 @@ export function RepoNavigationSection({ title }: { title?: string }) {
             <span className="dropdown-arrow">&#9662;</span>
           </button>
           {branchDropdownOpen && (
-            <ul className="branch-dropdown">
+            <ul
+              ref={baseDropdownMenuRef}
+              className={`branch-dropdown ${baseDropdownOpensUp ? "branch-dropdown-up" : ""}`}
+            >
               <li
                 className={`branch-option ${baseRef === COMPARE_TARGET_UNSTAGED ? "selected" : ""}`}
                 onClick={() => handleSelectBase(COMPARE_TARGET_UNSTAGED)}
