@@ -141,7 +141,7 @@
         # The Tauri package requires a pre-built frontend.
         tauriFrontend = pkgs.buildNpmPackage {
           pname = "diffcore-tauri-ui";
-          version = "0.5.7";
+          version = "0.5.11";
           src = ./crates/diffcore-tauri/ui;
           npmDepsHash = ""; # Set after first build, see comment below.
           buildPhase = ''
