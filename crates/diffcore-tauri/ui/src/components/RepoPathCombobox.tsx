@@ -13,6 +13,10 @@ type RepoPathComboboxProps = {
   onToggleFavorite: (path: string) => void;
   onBrowse: () => void;
   onAnalyze: (path: string) => void;
+  /** Control whether Browse/Pin actions render inside the combobox row. */
+  actions?: "inline" | "none";
+  /** Optional max width for the trigger button. */
+  triggerMaxWidth?: number | string;
 };
 
 type RepoPathOption = {
@@ -31,6 +35,8 @@ export function RepoPathCombobox({
   onToggleFavorite,
   onBrowse,
   onAnalyze,
+  actions = "inline",
+  triggerMaxWidth = 400,
 }: RepoPathComboboxProps) {
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const localInputRef = useRef<HTMLInputElement | null>(null);
@@ -152,7 +158,7 @@ export function RepoPathCombobox({
       <button
         type="button"
         className="btn branch-dropdown-trigger repo-combobox-trigger"
-        style={{ flex: 1, maxWidth: 400, justifyContent: "space-between" }}
+        style={{ flex: 1, maxWidth: triggerMaxWidth, justifyContent: "space-between" }}
         onClick={() => {
           if (disabled) return;
           setOpen((v) => {
@@ -204,24 +210,28 @@ export function RepoPathCombobox({
         <span className="dropdown-arrow">&#9662;</span>
       </button>
 
-      <button className="btn" onClick={onBrowse} disabled={disabled} title="Browse for a repository folder">
-        Browse
-      </button>
-      <button
-        className="btn"
-        onClick={() => {
-          const path = draft.trim();
-          if (!path) return;
-          onToggleFavorite(path);
-        }}
-        disabled={disabled || !draft.trim()}
-        title="Pin or unpin current repository"
-      >
-        {favorites.includes(draft.trim()) ? "Unpin" : "Pin"}
-      </button>
+      {actions === "inline" && (
+        <>
+          <button className="btn" onClick={onBrowse} disabled={disabled} title="Browse for a repository folder">
+            Browse
+          </button>
+          <button
+            className="btn"
+            onClick={() => {
+              const path = draft.trim();
+              if (!path) return;
+              onToggleFavorite(path);
+            }}
+            disabled={disabled || !draft.trim()}
+            title="Pin or unpin current repository"
+          >
+            {favorites.includes(draft.trim()) ? "Unpin" : "Pin"}
+          </button>
+        </>
+      )}
 
       {open && (
-        <div className="branch-dropdown repo-combobox-menu" style={{ minWidth: 420, paddingTop: 6 }}>
+        <div className="branch-dropdown repo-combobox-menu" style={{ width: "100%", paddingTop: 6 }}>
           <div style={{ padding: "0 8px 8px 8px" }}>
             <input
               ref={(node) => {

@@ -71,7 +71,7 @@ export function LeftPane({ embedded = false }: { embedded?: boolean }) {
                 <span>AI can improve these groupings</span>
                 <button
                   className="btn btn-refine"
-                  onClick={runRefinement}
+                  onClick={() => { void runRefinement(); }}
                   title={`Refine groupings using ${resolvedRefinementProvider ?? "anthropic"} (${resolvedRefinementModel ?? "default"})`}
                 >
                   Refine

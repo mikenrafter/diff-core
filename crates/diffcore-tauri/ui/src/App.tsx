@@ -138,6 +138,7 @@ export default function App() {
   });
   const [sourceFocusRequest, setSourceFocusRequest] = useState<SourceFocusRequest | null>(null);
   const [regenDialogOpen, setRegenDialogOpen] = useState(false);
+  const [regenOperation, setRegenOperation] = useState<"summary" | "flow_analysis" | "refine_groups">("summary");
   const [regenFeedbackText, setRegenFeedbackText] = useState("");
   const [regenIncludePreviousOutput, setRegenIncludePreviousOutput] = useState(true);
 
@@ -1512,13 +1513,27 @@ export default function App() {
   }, [comments, deepAnalyses, overview, repoPath, resolvedPrimaryModel, resolvedPrimaryProvider, runMockActivityJob, runStreamingJob, selectedGroup]);
 
   /** Run LLM Pass 2: deep analysis for the selected group. */
-  const runDeepAnalysis = useCallback(async () => {
+  const runDeepAnalysis = useCallback(async (opts?: { feedback?: string; includePreviousOutput?: boolean }) => {
     if (!selectedGroup) return;
     deepAnalyzingCount.current += 1;
     setDeepAnalyzing(true);
     setError(null);
     try {
       if (IS_TAURI) {
+        const feedback = opts?.feedback?.trim() ?? "";
+        const includePreviousOutput = opts?.includePreviousOutput ?? false;
+        const previousOutput = includePreviousOutput && deepAnalyses[selectedGroup.id]
+          ? `Previous group deep analysis (${selectedGroup.name}):\n${deepAnalyses[selectedGroup.id].flow_narrative}`
+          : "";
+        const userComments = comments.map((c) => {
+          if (c.file_path && c.start_line != null && c.end_line != null) {
+            return `${c.file_path}:${c.start_line}-${c.end_line} :: ${c.text}`;
+          }
+          if (c.file_path) {
+            return `${c.file_path} :: ${c.text}`;
+          }
+          return `group:${c.group_id} :: ${c.text}`;
+        });
         await runStreamingJob<Pass2Response>("start_annotate_group", {
           groupId: selectedGroup.id,
           repoPath,
@@ -1529,6 +1544,10 @@ export default function App() {
           unstaged: analysisDiffArgs.unstaged,
           llmProvider: resolvedPrimaryProvider,
           llmModel: resolvedPrimaryModel,
+          userFeedback: feedback || null,
+          includePreviousOutput,
+          previousOutput: previousOutput || null,
+          userComments,
         }, (result) => {
           setDeepAnalyses((prev) => ({ ...prev, [selectedGroup.id]: result }));
         });
@@ -1561,7 +1580,7 @@ export default function App() {
         setDeepAnalyzing(false);
       }
     }
-  }, [selectedGroup, repoPath, analysisDiffArgs, resolvedPrimaryModel, resolvedPrimaryProvider, runMockActivityJob, runStreamingJob]);
+  }, [selectedGroup, repoPath, analysisDiffArgs, resolvedPrimaryModel, resolvedPrimaryProvider, runMockActivityJob, runStreamingJob, comments, deepAnalyses]);
 
   /** Show a toast notification that auto-dismisses. */
   const showToast = useCallback((message: string) => {
@@ -1656,16 +1675,34 @@ export default function App() {
   }, [analysis, originalGroups, handleSelectGroup, showToast]);
 
   /** Run LLM refinement pass on the current analysis groups. */
-  const runRefinement = useCallback(async () => {
+  const runRefinement = useCallback(async (opts?: { feedback?: string; includePreviousOutput?: boolean }) => {
     if (!analysis) return;
     setRefining(true);
     setError(null);
     try {
       if (IS_TAURI) {
+        const feedback = opts?.feedback?.trim() ?? "";
+        const includePreviousOutput = opts?.includePreviousOutput ?? false;
+        const previousOutput = includePreviousOutput && refinementResponse
+          ? `Previous refinement response:\n${refinementResponse.reasoning}`
+          : "";
+        const userComments = comments.map((c) => {
+          if (c.file_path && c.start_line != null && c.end_line != null) {
+            return `${c.file_path}:${c.start_line}-${c.end_line} :: ${c.text}`;
+          }
+          if (c.file_path) {
+            return `${c.file_path} :: ${c.text}`;
+          }
+          return `group:${c.group_id} :: ${c.text}`;
+        });
         await runStreamingJob<RefinementResult>("start_refine_groups", {
           repoPath: repoPath || null,
           llmProvider: resolvedRefinementProvider,
           llmModel: resolvedRefinementModel,
+          userFeedback: feedback || null,
+          includePreviousOutput,
+          previousOutput: previousOutput || null,
+          userComments,
         }, (result) => {
           applyRefinementResult(result);
         });
@@ -1688,7 +1725,7 @@ export default function App() {
     } finally {
       setRefining(false);
     }
-  }, [analysis, repoPath, resolvedRefinementModel, resolvedRefinementProvider, runMockActivityJob, runStreamingJob, applyRefinementResult]);
+  }, [analysis, repoPath, resolvedRefinementModel, resolvedRefinementProvider, runMockActivityJob, runStreamingJob, applyRefinementResult, comments, refinementResponse]);
 
   /** Toggle between original and refined groups. */
   const toggleRefinedView = useCallback(
@@ -3151,7 +3188,7 @@ export default function App() {
     activeCommentId, setActiveCommentId, editingCommentId, setEditingCommentId,
     editingCommentText, setEditingCommentText, pendingScrollToCommentRef, codeCommentsForSelectedFile, commentCountForGroup,
     commentsForFile,
-    regenDialogOpen, setRegenDialogOpen, regenFeedbackText, setRegenFeedbackText,
+    regenDialogOpen, setRegenDialogOpen, regenOperation, setRegenOperation, regenFeedbackText, setRegenFeedbackText,
     regenIncludePreviousOutput, setRegenIncludePreviousOutput,
     reviewedGroupIds,
     openWithDropdown, setOpenWithDropdown, lastEditor, availableEditors, openWithRef, editorOptions,

@@ -342,6 +342,8 @@ export interface AppContextValue {
   // ─── Regen dialog ─────────────────────────────────────────────────────────
   regenDialogOpen: boolean;
   setRegenDialogOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  regenOperation: "summary" | "flow_analysis" | "refine_groups";
+  setRegenOperation: React.Dispatch<React.SetStateAction<"summary" | "flow_analysis" | "refine_groups">>;
   regenFeedbackText: string;
   setRegenFeedbackText: React.Dispatch<React.SetStateAction<string>>;
   regenIncludePreviousOutput: boolean;
@@ -374,8 +376,8 @@ export interface AppContextValue {
   // ─── Callbacks ────────────────────────────────────────────────────────────
   runAnalysis: (overrideRepoPath?: string) => Promise<void>;
   runAnnotateOverview: (opts?: { feedback?: string; includePreviousOutput?: boolean }) => Promise<void>;
-  runDeepAnalysis: () => Promise<void>;
-  runRefinement: () => Promise<void>;
+  runDeepAnalysis: (opts?: { feedback?: string; includePreviousOutput?: boolean }) => Promise<void>;
+  runRefinement: (opts?: { feedback?: string; includePreviousOutput?: boolean }) => Promise<void>;
   toggleRefinedView: (useRefined: boolean) => void;
   handleSelectGroup: (group: FlowGroup) => Promise<void>;
   handleSelectFile: (path: string) => Promise<void>;

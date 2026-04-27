@@ -11,12 +11,17 @@ export function RegenDialog() {
   const {
     regenDialogOpen,
     setRegenDialogOpen,
+    regenOperation,
     regenFeedbackText,
     setRegenFeedbackText,
     regenIncludePreviousOutput,
     setRegenIncludePreviousOutput,
     runAnnotateOverview,
+    runDeepAnalysis,
+    runRefinement,
     annotating,
+    deepAnalyzing,
+    refining,
   } = useAppContext();
 
   if (!regenDialogOpen) return null;
@@ -25,7 +30,13 @@ export function RegenDialog() {
     <div className="comment-overlay" onClick={() => setRegenDialogOpen(false)}>
       <div className="comment-input-panel" onClick={(e) => e.stopPropagation()}>
         <div className="comment-input-header">
-          <span className="comment-input-scope">Regenerate with feedback/question</span>
+          <span className="comment-input-scope">
+            {regenOperation === "summary"
+              ? "Redo summary with feedback/question"
+              : regenOperation === "flow_analysis"
+                ? "Redo flow analysis with feedback/question"
+                : "Redo refinement with feedback/question"}
+          </span>
           <button className="btn-close" onClick={() => setRegenDialogOpen(false)}>&times;</button>
         </div>
         <textarea
@@ -52,14 +63,26 @@ export function RegenDialog() {
             className="btn btn-comment-save"
             onClick={() => {
               setRegenDialogOpen(false);
-              void runAnnotateOverview({
-                feedback: regenFeedbackText,
-                includePreviousOutput: regenIncludePreviousOutput,
-              });
+              if (regenOperation === "summary") {
+                void runAnnotateOverview({
+                  feedback: regenFeedbackText,
+                  includePreviousOutput: regenIncludePreviousOutput,
+                });
+              } else if (regenOperation === "flow_analysis") {
+                void runDeepAnalysis({
+                  feedback: regenFeedbackText,
+                  includePreviousOutput: regenIncludePreviousOutput,
+                });
+              } else {
+                void runRefinement({
+                  feedback: regenFeedbackText,
+                  includePreviousOutput: regenIncludePreviousOutput,
+                });
+              }
             }}
-            disabled={annotating}
+            disabled={annotating || deepAnalyzing || refining}
           >
-            {annotating ? "Regenerating..." : "Regenerate"}
+            {(annotating || deepAnalyzing || refining) ? "Working..." : "Run"}
           </button>
         </div>
       </div>

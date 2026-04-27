@@ -14,6 +14,7 @@ import Dropdown from "../Dropdown";
 import FlowGraph from "../FlowGraph";
 import FileDisplay from "../FileDisplay";
 import ErrorBoundary from "../ErrorBoundary";
+import { RepoNavigationSection } from "../RepoNavigationSection";
 import { shortPath, shortSymbol, symbolFilePath } from "../../utils/pathUtils";
 import { PROVIDER_LABELS } from "../../utils/llmUtils";
 import { useAppContext } from "../../hooks/AppContext";
@@ -39,7 +40,9 @@ export function AnnotationsTab() {
     groupDeepAnalysis,
     overview,
     refinementVerdict,
+    aiAccessReady,
     llmSettings,
+    annotationsEnabled,
     replayActive,
     replayStep,
     enterReplay,
@@ -47,22 +50,25 @@ export function AnnotationsTab() {
     modelsForProvider,
     updateSetting,
     setRegenDialogOpen,
+    setRegenOperation,
     setRegenFeedbackText,
     setRegenIncludePreviousOutput,
+    annotating,
+    deepAnalyzing,
+    refining,
+    resolvedPrimaryProvider,
+    resolvedPrimaryModel,
+    resolvedRefinementProvider,
+    resolvedRefinementModel,
+    runAnnotateOverview,
+    runDeepAnalysis,
+    runRefinement,
     handleGraphNodeClick,
     handleGraphEdgeClick,
     handleEdgeEndpointClick,
     graphGranularity,
     setGraphGranularity,
   } = useAppContext();
-
-  if (!selectedGroup) {
-    return (
-      <div className="empty-state">
-        Select a group to see annotations.
-      </div>
-    );
-  }
 
   return (
     <div className="annotations-scroll-container">
@@ -77,17 +83,17 @@ export function AnnotationsTab() {
         <button
           className={`annotation-subtab ${annotationSubTab === "graph" ? "active" : ""}`}
           onClick={() => setAnnotationSubTab("graph")}
-          disabled={selectedGroup.edges.length === 0}
+          disabled={!selectedGroup || selectedGroup.edges.length === 0}
         >
           Graph
         </button>
         <button
           className={`annotation-subtab ${annotationSubTab === "edges" ? "active" : ""}`}
           onClick={() => setAnnotationSubTab("edges")}
-          disabled={selectedGroup.edges.length === 0}
+          disabled={!selectedGroup || selectedGroup.edges.length === 0}
         >
           Edges
-          {selectedGroup.edges.length > 0 && (
+          {selectedGroup && selectedGroup.edges.length > 0 && (
             <span className="annotation-subtab-count">{selectedGroup.edges.length}</span>
           )}
         </button>
@@ -95,6 +101,15 @@ export function AnnotationsTab() {
 
       {annotationSubTab === "info" && (
         <>
+          <RepoNavigationSection />
+
+          {!selectedGroup && (
+            <div className="empty-state" style={{ marginTop: 10 }}>
+              Select a group to see annotations.
+            </div>
+          )}
+
+          {selectedGroup && (
           <div className="annotation-section" data-testid="annotations-panel">
             <h3>Flow Group</h3>
             <p className="group-detail-name">{selectedGroup.name}</p>
@@ -109,35 +124,6 @@ export function AnnotationsTab() {
               | Files: <strong>{selectedGroup.files.length}</strong> |
               Review order: <strong>#{selectedGroup.review_order}</strong>
             </p>
-            {llmSettings && (
-              <>
-                <div className="settings-row" style={{ marginTop: 8, alignItems: "center" }}>
-                  <label style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                    Model ({PROVIDER_LABELS[llmSettings.provider as LlmProvider]})
-                  </label>
-                  <div style={{ marginLeft: "auto", maxWidth: 260, flex: "0 1 260px" }}>
-                    <Dropdown
-                      value={llmSettings.model}
-                      onChange={(value) => updateSetting("model", value)}
-                      options={modelsForProvider(llmSettings.provider).map((m) => ({ value: m, label: m }))}
-                      placeholder="Select model"
-                    />
-                  </div>
-                </div>
-                <button
-                  className="btn"
-                  style={{ marginTop: 8 }}
-                  onClick={() => {
-                    setRegenDialogOpen(true);
-                    setRegenFeedbackText("");
-                    setRegenIncludePreviousOutput(true);
-                  }}
-                  title="Regenerate annotations with additional guidance"
-                >
-                  Regenerate with feedback/question
-                </button>
-              </>
-            )}
             {selectedGroup.files.length > 1 && !replayActive && (
               <button
                 className="btn btn-replay"
@@ -157,8 +143,172 @@ export function AnnotationsTab() {
               </button>
             )}
           </div>
+          )}
 
-          {refinementVerdict && (
+          {llmSettings && (
+            <div className="annotation-section ai-actions-section" data-testid="ai-actions-matrix">
+              <h3>AI Actions</h3>
+              <div className="ai-actions-grid">
+                <div className="ai-action-card">
+                  <div className="ai-action-header">
+                    <span className="ai-action-title">Summary</span>
+                    <button
+                      className="btn ai-action-redo"
+                      onClick={() => {
+                        setRegenOperation("summary");
+                        setRegenDialogOpen(true);
+                        setRegenFeedbackText("");
+                        setRegenIncludePreviousOutput(true);
+                      }}
+                      disabled={!aiAccessReady || !annotationsEnabled}
+                      title="Redo summary with feedback/question"
+                      aria-label="Redo summary with feedback/question"
+                    >
+                      ↻
+                    </button>
+                  </div>
+                  <div className="ai-action-controls">
+                    <Dropdown
+                      value={llmSettings.model}
+                      onChange={(value) => updateSetting("model", value)}
+                      options={modelsForProvider(llmSettings.provider).map((m) => ({ value: m, label: m }))}
+                      placeholder="Select model"
+                    />
+                    <button
+                      className={`btn btn-summarize ${!aiAccessReady ? "no-api-key" : ""}`}
+                      onClick={() => { void runAnnotateOverview(); }}
+                      disabled={annotating || !aiAccessReady || !annotationsEnabled}
+                      title={
+                        aiAccessReady
+                          ? `Run summary via ${resolvedPrimaryProvider ?? "codex"} (${resolvedPrimaryModel ?? "default"}).`
+                          : "AI setup required — choose Codex CLI, Claude Code, or a direct API key"
+                      }
+                    >
+                      Summarize PR
+                    </button>
+                  </div>
+                </div>
+
+                <div className="ai-action-card">
+                  <div className="ai-action-header">
+                    <span className="ai-action-title">Flow analysis</span>
+                    <button
+                      className="btn ai-action-redo"
+                      onClick={() => {
+                        setRegenOperation("flow_analysis");
+                        setRegenDialogOpen(true);
+                        setRegenFeedbackText("");
+                        setRegenIncludePreviousOutput(true);
+                      }}
+                      disabled={!aiAccessReady || !annotationsEnabled}
+                      title="Redo flow analysis with feedback/question"
+                      aria-label="Redo flow analysis with feedback/question"
+                    >
+                      ↻
+                    </button>
+                  </div>
+                  <div className="ai-action-controls">
+                    <Dropdown
+                      value={llmSettings.model}
+                      onChange={(value) => updateSetting("model", value)}
+                      options={modelsForProvider(llmSettings.provider).map((m) => ({ value: m, label: m }))}
+                      placeholder="Select model"
+                    />
+                    <button
+                      className={`btn btn-analyze-flow ${!aiAccessReady ? "no-api-key" : ""}`}
+                      onClick={() => { void runDeepAnalysis(); }}
+                      disabled={deepAnalyzing || !aiAccessReady || !annotationsEnabled}
+                      title={
+                        aiAccessReady
+                          ? `Run flow analysis via ${resolvedPrimaryProvider ?? "codex"} (${resolvedPrimaryModel ?? "default"}).`
+                          : "AI setup required — choose Codex CLI, Claude Code, or a direct API key"
+                      }
+                    >
+                      Analyze This Flow
+                    </button>
+                  </div>
+                </div>
+
+                <div className="ai-action-card">
+                  <div className="ai-action-header">
+                    <span className="ai-action-title">Flow group refinement</span>
+                    <button
+                      className="btn ai-action-redo"
+                      onClick={() => {
+                        setRegenOperation("refine_groups");
+                        setRegenDialogOpen(true);
+                        setRegenFeedbackText("");
+                        setRegenIncludePreviousOutput(true);
+                      }}
+                      disabled={!aiAccessReady || !annotationsEnabled}
+                      title="Redo refinement with feedback/question"
+                      aria-label="Redo refinement with feedback/question"
+                    >
+                      ↻
+                    </button>
+                  </div>
+                  <div className="ai-action-controls">
+                    <Dropdown
+                      value={llmSettings.refinement_model}
+                      onChange={(value) => updateSetting("refinement_model", value)}
+                      options={modelsForProvider(llmSettings.refinement_provider).map((m) => ({ value: m, label: m }))}
+                      placeholder="Select model"
+                    />
+                    <button
+                      className={`btn ${!aiAccessReady ? "no-api-key" : ""}`}
+                      onClick={() => { void runRefinement(); }}
+                      disabled={refining || !aiAccessReady || !annotationsEnabled}
+                      title={
+                        aiAccessReady
+                          ? `Refine groups via ${resolvedRefinementProvider ?? "codex"} (${resolvedRefinementModel ?? "default"}).`
+                          : "AI setup required — choose Codex CLI, Claude Code, or a direct API key"
+                      }
+                    >
+                      Refine flow groups
+                    </button>
+                  </div>
+                </div>
+
+                <div className="ai-action-card ai-action-card-disabled" aria-disabled="true">
+                  <div className="ai-action-header">
+                    <span className="ai-action-title">PR storyline</span>
+                    <button className="btn ai-action-redo" disabled title="Coming soon" aria-label="PR storyline coming soon">↻</button>
+                  </div>
+                  <div className="ai-action-controls">
+                    <Dropdown
+                      value=""
+                      onChange={() => {}}
+                      options={[]}
+                      placeholder="Coming soon"
+                      disabled
+                    />
+                    <button className="btn" disabled title="Coming soon">
+                      Generate storyline
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {(annotating || deepAnalyzing || refining) && (
+                <p className="settings-hint" style={{ marginTop: 8 }}>
+                  {annotating ? "Generating overview..." : deepAnalyzing ? "Analyzing flow group..." : "Refining groups..."}
+                </p>
+              )}
+
+              {aiAccessReady && (
+                <div className="ai-action-badges">
+                  <span className="llm-provider-badge">
+                    {PROVIDER_LABELS[resolvedPrimaryProvider as LlmProvider] ?? resolvedPrimaryProvider}/{resolvedPrimaryModel ?? "default"}
+                  </span>
+                  <span className="llm-provider-badge">
+                    refine: {PROVIDER_LABELS[resolvedRefinementProvider as LlmProvider] ?? resolvedRefinementProvider}/{resolvedRefinementModel ?? "default"}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {selectedGroup && refinementVerdict && (
             <div className="annotation-section refinement-verdict-section" data-testid="refinement-verdict">
               <h3>Refinement Verdict</h3>
               <p className="refinement-verdict-title">{refinementVerdict.title}</p>
@@ -171,14 +321,14 @@ export function AnnotationsTab() {
             </div>
           )}
 
-          {overview && !groupAnnotation && (
+          {selectedGroup && overview && !groupAnnotation && (
             <div className="annotation-section llm-section">
               <h3>LLM Overview</h3>
               <p className="llm-summary">{overview.overall_summary}</p>
             </div>
           )}
 
-          {groupAnnotation && (
+          {selectedGroup && groupAnnotation && (
             <div className="annotation-section llm-section">
               <h3>LLM Summary</h3>
               <p className="llm-summary">{groupAnnotation.summary}</p>
@@ -195,14 +345,14 @@ export function AnnotationsTab() {
             </div>
           )}
 
-          {overview && groupAnnotation && (
+          {selectedGroup && overview && groupAnnotation && (
             <div className="annotation-section llm-section">
               <h3>Overall Summary</h3>
               <p className="llm-summary">{overview.overall_summary}</p>
             </div>
           )}
 
-          {groupDeepAnalysis && (
+          {selectedGroup && groupDeepAnalysis && (
             <>
               <div className="annotation-section llm-section">
                 <h3>Flow Narrative</h3>
@@ -259,7 +409,7 @@ export function AnnotationsTab() {
         </>
       )}
 
-      {annotationSubTab === "graph" && selectedGroup.edges.length > 0 && (
+      {annotationSubTab === "graph" && selectedGroup && selectedGroup.edges.length > 0 && (
         <div className="annotation-section flow-graph-section flow-graph-full">
           <div className="settings-row" style={{ marginBottom: 8, alignItems: "center" }}>
             <label style={{ fontSize: 12, color: "var(--text-secondary)" }}>Granularity</label>
@@ -292,7 +442,7 @@ export function AnnotationsTab() {
         </div>
       )}
 
-      {annotationSubTab === "edges" && selectedGroup.edges.length > 0 && (
+      {annotationSubTab === "edges" && selectedGroup && selectedGroup.edges.length > 0 && (
         <div className="annotation-section edges-section">
           <ul className="edge-list">
             {selectedGroup.edges.map((edge, i) => {

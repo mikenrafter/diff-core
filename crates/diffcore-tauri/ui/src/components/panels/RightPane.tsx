@@ -1,4 +1,3 @@
-import type { LlmProvider } from "../../types";
 import { useAppContext } from "../../hooks/AppContext";
 import { ActivityTab } from "../tabs/ActivityTab";
 import { AnnotationsTab } from "../tabs/AnnotationsTab";
@@ -19,10 +18,6 @@ export function RightPane() {
     comments,
     annotating, deepAnalyzing, refining,
     aiAccessReady, llmSettings, openAiSetup,
-    selectedGroup, overview, copyPrDescription,
-    refinedGroups, runAnnotateOverview, annotationsEnabled,
-    resolvedPrimaryProvider, resolvedPrimaryModel,
-    groupDeepAnalysis, runDeepAnalysis,
   } = useAppContext();
 
   return (
@@ -131,53 +126,6 @@ export function RightPane() {
                 <button className="btn" onClick={() => openAiSetup("recommended")}>
                   Setup AI
                 </button>
-              </div>
-            )}
-
-            {selectedGroup && rightPanelTab === "annotations" && (
-              <div className="annotation-section annotation-actions">
-                {overview && !annotating && (
-                  <button
-                    className="btn btn-copy-comments-footer"
-                    onClick={copyPrDescription}
-                    title="Copy the generated summary as a PR description"
-                  >
-                    Copy PR Description
-                  </button>
-                )}
-                {!overview && !annotating && !refinedGroups && (
-                  <button
-                    className={`btn btn-summarize ${!aiAccessReady ? "no-api-key" : ""}`}
-                    onClick={() => { void runAnnotateOverview(); }}
-                    disabled={annotating || !aiAccessReady || !annotationsEnabled}
-                    title={
-                      aiAccessReady
-                        ? `Run LLM Pass 1 via ${resolvedPrimaryProvider ?? "codex"} (${resolvedPrimaryModel ?? "default"}): generate an overview summary of all flow groups.`
-                        : "AI setup required — choose Codex CLI, Claude Code, or a direct API key"
-                    }
-                  >
-                    {aiAccessReady ? "Summarize PR" : "Summarize PR (Setup required)"}
-                  </button>
-                )}
-                {!groupDeepAnalysis && !deepAnalyzing && (
-                  <button
-                    className={`btn btn-analyze-flow ${!aiAccessReady ? "no-api-key" : ""}`}
-                    onClick={runDeepAnalysis}
-                    disabled={deepAnalyzing || !aiAccessReady || !annotationsEnabled}
-                    title={
-                      aiAccessReady
-                        ? `Run LLM Pass 2 via ${resolvedPrimaryProvider ?? "codex"} (${resolvedPrimaryModel ?? "default"}): deep analysis of this flow group.`
-                        : "AI setup required — choose Codex CLI, Claude Code, or a direct API key"
-                    }
-                  >
-                    {aiAccessReady ? "Analyze This Flow" : "Analyze Flow (Setup required)"}
-                  </button>
-                )}
-                {aiAccessReady && resolvedPrimaryProvider && (
-                  <span className="llm-provider-badge">
-                    {PROVIDER_LABELS[resolvedPrimaryProvider as LlmProvider]}/{resolvedPrimaryModel ?? "default"}
-                  </span>
-                )}
               </div>
             )}
           </div>

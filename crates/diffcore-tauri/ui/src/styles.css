@@ -256,7 +256,10 @@ select:focus-visible {
   flex-direction: column;
   min-height: 0;
   flex: 1;
-  overflow: hidden;
+  /* Right pane should be able to scroll regardless of which tab is active. */
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
 }
 
 .activity-tab-shell {
@@ -1908,13 +1911,13 @@ body {
 /* ── Annotations (Right Panel) ── */
 
 .annotation-section {
-  padding: 12px;
+  padding: 14px 14px;
   border-bottom: 1px solid var(--border);
   /* Cap to the panel-body width so long inline content (model dropdown
      values, code paths, etc.) ellipsizes rather than pushing the panel. */
   min-width: 0;
   max-width: 100%;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .annotation-section h3 {
@@ -2088,6 +2091,111 @@ body {
   min-height: 0;
   overflow-y: auto;
   scrollbar-width: thin;
+}
+
+.repo-nav-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.repo-nav-row {
+  display: grid;
+  gap: 12px;
+  align-items: center;
+}
+
+.repo-nav-row-1 {
+  grid-template-columns: 1fr 34px;
+}
+
+.repo-nav-row-1 .repo-combobox {
+  width: 100%;
+}
+
+.repo-nav-row-1 .repo-combobox-trigger {
+  max-width: none !important;
+  width: 100%;
+}
+
+.repo-nav-star {
+  padding: 0;
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+}
+
+.repo-nav-row-2 {
+  grid-template-columns: 1fr;
+  width: 100%;
+}
+
+.repo-nav-row-2 .branch-dropdown-wrapper {
+  width: 100%;
+  display: block;
+}
+
+.repo-nav-row-2 .branch-dropdown-trigger {
+  width: 100%;
+  display: block;
+  justify-content: space-between;
+}
+
+.repo-nav-row-2 .branch-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repo-nav-row-3 {
+  grid-template-columns: 1fr;
+  width: 100%;
+}
+
+.repo-nav-row-3 .repo-nav-browse,
+.repo-nav-row-3 .repo-nav-analyze {
+  justify-self: start;
+}
+
+.repo-nav-row-3 .branch-dropdown-wrapper {
+  width: 100%;
+}
+
+.repo-nav-row-3 .branch-dropdown-trigger {
+  width: 100%;
+  justify-content: space-between;
+}
+
+.repo-nav-row-3 .branch-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repo-nav-row-4 {
+  grid-template-columns: 1fr 1fr;
+}
+
+.repo-nav-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.repo-combobox {
+  min-width: 0;
+}
+
+.repo-combobox-menu {
+  min-width: min(520px, calc(100vw - 64px));
+  max-width: 100%;
 }
 
 .annotations-scroll-container::-webkit-scrollbar {
@@ -2691,6 +2799,65 @@ body {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  margin-top: 8px;
+}
+
+.ai-actions-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.ai-action-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ai-action-card-disabled {
+  opacity: 0.55;
+}
+
+.ai-action-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ai-action-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ai-action-redo {
+  margin-left: auto;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  font-weight: 700;
+}
+
+.ai-action-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ai-action-badges {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
   margin-top: 8px;
 }
 

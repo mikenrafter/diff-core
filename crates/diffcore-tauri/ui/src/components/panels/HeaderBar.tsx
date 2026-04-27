@@ -1,7 +1,5 @@
 import { useAppContext } from "../../hooks/AppContext";
-import { COMPARE_TARGET_STAGED, COMPARE_TARGET_UNSTAGED } from "../../utils/gitUtils";
 import { IS_TAURI, STATE_SAVE_RESTORE_ENABLED } from "../../utils/tauriUtils";
-import { RepoPathCombobox } from "../RepoPathCombobox";
 
 /**
  * Top navigation bar — repo path input, branch selectors, Analyze button, and
@@ -9,224 +7,19 @@ import { RepoPathCombobox } from "../RepoPathCombobox";
  */
 export function HeaderBar() {
   const {
-    repoPath, setRepoPath, repoInputRef, browseForRepository, loading,
-    recentRepoPaths,
-    favoriteRepoPaths, setFavoriteRepoPaths,
-    headBranchDropdownOpen, setHeadBranchDropdownOpen,
-    headRef, headLabel,
-    branchDropdownOpen, setBranchDropdownOpen,
-    baseRef, baseLabel,
-    handleSelectHead, handleSelectBase,
-    baseBranches, recentCommits,
-    showHeadCommits, setShowHeadCommits,
-    showBaseCommits, setShowBaseCommits,
-    repoInfo, comparisonMode, runAnalysis,
+    repoInfo,
     restoreLastSessionState,
     aiAccessReady, llmSettings, openAiSetup,
-    settingsOpen, setSettingsOpen,
-    setRightmostTab,
     statusText,
     analysis, reviewedGroupIds, sortedGroups,
   } = useAppContext();
-
-  const commitRepoPath = (nextRaw: string) => {
-    const next = nextRaw.trim();
-    if (next === repoPath) return;
-    setRepoPath(next);
-  };
 
   return (
       <header className="top-bar">
         <div className="top-bar-left">
           <span className="logo">Diffcore</span>
         </div>
-        <div className="top-bar-center">
-          <RepoPathCombobox
-            inputRef={repoInputRef}
-            value={repoPath}
-            favorites={favoriteRepoPaths}
-            recents={recentRepoPaths}
-            disabled={loading}
-            onCommit={(p) => {
-              if (p.length === 0) setRepoPath("");
-              else commitRepoPath(p);
-            }}
-            onToggleFavorite={(path) => {
-              commitRepoPath(path);
-              setFavoriteRepoPaths((prev) => (
-                prev.includes(path) ? prev.filter((p) => p !== path) : [path, ...prev]
-              ));
-            }}
-            onBrowse={() => { void browseForRepository(); }}
-            onAnalyze={(path) => { void runAnalysis(path); }}
-          />
-
-          {/* Branch comparison: head (source) → base (target) */}
-          <div className="branch-comparison">
-            {/* Head (source) branch dropdown */}
-            <div className="branch-dropdown-wrapper" data-testid="head-branch-dropdown">
-              <button
-                className="btn branch-dropdown-trigger"
-                onClick={() => {
-                  setHeadBranchDropdownOpen(!headBranchDropdownOpen);
-                  setBranchDropdownOpen(false);
-                }}
-                title="Select source branch (what you're comparing)"
-              >
-                <span className="branch-label">source</span>
-                <span className="branch-icon">&#9741;</span>
-                <span className="branch-name">{headLabel}</span>
-                <span className="dropdown-arrow">&#9662;</span>
-              </button>
-              {headBranchDropdownOpen && (
-                <ul className="branch-dropdown">
-                  <li
-                    className={`branch-option ${headRef === COMPARE_TARGET_UNSTAGED ? "selected" : ""}`}
-                    onClick={() => handleSelectHead(COMPARE_TARGET_UNSTAGED)}
-                  >
-                    <span className="branch-option-name">Unstaged changes</span>
-                  </li>
-                  <li
-                    className={`branch-option ${headRef === COMPARE_TARGET_STAGED ? "selected" : ""}`}
-                    onClick={() => handleSelectHead(COMPARE_TARGET_STAGED)}
-                  >
-                    <span className="branch-option-name">Staged changes</span>
-                  </li>
-                  {baseBranches.map((b) => (
-                    <li
-                      key={b.name}
-                      className={`branch-option ${b.name === headRef ? "selected" : ""} ${b.is_current ? "current" : ""}`}
-                      onClick={() => handleSelectHead(b.name)}
-                    >
-                      <span className="branch-option-name">{b.name}</span>
-                      {b.is_current && <span className="branch-current-badge">current</span>}
-                      {b.has_upstream && <span className="branch-upstream-badge">tracked</span>}
-                    </li>
-                  ))}
-                  {baseBranches.length === 0 && (
-                    <li className="branch-option disabled">No branches found</li>
-                  )}
-                  {recentCommits.length > 0 && (
-                    <>
-                      <li
-                        className="branch-option"
-                        onClick={() => setShowHeadCommits((open) => !open)}
-                        title="Show or hide recent commits"
-                      >
-                        <span className="branch-option-name">
-                          {showHeadCommits ? "Hide recent commits" : "Show recent commits"}
-                        </span>
-                      </li>
-                      {showHeadCommits && recentCommits.map((commit) => (
-                        <li
-                          key={`head-${commit.sha}`}
-                          className={`branch-option ${commit.sha === headRef ? "selected" : ""}`}
-                          onClick={() => handleSelectHead(commit.sha)}
-                          title={`${commit.sha} · ${commit.author}`}
-                        >
-                          <span className="branch-option-name">{commit.short_sha} {commit.summary}</span>
-                        </li>
-                      ))}
-                    </>
-                  )}
-                </ul>
-              )}
-            </div>
-
-            <span className="branch-arrow" title="compared against">&#8594;</span>
-
-            {/* Base (target) branch dropdown */}
-            <div className="branch-dropdown-wrapper" data-testid="base-branch-dropdown">
-              <button
-                className="btn branch-dropdown-trigger"
-                onClick={() => {
-                  setBranchDropdownOpen(!branchDropdownOpen);
-                  setHeadBranchDropdownOpen(false);
-                }}
-                title="Select target branch (what you're comparing against)"
-              >
-                <span className="branch-label">target</span>
-                <span className="branch-icon">&#9741;</span>
-                <span className="branch-name">{baseLabel}</span>
-                <span className="dropdown-arrow">&#9662;</span>
-              </button>
-              {branchDropdownOpen && (
-                <ul className="branch-dropdown">
-                  <li
-                    className={`branch-option ${baseRef === COMPARE_TARGET_UNSTAGED ? "selected" : ""}`}
-                    onClick={() => handleSelectBase(COMPARE_TARGET_UNSTAGED)}
-                  >
-                    <span className="branch-option-name">Unstaged changes</span>
-                  </li>
-                  <li
-                    className={`branch-option ${baseRef === COMPARE_TARGET_STAGED ? "selected" : ""}`}
-                    onClick={() => handleSelectBase(COMPARE_TARGET_STAGED)}
-                  >
-                    <span className="branch-option-name">Staged changes</span>
-                  </li>
-                  {baseBranches.map((b) => (
-                    <li
-                      key={b.name}
-                      className={`branch-option ${b.name === baseRef ? "selected" : ""} ${b.is_current ? "current" : ""}`}
-                      onClick={() => handleSelectBase(b.name)}
-                    >
-                      <span className="branch-option-name">{b.name}</span>
-                      {b.is_current && <span className="branch-current-badge">current</span>}
-                      {b.has_upstream && <span className="branch-upstream-badge">tracked</span>}
-                    </li>
-                  ))}
-                  {baseBranches.length === 0 && (
-                    <li className="branch-option disabled">No branches found</li>
-                  )}
-                  {recentCommits.length > 0 && (
-                    <>
-                      <li
-                        className="branch-option"
-                        onClick={() => setShowBaseCommits((open) => !open)}
-                        title="Show or hide recent commits"
-                      >
-                        <span className="branch-option-name">
-                          {showBaseCommits ? "Hide recent commits" : "Show recent commits"}
-                        </span>
-                      </li>
-                      {showBaseCommits && recentCommits.map((commit) => (
-                        <li
-                          key={`base-${commit.sha}`}
-                          className={`branch-option ${commit.sha === baseRef ? "selected" : ""}`}
-                          onClick={() => handleSelectBase(commit.sha)}
-                          title={`${commit.sha} · ${commit.author}`}
-                        >
-                          <span className="branch-option-name">{commit.short_sha} {commit.summary}</span>
-                        </li>
-                      ))}
-                    </>
-                  )}
-                </ul>
-              )}
-            </div>
-
-            {/* Worktree indicator — shown when NOT a worktree (regular repo) */}
-            {repoInfo && !repoInfo.is_worktree && (
-              <span className="branch-repo-badge" title="Regular repository (not a worktree)">repo</span>
-            )}
-            {repoInfo?.is_worktree && (
-              <span className="branch-worktree-badge" title="Linked worktree">worktree</span>
-            )}
-          </div>
-
-          <button
-            className="btn btn-primary"
-            onClick={() => {
-              const path = repoPath.trim();
-              if (!path) return;
-              commitRepoPath(path);
-              void runAnalysis(path);
-            }}
-            disabled={loading || !repoPath.trim() || comparisonMode === "invalid"}
-          >
-            {loading ? "Analyzing..." : "Analyze"}
-          </button>
-        </div>
+        <div className="top-bar-center" />
         <div className="top-bar-right">
           {IS_TAURI && STATE_SAVE_RESTORE_ENABLED && (
             <button
@@ -246,17 +39,6 @@ export function HeaderBar() {
               Setup AI
             </button>
           )}
-          {/* Settings gear icon (opens Settings tab in rightmost pane) */}
-          <button
-            className="btn btn-settings"
-            onClick={() => {
-              setSettingsOpen(!settingsOpen);
-              setRightmostTab("settings");
-            }}
-            title="Settings"
-          >
-            &#9881;
-          </button>
           {/* Branch status indicator */}
           {repoInfo && (
             <div className="repo-status">
