@@ -10,6 +10,7 @@ use log::warn;
 use serde::{Deserialize, Serialize};
 
 use crate::config::DiffcoreConfig;
+use crate::llm::canonical_provider_name;
 use crate::llm::resolve_api_key;
 
 /// Model descriptor returned by provider model listing APIs.
@@ -45,6 +46,7 @@ pub async fn fetch_provider_models(
     provider: &str,
     force_refresh: bool,
 ) -> Result<Vec<ModelInfo>, ModelListError> {
+    let provider = canonical_provider_name(provider);
     let cache_dir = models_cache_dir();
     let cache_file = cache_dir.join(format!("{}.json", provider));
 
@@ -96,6 +98,7 @@ pub async fn fetch_provider_models_with_key(
     api_key: Option<&str>,
     force_refresh: bool,
 ) -> Result<Vec<ModelInfo>, ModelListError> {
+    let provider = canonical_provider_name(provider);
     let cache_dir = models_cache_dir();
     let cache_file = cache_dir.join(format!("{}.json", provider));
 
@@ -133,6 +136,19 @@ pub const SUPPORTED_PROVIDERS: &[&str] = &[
     "github_copilot",
     "codex",
     "claude",
+    "cursor_cli",
+    "cursor_api",
+    "claude_cli",
+    "anthropic_api",
+    "codex_cli",
+    "openai_api",
+    "qwen_cli",
+    "alibaba_api",
+    "gemini_cli",
+    "gemini_api",
+    "copilot_cli",
+    "copilot_api",
+    "ollama_api",
 ];
 
 // ── Static models for CLI-backed providers ──────────────────────────

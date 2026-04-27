@@ -48,6 +48,19 @@ const PROVIDER_DISPLAY: Record<string, string> = {
   gemini: "Gemini API",
   openrouter: "OpenRouter",
   github_copilot: "GitHub Copilot",
+  cursor_cli: "Cursor CLI",
+  cursor_api: "Cursor API",
+  claude_cli: "Claude CLI",
+  anthropic_api: "Anthropic API",
+  codex_cli: "Codex CLI",
+  openai_api: "OpenAI API",
+  qwen_cli: "Qwen CLI",
+  alibaba_api: "Alibaba API",
+  gemini_cli: "Gemini CLI",
+  gemini_api: "Gemini API",
+  copilot_cli: "Copilot CLI",
+  copilot_api: "Copilot API",
+  ollama_api: "Ollama API",
 };
 
 // ---------------------------------------------------------------------------
@@ -148,8 +161,22 @@ export function activitySourceLabel(source: string): string {
   return source.toUpperCase();
 }
 
+function canonicalToolProvider(provider: string | null | undefined): string | null {
+  if (!provider) return null;
+  switch (provider) {
+    case "codex_cli":
+    case "cursor_cli":
+      return "codex";
+    case "claude_cli":
+      return "claude";
+    default:
+      return provider;
+  }
+}
+
 export function providerSupportsToolActivity(provider: string | null | undefined): boolean {
-  return provider === "codex" || provider === "claude";
+  const canonical = canonicalToolProvider(provider);
+  return canonical === "codex" || canonical === "claude";
 }
 
 // ---------------------------------------------------------------------------
@@ -329,9 +356,10 @@ export function buildMockActivityEntries(
   operation: "overview" | "group" | "refinement",
   provider: string,
 ): Array<Omit<LlmActivityEntry, "timestamp_ms">> {
+  const canonical = canonicalToolProvider(provider);
   const toolBacked = providerSupportsToolActivity(provider);
   const source = toolBacked ? provider : "diffcore";
-  const providerName = provider === "claude" ? "Claude" : "Codex";
+  const providerName = canonical === "claude" ? "Claude" : "Codex";
 
   const sharedStart: Array<Omit<LlmActivityEntry, "timestamp_ms">> = [
     {

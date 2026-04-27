@@ -198,8 +198,8 @@ export interface AppContextValue {
   repoInputRef: MutableRefObject<HTMLInputElement | null>;
 
   // ─── Pane layout ──────────────────────────────────────────────────────────
-  rightmostTab: "groups" | "settings";
-  setRightmostTab: React.Dispatch<React.SetStateAction<"groups" | "settings">>;
+  rightmostTab: "groups" | "settings" | "ai";
+  setRightmostTab: React.Dispatch<React.SetStateAction<"groups" | "settings" | "ai">>;
   groupsPanelWidth: number;
 
   // ─── LLM settings ─────────────────────────────────────────────────────────

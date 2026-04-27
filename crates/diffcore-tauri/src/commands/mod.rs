@@ -570,8 +570,21 @@ pub(super) fn load_cached_analysis(
         .ok_or_else(|| CommandError::Analysis("No analysis available. Run analyze first.".into()))
 }
 
+pub(super) fn canonical_provider_name(provider: &str) -> &str {
+    match provider {
+        "codex_cli" | "cursor_cli" => "codex",
+        "claude_cli" => "claude",
+        "anthropic_api" => "anthropic",
+        "openai_api" | "cursor_api" | "ollama_api" => "openai",
+        "gemini_cli" | "gemini_api" => "gemini",
+        "qwen_cli" | "alibaba_api" => "openrouter",
+        "copilot_cli" | "copilot_api" => "github_copilot",
+        other => other,
+    }
+}
+
 pub(super) fn provider_supports_tool_activity(provider: &str) -> bool {
-    matches!(provider, "codex" | "claude")
+    matches!(canonical_provider_name(provider), "codex" | "claude")
 }
 
 pub(super) fn load_config_from_path(repo_path: Option<&str>) -> (DiffcoreConfig, Option<PathBuf>) {
@@ -592,7 +605,7 @@ pub(super) fn load_config_from_path(repo_path: Option<&str>) -> (DiffcoreConfig,
 
 /// Get the default model for a provider.
 pub(super) fn default_model_for_provider(provider: &str) -> &str {
-    match provider {
+    match canonical_provider_name(provider) {
         "codex" => "default",
         "claude" => "default",
         "anthropic" => "claude-sonnet-4-6",
@@ -622,7 +635,7 @@ pub(super) fn preferred_provider_for_runtime(
     codex_status: &BackendStatus,
     claude_status: &BackendStatus,
 ) -> String {
-    match configured_provider {
+    match configured_provider.map(canonical_provider_name) {
         Some("codex") if codex_status.authenticated => "codex".to_string(),
         Some("claude") if claude_status.authenticated => "claude".to_string(),
         Some(provider) if provider_supports_tool_activity(provider) => {
@@ -1126,7 +1139,18 @@ mod tests {
 
     #[test]
     fn test_llm_settings_all_providers() {
-        for provider in &["codex", "claude", "anthropic", "openai", "gemini"] {
+        for provider in &[
+            "codex",
+            "claude",
+            "anthropic",
+            "openai",
+            "gemini",
+            "codex_cli",
+            "claude_cli",
+            "openai_api",
+            "gemini_api",
+            "copilot_api",
+        ] {
             let expected = default_model_for_provider(provider);
             assert!(
                 !expected.is_empty(),
@@ -1143,6 +1167,9 @@ mod tests {
         assert_eq!(default_model_for_provider("anthropic"), "claude-sonnet-4-6");
         assert_eq!(default_model_for_provider("openai"), "gpt-4.1");
         assert_eq!(default_model_for_provider("gemini"), "gemini-2.5-flash");
+        assert_eq!(default_model_for_provider("codex_cli"), "default");
+        assert_eq!(default_model_for_provider("cursor_api"), "gpt-4.1");
+        assert_eq!(default_model_for_provider("alibaba_api"), "anthropic/claude-sonnet-4-6");
         assert_eq!(default_model_for_provider("unknown"), "default");
     }
 

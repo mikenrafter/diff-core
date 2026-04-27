@@ -609,6 +609,27 @@ pub trait LlmProvider: Send + Sync {
     ) -> Result<RefinementResponse, LlmError>;
 }
 
+/// Canonicalize provider aliases to the closest implemented backend.
+///
+/// This keeps provider-type names accepted across the stack while we phase in
+/// dedicated integrations for each alias.
+pub fn canonical_provider_name(provider: &str) -> &str {
+    match provider {
+        // CLI aliases
+        "codex_cli" | "cursor_cli" => "codex",
+        "claude_cli" => "claude",
+        "qwen_cli" | "alibaba_api" => "openrouter",
+        "gemini_cli" | "gemini_api" => "gemini",
+        "copilot_cli" | "copilot_api" => "github_copilot",
+
+        // API aliases
+        "anthropic_api" => "anthropic",
+        "openai_api" | "cursor_api" | "ollama_api" => "openai",
+
+        other => other,
+    }
+}
+
 /// Resolve the API key for an LLM provider.
 ///
 /// Resolution order:
@@ -616,6 +637,8 @@ pub trait LlmProvider: Send + Sync {
 /// 2. `DIFFCORE_API_KEY` environment variable
 /// 3. Provider-specific env var (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`)
 pub fn resolve_api_key(config: &LlmConfig, provider: &str) -> Result<String, LlmError> {
+    let canonical_provider = canonical_provider_name(provider);
+
     // 1. key_cmd from config (highest priority)
     if let Some(ref cmd) = config.key_cmd {
         return execute_key_cmd(cmd);
@@ -636,7 +659,7 @@ pub fn resolve_api_key(config: &LlmConfig, provider: &str) -> Result<String, Llm
     }
 
     // 4. Provider-specific env var
-    let env_var = match provider {
+    let env_var = match canonical_provider {
         "anthropic" => "ANTHROPIC_API_KEY",
         "openai" => "OPENAI_API_KEY",
         "gemini" => "GEMINI_API_KEY",
@@ -723,7 +746,7 @@ pub fn create_provider_for_workdir(
     config: &LlmConfig,
     workdir: Option<&Path>,
 ) -> Result<Box<dyn LlmProvider>, LlmError> {
-    let provider_name = config.provider.as_deref().unwrap_or_else(|| {
+    let configured_provider_name = config.provider.as_deref().unwrap_or_else(|| {
         if config.key_cmd.is_some()
             || config.key.as_ref().is_some_and(|key| !key.is_empty())
             || std::env::var("DIFFCORE_API_KEY").is_ok()
@@ -738,6 +761,7 @@ pub fn create_provider_for_workdir(
             detect_default_provider()
         }
     });
+    let provider_name = canonical_provider_name(configured_provider_name);
 
     if provider_name == "codex" {
         return Ok(Box::new(codex_cli::CodexCliProvider::new(

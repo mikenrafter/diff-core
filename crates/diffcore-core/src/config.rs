@@ -124,7 +124,7 @@ impl Default for DiffConfig {
 /// LLM provider configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LlmConfig {
-    /// Provider name: "anthropic" or "openai".
+    /// Provider name (canonical or alias), e.g. "anthropic", "openai", "codex_cli".
     #[serde(default)]
     pub provider: Option<String>,
     /// Model identifier.
@@ -315,6 +315,19 @@ impl DiffcoreConfig {
                 "github_copilot",
                 "codex",
                 "claude",
+                "cursor_cli",
+                "cursor_api",
+                "claude_cli",
+                "anthropic_api",
+                "codex_cli",
+                "openai_api",
+                "qwen_cli",
+                "alibaba_api",
+                "gemini_cli",
+                "gemini_api",
+                "copilot_cli",
+                "copilot_api",
+                "ollama_api",
             ];
             if !valid.contains(&provider.as_str()) {
                 return Err(ConfigError::Validation(format!(
@@ -335,6 +348,19 @@ impl DiffcoreConfig {
                 "github_copilot",
                 "codex",
                 "claude",
+                "cursor_cli",
+                "cursor_api",
+                "claude_cli",
+                "anthropic_api",
+                "codex_cli",
+                "openai_api",
+                "qwen_cli",
+                "alibaba_api",
+                "gemini_cli",
+                "gemini_api",
+                "copilot_cli",
+                "copilot_api",
+                "ollama_api",
             ];
             if !valid.contains(&provider.as_str()) {
                 return Err(ConfigError::Validation(format!(

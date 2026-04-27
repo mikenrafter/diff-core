@@ -446,7 +446,28 @@ export interface ModelInfo {
 export type DiffViewMode = "side-by-side" | "inline" | "dynamic";
 
 /** Available LLM providers. */
-export const LLM_PROVIDERS = ["codex", "claude", "anthropic", "openai", "gemini", "openrouter", "github_copilot"] as const;
+export const LLM_PROVIDERS = [
+  "codex",
+  "claude",
+  "anthropic",
+  "openai",
+  "gemini",
+  "openrouter",
+  "github_copilot",
+  "cursor_cli",
+  "cursor_api",
+  "claude_cli",
+  "anthropic_api",
+  "codex_cli",
+  "openai_api",
+  "qwen_cli",
+  "alibaba_api",
+  "gemini_cli",
+  "gemini_api",
+  "copilot_cli",
+  "copilot_api",
+  "ollama_api",
+] as const;
 export type LlmProvider = (typeof LLM_PROVIDERS)[number];
 
 /** Static fallback models per provider — used when API listing is unavailable. */
@@ -479,6 +500,43 @@ export const DEFAULT_MODELS_BY_PROVIDER: Record<LlmProvider, string[]> = {
     "claude-opus-4-7",
     "gemini-2.5-pro",
   ],
+  cursor_cli: ["default", "gpt-5.4", "gpt-5.4-mini", "gpt-4.1", "o4-mini", "o3"],
+  cursor_api: ["gpt-5.4", "gpt-5.4-mini", "gpt-4.1", "o4-mini", "o3"],
+  claude_cli: ["default", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"],
+  anthropic_api: ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"],
+  codex_cli: ["default", "gpt-5.4", "gpt-5.4-mini", "gpt-4.1", "o4-mini", "o3"],
+  openai_api: ["gpt-5.4", "gpt-5.4-mini", "gpt-4.1", "o4-mini", "o3"],
+  qwen_cli: ["qwen/qwen3-235b-a22b", "qwen/qwen3-72b-instruct", "qwen/qwen2.5-coder-32b-instruct"],
+  alibaba_api: ["qwen/qwen3-235b-a22b", "qwen/qwen3-72b-instruct", "qwen/qwen2.5-coder-32b-instruct"],
+  gemini_cli: [
+    "gemini-3.1-pro-preview",
+    "gemini-3-flash-preview",
+    "gemini-2.5-flash",
+  ],
+  gemini_api: [
+    "gemini-3.1-pro-preview",
+    "gemini-3-flash-preview",
+    "gemini-2.5-flash",
+  ],
+  copilot_cli: [
+    "gpt-4.1",
+    "gpt-5",
+    "o4-mini",
+    "claude-sonnet-4-6",
+    "claude-opus-4-6",
+    "claude-opus-4-7",
+    "gemini-2.5-pro",
+  ],
+  copilot_api: [
+    "gpt-4.1",
+    "gpt-5",
+    "o4-mini",
+    "claude-sonnet-4-6",
+    "claude-opus-4-6",
+    "claude-opus-4-7",
+    "gemini-2.5-pro",
+  ],
+  ollama_api: ["llama3.2", "qwen2.5-coder", "mistral", "phi4"],
 };
 
 /**

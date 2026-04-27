@@ -1,6 +1,7 @@
 import { useAppContext } from "../../hooks/AppContext";
 import { RightmostPane } from "./RightmostPane";
 import { SettingsPanel } from "../modals/SettingsPanel";
+import { AiOverlayTab } from "../tabs/AiOverlayTab";
 
 export function GroupsAndSettingsPane() {
   const { rightmostTab, setRightmostTab, groupsPanelWidth } = useAppContext();
@@ -16,6 +17,15 @@ export function GroupsAndSettingsPane() {
           title="Flow Groups"
         >
           Groups
+        </button>
+        <button
+          className={`panel-tab ${rightmostTab === "ai" ? "active" : ""}`}
+          onClick={() => setRightmostTab("ai")}
+          role="tab"
+          aria-selected={rightmostTab === "ai"}
+          title="AI"
+        >
+          AI
         </button>
         <button
           className={`panel-tab ${rightmostTab === "settings" ? "active" : ""}`}
@@ -42,8 +52,12 @@ export function GroupsAndSettingsPane() {
         </button>
       </div>
 
-      <div className="panel-body" style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
-        {rightmostTab === "groups" ? <RightmostPane embedded /> : <SettingsPanel embedded />}
+      <div className="rightmost-tab-content">
+        {rightmostTab === "groups"
+          ? <RightmostPane embedded />
+          : rightmostTab === "settings"
+            ? <SettingsPanel embedded />
+            : <AiOverlayTab />}
       </div>
     </aside>
   );

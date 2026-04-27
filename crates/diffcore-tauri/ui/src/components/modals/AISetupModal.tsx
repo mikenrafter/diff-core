@@ -15,7 +15,20 @@ import type { SubscriptionProvider } from "../../utils/llmUtils";
 import { useAppContext } from "../../hooks/AppContext";
 
 /** Direct API providers available in the fallback key flow. */
-const API_PROVIDER_OPTIONS: LlmProvider[] = ["openai", "anthropic", "gemini", "openrouter", "github_copilot"];
+const API_PROVIDER_OPTIONS: LlmProvider[] = [
+  "openai",
+  "anthropic",
+  "gemini",
+  "openrouter",
+  "github_copilot",
+  "cursor_api",
+  "anthropic_api",
+  "openai_api",
+  "alibaba_api",
+  "gemini_api",
+  "copilot_api",
+  "ollama_api",
+];
 
 /**
  * Subscription CLI backends that diffcore can delegate to.

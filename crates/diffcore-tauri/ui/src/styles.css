@@ -1231,13 +1231,25 @@ body {
 .groups-pane-embedded {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.rightmost-tab-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
   overflow: hidden;
 }
 
 .settings-panel-embedded {
-  height: 100%;
-  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  height: auto;
+  max-height: none;
 }
 .panel-right-collapsed {
   width: 36px !important;
@@ -3860,6 +3872,16 @@ body {
   gap: 8px;
 }
 
+.rightmost-sticky-top {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-primary);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.25);
+}
+
 .btn-refine {
   background: var(--accent);
   color: var(--bg-primary);
@@ -3979,6 +4001,49 @@ body {
   border-radius: 999px;
   background: rgba(166, 227, 161, 0.15);
   animation: activity-live-pulse 2s ease-in-out infinite;
+}
+
+/* ── Rightmost AI Tab ── */
+
+.ai-overlay-tab {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--bg-primary);
+}
+
+.ai-overlay-section {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.ai-overlay-section h3 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--text-secondary);
+}
+
+.ai-overlay-disclaimer {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.ai-overlay-runtime-note {
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.ai-overlay-actions {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
 }
 
 /* Change indicators on groups */

@@ -65,234 +65,236 @@ export function RightmostPane({ embedded = false }: { embedded?: boolean }) {
             )}
           </div>
           <div className="panel-body">
-            {/* Refinement banner — shown after analysis when LLM access is available */}
-            {analysis && !refinedGroups && !refining && aiAccessReady && (
-              <div className="refinement-banner">
-                <span>AI can improve these groupings</span>
-                <button
-                  className="btn btn-refine"
-                  onClick={() => { void runRefinement(); }}
-                  title={`Refine groupings using ${resolvedRefinementProvider ?? "anthropic"} (${resolvedRefinementModel ?? "default"})`}
-                >
-                  Refine
-                </button>
-              </div>
-            )}
-
-            {/* Manifest export & watch — allows CLI/agent refinement loop */}
-            {analysis && IS_TAURI && !watchedManifestPath && (
-              <div className="refinement-banner">
-                <span>Edit groups via CLI</span>
-                <button
-                  className="btn btn-refine"
-                  onClick={async () => {
-                    // Build prompt and copy FIRST (synchronous relative to user gesture)
-                    // so clipboard access isn't lost after awaits
-                    const defaultPath = repoPath
-                      ? `${repoPath}/.diffcore/groups.json`
-                      : "groups.json";
-                    const prompt = buildManifestAgentPrompt(defaultPath);
-                    const clipboardOk = await navigator.clipboard.writeText(prompt).then(() => true).catch(() => false);
-
-                    const path = await exportGroupsManifest();
-                    if (path) {
-                      // If the actual path differs from default, re-copy with correct path
-                      if (path !== defaultPath) {
-                        const correctedPrompt = buildManifestAgentPrompt(path);
-                        navigator.clipboard.writeText(correctedPrompt).catch(() => {});
-                      }
-                      await tauriInvoke("watch_manifest", { manifestPath: path }).catch(() => {});
-                      setWatchedManifestPath(path);
-                      showToast(clipboardOk
-                        ? "Watching manifest — agent prompt copied to clipboard"
-                        : `Watching ${path} for changes`
-                      );
-                    }
-                  }}
-                  title="Export groups as JSON manifest and watch for changes"
-                >
-                  Export &amp; Watch
-                </button>
-              </div>
-            )}
-            {watchedManifestPath && (
-              <div className="manifest-watch-banner">
-                <div className="manifest-watch-banner-header">
-                  <span className="manifest-watch-indicator">Live</span>
-                  <span>Agent prompt copied to clipboard</span>
-                </div>
-                <p className="manifest-watch-hint">
-                  Paste into Claude Code or your terminal agent to start refining groups. The UI updates in real-time.
-                </p>
-                <button
-                  className="btn btn-refine"
-                  style={{ alignSelf: "flex-start", fontSize: 10 }}
-                  onClick={() => {
-                    const prompt = buildManifestAgentPrompt(watchedManifestPath);
-                    navigator.clipboard.writeText(prompt).then(() => {
-                      showToast("Agent prompt copied to clipboard");
-                    }).catch(() => {});
-                  }}
-                >
-                  Copy prompt again
-                </button>
-              </div>
-            )}
-
-            {/* Refinement loading state */}
-            {refining && (
-              <div className="refinement-loading">
-                <span className="refine-spinner" />
-                <span>
-                  Refining with {resolvedRefinementProvider ?? "anthropic"}/{resolvedRefinementModel ?? "..."}
-                </span>
-              </div>
-            )}
-
-            {/* Original/Refined toggle — shown when refined groups exist */}
-            {refinedGroups && originalGroups && (
-              <div className="refinement-toggle">
-                <button
-                  className={`toggle-btn ${!showRefined ? "active" : ""}`}
-                  onClick={() => toggleRefinedView(false)}
-                >
-                  Original
-                </button>
-                <button
-                  className={`toggle-btn ${showRefined ? "active" : ""}`}
-                  onClick={() => toggleRefinedView(true)}
-                >
-                  Refined
-                </button>
-              </div>
-            )}
-
-            {/* Hunk / file navigation — same banner pattern as cross-file search */}
-            {analysis && selectedGroup && fileDiff && (
-              <div className="refinement-banner left-pane-hunk-file-nav">
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
-                  <span>Hunk &amp; file navigation</span>
-                </div>
-                <div className="left-pane-hunk-file-nav-buttons">
+            <div className="rightmost-sticky-top">
+              {/* Refinement banner — shown after analysis when LLM access is available */}
+              {analysis && !refinedGroups && !refining && aiAccessReady && (
+                <div className="refinement-banner">
+                  <span>AI can improve these groupings</span>
                   <button
-                    type="button"
                     className="btn btn-refine"
-                    style={{ fontSize: 10 }}
-                    onClick={() => navigateReplayHunk(-1)}
-                    disabled={!hasPrevReplayHunk}
-                    title="Previous hunk"
+                    onClick={() => { void runRefinement(); }}
+                    title={`Refine groupings using ${resolvedRefinementProvider ?? "anthropic"} (${resolvedRefinementModel ?? "default"})`}
                   >
-                    &lt; hunk
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-refine"
-                    style={{ fontSize: 10 }}
-                    onClick={() => navigateReplayHunk(1)}
-                    disabled={!hasNextReplayHunk}
-                    title="Next hunk"
-                  >
-                    hunk &gt;
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-refine"
-                    style={{ fontSize: 10 }}
-                    onClick={goToPrevFileInGroup}
-                    disabled={!hasPrevFileInGroup}
-                    title="Previous file in group"
-                  >
-                    &lt; file
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-refine"
-                    style={{ fontSize: 10 }}
-                    onClick={goToNextFileInGroup}
-                    disabled={!hasNextFileInGroup}
-                    title="Next file in group"
-                  >
-                    file &gt;
+                    Refine
                   </button>
                 </div>
-              </div>
-            )}
+              )}
 
-            <div className="refinement-banner" style={{ flexDirection: "column", alignItems: "stretch", gap: 8 }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <span>Cross-file search</span>
-                <button
-                  className="btn btn-refine"
-                  style={{ fontSize: 10 }}
-                  onClick={() => setCrossFileSearchOpen((v) => !v)}
-                  title="Toggle cross-file search (F)"
-                >
-                  {crossFileSearchOpen ? "Hide" : "Show"}
-                </button>
-              </div>
-              {crossFileSearchOpen && (
-                <>
-                  <input
-                    ref={crossFileSearchInputRef}
-                    className="input"
-                    placeholder="Search across files..."
-                    value={crossFileSearchQuery}
-                    onChange={(e) => setCrossFileSearchQuery(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        void runCrossFileSearch();
-                      }
-                      if (e.key === "Escape") {
-                        e.preventDefault();
-                        setCrossFileSearchOpen(false);
+              {/* Manifest export & watch — allows CLI/agent refinement loop */}
+              {analysis && IS_TAURI && !watchedManifestPath && (
+                <div className="refinement-banner">
+                  <span>Edit groups via CLI</span>
+                  <button
+                    className="btn btn-refine"
+                    onClick={async () => {
+                      // Build prompt and copy FIRST (synchronous relative to user gesture)
+                      // so clipboard access isn't lost after awaits
+                      const defaultPath = repoPath
+                        ? `${repoPath}/.diffcore/groups.json`
+                        : "groups.json";
+                      const prompt = buildManifestAgentPrompt(defaultPath);
+                      const clipboardOk = await navigator.clipboard.writeText(prompt).then(() => true).catch(() => false);
+
+                      const path = await exportGroupsManifest();
+                      if (path) {
+                        // If the actual path differs from default, re-copy with correct path
+                        if (path !== defaultPath) {
+                          const correctedPrompt = buildManifestAgentPrompt(path);
+                          navigator.clipboard.writeText(correctedPrompt).catch(() => {});
+                        }
+                        await tauriInvoke("watch_manifest", { manifestPath: path }).catch(() => {});
+                        setWatchedManifestPath(path);
+                        showToast(clipboardOk
+                          ? "Watching manifest — agent prompt copied to clipboard"
+                          : `Watching ${path} for changes`
+                        );
                       }
                     }}
-                    style={{ width: "100%" }}
-                  />
-                  <label className="settings-toggle" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <input
-                      type="checkbox"
-                      checked={showUnchangedFiles}
-                      onChange={(e) => setShowUnchangedFiles(e.target.checked)}
-                    />
-                    <span>show unchanged files</span>
-                  </label>
-                  <div className="comment-input-footer" style={{ justifyContent: "space-between" }}>
-                    <span className="comment-input-hint">
-                      {showUnchangedFiles ? "Searching changed + unchanged files" : "Searching changed files only"}
-                    </span>
-                    <button className="btn btn-comment-save" onClick={() => { void runCrossFileSearch(); }}>
-                      {crossFileSearchLoading ? "Searching..." : "Search"}
+                    title="Export groups as JSON manifest and watch for changes"
+                  >
+                    Export &amp; Watch
+                  </button>
+                </div>
+              )}
+              {watchedManifestPath && (
+                <div className="manifest-watch-banner">
+                  <div className="manifest-watch-banner-header">
+                    <span className="manifest-watch-indicator">Live</span>
+                    <span>Agent prompt copied to clipboard</span>
+                  </div>
+                  <p className="manifest-watch-hint">
+                    Paste into Claude Code or your terminal agent to start refining groups. The UI updates in real-time.
+                  </p>
+                  <button
+                    className="btn btn-refine"
+                    style={{ alignSelf: "flex-start", fontSize: 10 }}
+                    onClick={() => {
+                      const prompt = buildManifestAgentPrompt(watchedManifestPath);
+                      navigator.clipboard.writeText(prompt).then(() => {
+                        showToast("Agent prompt copied to clipboard");
+                      }).catch(() => {});
+                    }}
+                  >
+                    Copy prompt again
+                  </button>
+                </div>
+              )}
+
+              {/* Refinement loading state */}
+              {refining && (
+                <div className="refinement-loading">
+                  <span className="refine-spinner" />
+                  <span>
+                    Refining with {resolvedRefinementProvider ?? "anthropic"}/{resolvedRefinementModel ?? "..."}
+                  </span>
+                </div>
+              )}
+
+              {/* Original/Refined toggle — shown when refined groups exist */}
+              {refinedGroups && originalGroups && (
+                <div className="refinement-toggle">
+                  <button
+                    className={`toggle-btn ${!showRefined ? "active" : ""}`}
+                    onClick={() => toggleRefinedView(false)}
+                  >
+                    Original
+                  </button>
+                  <button
+                    className={`toggle-btn ${showRefined ? "active" : ""}`}
+                    onClick={() => toggleRefinedView(true)}
+                  >
+                    Refined
+                  </button>
+                </div>
+              )}
+
+              {/* Hunk / file navigation — same banner pattern as cross-file search */}
+              {analysis && selectedGroup && fileDiff && (
+                <div className="refinement-banner left-pane-hunk-file-nav">
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
+                    <span>Hunk &amp; file navigation</span>
+                  </div>
+                  <div className="left-pane-hunk-file-nav-buttons">
+                    <button
+                      type="button"
+                      className="btn btn-refine"
+                      style={{ fontSize: 10 }}
+                      onClick={() => navigateReplayHunk(-1)}
+                      disabled={!hasPrevReplayHunk}
+                      title="Previous hunk"
+                    >
+                      &lt; hunk
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-refine"
+                      style={{ fontSize: 10 }}
+                      onClick={() => navigateReplayHunk(1)}
+                      disabled={!hasNextReplayHunk}
+                      title="Next hunk"
+                    >
+                      hunk &gt;
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-refine"
+                      style={{ fontSize: 10 }}
+                      onClick={goToPrevFileInGroup}
+                      disabled={!hasPrevFileInGroup}
+                      title="Previous file in group"
+                    >
+                      &lt; file
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-refine"
+                      style={{ fontSize: 10 }}
+                      onClick={goToNextFileInGroup}
+                      disabled={!hasNextFileInGroup}
+                      title="Next file in group"
+                    >
+                      file &gt;
                     </button>
                   </div>
-                  {crossFileSearchError && (
-                    <div className="error-banner">{crossFileSearchError}</div>
-                  )}
-                  <div style={{ maxHeight: 220, overflow: "auto" }}>
-                    {crossFileSearchResults.length === 0 && !crossFileSearchLoading && crossFileSearchQuery.trim() && !crossFileSearchError && (
-                      <div className="comment-input-hint">No matches</div>
-                    )}
-                    {crossFileSearchResults.slice(0, 60).map((result) => (
-                      <div key={result.file_path} style={{ marginBottom: 8 }}>
-                        <div style={{ fontWeight: 600, fontSize: 12, opacity: 0.9 }}>{shortPath(result.file_path)}</div>
-                        {result.matches.slice(0, 4).map((m) => (
-                          <button
-                            key={`${result.file_path}:${m.line_number}:${m.line_text}`}
-                            className="comment-strip-item"
-                            style={{ width: "100%", textAlign: "left", marginTop: 4 }}
-                            onClick={() => {
-                              void openCrossFileSearchResult(result.file_path, m.line_number);
-                            }}
-                          >
-                            <strong>{m.line_number}</strong>: {truncateSearchResultLine(m.line_text)}
-                          </button>
-                        ))}
-                      </div>
-                    ))}
-                  </div>
-                </>
+                </div>
               )}
+
+              <div className="refinement-banner" style={{ flexDirection: "column", alignItems: "stretch", gap: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <span>Cross-file search</span>
+                  <button
+                    className="btn btn-refine"
+                    style={{ fontSize: 10 }}
+                    onClick={() => setCrossFileSearchOpen((v) => !v)}
+                    title="Toggle cross-file search (F)"
+                  >
+                    {crossFileSearchOpen ? "Hide" : "Show"}
+                  </button>
+                </div>
+                {crossFileSearchOpen && (
+                  <>
+                    <input
+                      ref={crossFileSearchInputRef}
+                      className="input"
+                      placeholder="Search across files..."
+                      value={crossFileSearchQuery}
+                      onChange={(e) => setCrossFileSearchQuery(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          void runCrossFileSearch();
+                        }
+                        if (e.key === "Escape") {
+                          e.preventDefault();
+                          setCrossFileSearchOpen(false);
+                        }
+                      }}
+                      style={{ width: "100%" }}
+                    />
+                    <label className="settings-toggle" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <input
+                        type="checkbox"
+                        checked={showUnchangedFiles}
+                        onChange={(e) => setShowUnchangedFiles(e.target.checked)}
+                      />
+                      <span>show unchanged files</span>
+                    </label>
+                    <div className="comment-input-footer" style={{ justifyContent: "space-between" }}>
+                      <span className="comment-input-hint">
+                        {showUnchangedFiles ? "Searching changed + unchanged files" : "Searching changed files only"}
+                      </span>
+                      <button className="btn btn-comment-save" onClick={() => { void runCrossFileSearch(); }}>
+                        {crossFileSearchLoading ? "Searching..." : "Search"}
+                      </button>
+                    </div>
+                    {crossFileSearchError && (
+                      <div className="error-banner">{crossFileSearchError}</div>
+                    )}
+                    <div style={{ maxHeight: 220, overflow: "auto" }}>
+                      {crossFileSearchResults.length === 0 && !crossFileSearchLoading && crossFileSearchQuery.trim() && !crossFileSearchError && (
+                        <div className="comment-input-hint">No matches</div>
+                      )}
+                      {crossFileSearchResults.slice(0, 60).map((result) => (
+                        <div key={result.file_path} style={{ marginBottom: 8 }}>
+                          <div style={{ fontWeight: 600, fontSize: 12, opacity: 0.9 }}>{shortPath(result.file_path)}</div>
+                          {result.matches.slice(0, 4).map((m) => (
+                            <button
+                              key={`${result.file_path}:${m.line_number}:${m.line_text}`}
+                              className="comment-strip-item"
+                              style={{ width: "100%", textAlign: "left", marginTop: 4 }}
+                              onClick={() => {
+                                void openCrossFileSearchResult(result.file_path, m.line_number);
+                              }}
+                            >
+                              <strong>{m.line_number}</strong>: {truncateSearchResultLine(m.line_text)}
+                            </button>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
 
             <div

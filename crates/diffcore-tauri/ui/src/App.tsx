@@ -22,7 +22,6 @@ import { LLM_PROVIDERS, DEFAULT_MODELS_BY_PROVIDER } from "./types";
 import type { ModelInfo } from "./types";
 import { type DiffViewerHandle, type EditedHunk } from "./components/DiffViewer";
 import { type SourceFocusRequest } from "./components/SourceExplorer";
-import { AISetupModal } from "./components/modals/AISetupModal";
 import { CommentInputOverlay } from "./components/modals/CommentInputOverlay";
 import { RegenDialog } from "./components/modals/RegenDialog";
 import { MOCK_ANALYSIS, MOCK_DIFFS, MOCK_PASS1, MOCK_PASS2, MOCK_REPO_INFO, MOCK_LLM_SETTINGS, MOCK_REFINEMENT } from "./mock";
@@ -258,7 +257,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [aiSetupOpen, setAiSetupOpen] = useState(false);
   const [aiSetupStep, setAiSetupStep] = useState<OnboardingStep>("recommended");
-  const [apiProviderDraft, setApiProviderDraft] = useState<LlmProvider>("openai");
+  const [apiProviderDraft, setApiProviderDraft] = useState<LlmProvider>("openai_api");
   const [apiKeyInput, setApiKeyInput] = useState("");
 
   // Ignore paths state
@@ -350,7 +349,7 @@ export default function App() {
   const groupsPanelStartWidth = useRef(0);
   const groupsPanelRafId = useRef(0);
 
-  const [rightmostTab, setRightmostTab] = useState<"groups" | "settings">("groups");
+  const [rightmostTab, setRightmostTab] = useState<"groups" | "settings" | "ai">("groups");
 
   // Update notification state
   const [updateAvailable, setUpdateAvailable] = useState<{ version: string; body: string } | null>(null);
@@ -901,7 +900,8 @@ export default function App() {
       return;
     }
     if (aiSetupDismissed.current) return;
-    setAiSetupOpen(true);
+    setRightmostTab("ai");
+    setAiSetupOpen(false);
     setAiSetupStep("recommended");
   }, [llmSettings]);
 
@@ -2085,7 +2085,8 @@ export default function App() {
   const openAiSetup = useCallback((step: OnboardingStep = "recommended") => {
     aiSetupDismissed.current = false;
     setAiSetupStep(step);
-    setAiSetupOpen(true);
+    setAiSetupOpen(false);
+    setRightmostTab("ai");
     setSettingsOpen(false);
   }, []);
 
@@ -2173,7 +2174,7 @@ export default function App() {
     if (llmSettings && isApiProvider(llmSettings.provider)) {
       setApiProviderDraft(llmSettings.provider as LlmProvider);
     } else {
-      setApiProviderDraft("openai");
+      setApiProviderDraft("openai_api");
     }
     openAiSetup("api");
   }, [llmSettings, openAiSetup]);
@@ -3292,8 +3293,6 @@ export default function App() {
       {/* Top bar */}
       <HeaderBar />
 
-      <AISetupModal />
-
       {/* SettingsPanel now lives in the rightmost tab */}
       {/* Error display */}
       {error && (
@@ -3321,7 +3320,7 @@ export default function App() {
         {/* Resize handle: inspector | groups/settings */}
         <div className="panel-resize-handle" onMouseDown={startGroupsPanelDrag} />
 
-        {/* Rightmost: Flow groups + Settings tab */}
+        {/* Rightmost: Flow groups + AI + Settings tabs */}
         <GroupsAndSettingsPane />
       </div>
 
