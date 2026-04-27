@@ -2,7 +2,7 @@
 ---
 todos:
   - id: "reviewed-hunks-display"
-    content: "Add reviewed/total hunk rendering to `FileDisplay` and pass reviewed counts from `App.tsx` → `LeftPane`."
+    content: "Add reviewed/total hunk rendering to `FileDisplay` and pass reviewed counts from `App.tsx` → `RightmostPane`."
     status: pending
   - id: "move-nav-controls"
     content: "Remove replay step tracker and +hunk-comment from `CenterPane`; add hunk/file nav toolbar to `GroupsAndSettingsPane` header with file nav working outside replay."
@@ -63,9 +63,9 @@ Implement the 9 UI changes requested:
 ### 2) Compute per-file reviewed hunk counts (TS state)
 - In `crates/diffcore-tauri/ui/src/App.tsx`, derive a `Map<string, number>` of `reviewedHunksByFile` from `replayViewedHunkIds`.
   - The hunk IDs are currently generated as `monaco_hunk_${filePath}_...` (see `mapEditedHunksToReplayHunks`), so we can count by prefix match.
-  - Provide this map via context (`AppContextValue`) for `LeftPane` (file list) to pass into `FileDisplay`.
+  - Provide this map via context (`AppContextValue`) for `RightmostPane` (file list) to pass into `FileDisplay`.
 - Update `crates/diffcore-tauri/ui/src/hooks/AppContext.tsx` types accordingly.
-- Update `crates/diffcore-tauri/ui/src/components/panels/LeftPane.tsx` to pass `reviewedHunks={reviewedHunksByFile.get(file.path)}` to `FileDisplay`.
+- Update `crates/diffcore-tauri/ui/src/components/panels/RightmostPane.tsx` to pass `reviewedHunks={reviewedHunksByFile.get(file.path)}` to `FileDisplay`.
 
 ### 3) Move hunk/file navigation to the rightmost pane header
 - Remove navigation UI from `CenterPane.tsx`:
@@ -140,11 +140,11 @@ Implement the 9 UI changes requested:
   - Replace modal open action with “open AI tab” (preferred for consistency).
 
 ### 10) Rightmost pane double scrollbar + sticky banners
-- The rightmost pane renders `LeftPane embedded` inside a `.panel-body` with `overflow: hidden` while `LeftPane` itself uses its own `.panel-body` scroll; this can create nested scroll areas.
+- The rightmost pane renders `RightmostPane embedded` inside a `.panel-body` with `overflow: hidden` while `RightmostPane` itself uses its own `.panel-body` scroll; this can create nested scroll areas.
 - Make the rightmost pane have **one** scrolling container:
   - Ensure only one element in the rightmost pane controls `overflow-y: auto`.
   - Remove/avoid nested `overflow: auto` wrappers where possible.
-- Make the top banners in `LeftPane.tsx` sticky:
+- Make the top banners in `RightmostPane.tsx` sticky:
   - Target the refinement banner and manifest-watch banner (“Edit groups via CLI / Export & Watch”) by wrapping them in a container that is `position: sticky; top: 0; z-index: ...` within the scrollable area.
   - Ensure sticky works by not placing them inside an element with `overflow: hidden` that breaks sticky positioning.
 - Update `styles.css` accordingly (likely `.panel-rightmost`, `.panel-body`, `.refinement-banner`, `.manifest-watch-banner`).

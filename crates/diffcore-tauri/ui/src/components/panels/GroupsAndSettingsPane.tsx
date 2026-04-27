@@ -1,5 +1,5 @@
 import { useAppContext } from "../../hooks/AppContext";
-import { LeftPane } from "./LeftPane";
+import { RightmostPane } from "./RightmostPane";
 import { SettingsPanel } from "../modals/SettingsPanel";
 
 export function GroupsAndSettingsPane() {
@@ -43,7 +43,7 @@ export function GroupsAndSettingsPane() {
       </div>
 
       <div className="panel-body" style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
-        {rightmostTab === "groups" ? <LeftPane embedded /> : <SettingsPanel embedded />}
+        {rightmostTab === "groups" ? <RightmostPane embedded /> : <SettingsPanel embedded />}
       </div>
     </aside>
   );

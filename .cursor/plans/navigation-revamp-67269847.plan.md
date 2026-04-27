@@ -31,8 +31,8 @@ isProject: false
 - Browse uses `@tauri-apps/plugin-dialog` in `crates/diffcore-tauri/ui/src/App.tsx` (`browseForRepository`). If it’s non-functional in-app, the likely cause is missing Tauri permissions: `crates/diffcore-tauri/capabilities/default.json` currently does **not** include a dialog permission.
 - Favorites (“Pin”) and Recents are stored in `localStorage` (`diffcore.favoriteRepos`, `diffcore.recentRepos`) and shown via a separate “Recent” quick-pick popover in `HeaderBar.tsx`.
 - `Dropdown.tsx` already supports **inline filtering** (immediate) for long option lists and keyboard navigation; it is not currently a “creatable” combobox.
-- Flow group expansion is effectively “selected group shows its files” in `crates/diffcore-tauri/ui/src/components/panels/LeftPane.tsx` (so collapse/expand isn’t independent or persistent).
-- Layout is currently 3 columns (`LeftPane` groups, `CenterPane` diff, `RightPane` tabs) in `crates/diffcore-tauri/ui/src/App.tsx`.
+- Flow group expansion is effectively “selected group shows its files” in `crates/diffcore-tauri/ui/src/components/panels/RightmostPane.tsx` (so collapse/expand isn’t independent or persistent).
+- Layout is currently 3 columns (`RightmostPane` groups, `CenterPane` diff, `RightPane` tabs) in `crates/diffcore-tauri/ui/src/App.tsx`.
 - Compare modes currently supported in UI state are `branch` and `unstaged_to_staged` in `App.tsx` (`CompareMode`).
 
 ## Spec updates (before code)
@@ -76,7 +76,7 @@ isProject: false
   - Add required dialog permission in `crates/diffcore-tauri/capabilities/default.json` for Tauri v2 plugin dialog.
 
 ### B) Pane layout restructure (diff left, two right panes)
-- Update `App.tsx` layout from `LeftPane | CenterPane | RightPane` to:
+- Update `App.tsx` layout from `RightmostPane | CenterPane | RightPane` to:
   - Left: `CenterPane` (diff viewer).
   - Right split: two panes:
     - Inner-right: existing `RightPane` tabbed inspector (activity/comments/annotations/source).
@@ -118,7 +118,7 @@ isProject: false
   - `crates/diffcore-tauri/ui/src/components/panels/HeaderBar.tsx`
   - `crates/diffcore-tauri/ui/src/components/Dropdown.tsx` (extend/extract for combobox)
   - `crates/diffcore-tauri/ui/src/App.tsx` (layout, state, compare modes, debounces)
-  - `crates/diffcore-tauri/ui/src/components/panels/LeftPane.tsx` (move/replace groups UI into rightmost pane; implement collapsible groups)
+  - `crates/diffcore-tauri/ui/src/components/panels/RightmostPane.tsx` (move/replace groups UI into rightmost pane; implement collapsible groups)
   - `crates/diffcore-tauri/ui/src/components/panels/RightPane.tsx` (may become inner-right pane)
   - `crates/diffcore-tauri/ui/src/components/modals/SettingsPanel.tsx` (convert to in-pane tab component)
   - `crates/diffcore-tauri/ui/src/styles.css` (new split layout + resize handles + scroll constraints)

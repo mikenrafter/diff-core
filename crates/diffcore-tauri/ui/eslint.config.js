@@ -36,7 +36,7 @@ import noOrphanTauriCommands from "./eslint-rules/no-orphan-tauri-commands.js";
  */
 const ENTRYPOINT_FILES = [
   // App.tsx — root component owning all application state and the context
-  // provider. Panels (HeaderBar, LeftPane, CenterPane, RightPane), tabs
+  // provider. Panels (HeaderBar, RightmostPane, CenterPane, RightPane), tabs
   // (ActivityTab, AnnotationsTab, SourceTab, CommentsTab), and modals
   // (AISetupModal, SettingsPanel, RegenDialog, CommentInputOverlay) are all
   // extracted. The remaining lines are state + callback definitions.

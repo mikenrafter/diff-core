@@ -3,7 +3,7 @@
  * and the live-reload file-watcher effect.
  *
  * WHY a separate hook: the manifest workflow (export → watch → auto-import on
- * change) is a cohesive sub-feature used only by LeftPane and the context
+ * change) is a cohesive sub-feature used only by RightmostPane and the context
  * value. Keeping it co-located makes the watch/unlisten lifecycle impossible
  * to get wrong and shrinks App.tsx by ~70 lines.
  */

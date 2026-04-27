@@ -75,7 +75,7 @@ src/
 └── components/
     ├── panels/                    ← Major UI panels (PENDING)
     │   ├── HeaderBar.tsx          ← <header className="top-bar"> — repo path, branches, analyze
-    │   ├── LeftPane.tsx           ← <aside className="panel-left"> — group list, file list, search
+    │   ├── RightmostPane.tsx           ← <aside className="panel-left"> — group list, file list, search
     │   ├── CenterPane.tsx         ← <main> — file tabs, DiffViewer, FlowGraph
     │   └── RightPane.tsx          ← <aside className="panel-right"> — tab host + tab content
     │
@@ -124,8 +124,8 @@ export function useAppContext(): AppContextValue {
 
 Panel and tab components consume state via `useAppContext()`:
 ```tsx
-// components/panels/LeftPane.tsx
-export function LeftPane() {
+// components/panels/RightmostPane.tsx
+export function RightmostPane() {
   const { analysis, selectedGroup, openGroupById } = useAppContext();
   // ...
 }
@@ -142,8 +142,8 @@ src/utils/activityUtils.ts
 src/utils/activityUtils.spec.ts   ← unit tests for activityUtils
 src/utils/groupUtils.ts
 src/utils/groupUtils.spec.ts
-src/components/panels/LeftPane.tsx
-src/components/panels/LeftPane.spec.tsx
+src/components/panels/RightmostPane.tsx
+src/components/panels/RightmostPane.spec.tsx
 ```
 
 Integration / E2E tests live in `tests/` using Playwright (planned, see `test:e2e` script).
@@ -163,7 +163,7 @@ Integration / E2E tests live in `tests/` using Playwright (planned, see `test:e2
 | `hooks/AppContext.tsx` | ✅ Done | 439 |
 | `hooks/useEditorIntegration.ts` | ✅ Done | ~120 |
 | `components/panels/HeaderBar.tsx` | ✅ Done | — |
-| `components/panels/LeftPane.tsx` | ✅ Done | — |
+| `components/panels/RightmostPane.tsx` | ✅ Done | — |
 | `components/panels/CenterPane.tsx` | ✅ Done | — |
 | `components/panels/RightPane.tsx` | ✅ Done | — |
 | `components/tabs/ActivityTab.tsx` | ✅ Done | 271 |
@@ -182,7 +182,7 @@ Integration / E2E tests live in `tests/` using Playwright (planned, see `test:e2
 
 ## Naming conventions
 
-- **Component files:** PascalCase (e.g., `LeftPane.tsx`, `ActivityTab.tsx`)
+- **Component files:** PascalCase (e.g., `RightmostPane.tsx`, `ActivityTab.tsx`)
 - **Hook files:** camelCase prefixed with `use` (e.g., `useAppContext.tsx`, `useAnalysis.ts`)
 - **Utility files:** camelCase (e.g., `activityUtils.ts`, `pathUtils.ts`)
 - **Test files:** same name as source with `.spec.ts` / `.spec.tsx` suffix

@@ -38,8 +38,8 @@
   - Current: plain `<input>` + separate “Recent” menu + Pin button.
 - **Browse**: `crates/diffcore-tauri/ui/src/App.tsx` uses `@tauri-apps/plugin-dialog`.
   - Likely broken today due to missing dialog permission in `crates/diffcore-tauri/capabilities/default.json`.
-- **Layout**: `crates/diffcore-tauri/ui/src/App.tsx` renders `LeftPane | CenterPane | RightPane`.
-- **Flow groups list**: `crates/diffcore-tauri/ui/src/components/panels/LeftPane.tsx`
+- **Layout**: `crates/diffcore-tauri/ui/src/App.tsx` renders `RightmostPane | CenterPane | RightPane`.
+- **Flow groups list**: `crates/diffcore-tauri/ui/src/components/panels/RightmostPane.tsx`
   - Expansion is effectively tied to selection (`selectedGroup`).
 - **Dropdown base component**: `crates/diffcore-tauri/ui/src/components/Dropdown.tsx`
   - Already supports immediate client-side filtering and keyboard navigation.
