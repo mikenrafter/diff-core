@@ -6,3 +6,4 @@ agent,an LLM-driven actor connected over MCP or the CLI,,agents
 entity,"a named code unit such as a function, type, or method, as extracted by sem",,"entities, symbol, symbols"
 anchor,"a code location a note attaches to: entity, hunk, file, flow-group, or test",,"anchors, anchored"
 claim,a statement an agent makes about an anchor,,claims
+evidence,"facts diffcore derives without a model: graph edges, tests, impact, profiles",,
