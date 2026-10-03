@@ -17,3 +17,4 @@ surface-cli,"Command-line subcommands that call the daemon, or analyze in proces
 surface-web,"React app shell: session switching, application state, live updates, and generated API types.",proposed,rework-1
 view-source,"Reading view: flow groups in order, source with inline claims, and adjacent tests, comments, imports, and callers.",proposed,rework-1
 view-topology,"D3 graph views: module, file, and entity graphs, matrix, and boundary overlays within a distance budget.",proposed,rework-1
+visualizer-runtime,Sandboxed iframe and worker that runs visualizer TypeScript with explicit inputs and validates its declarative output.,proposed,rework-1
