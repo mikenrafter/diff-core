@@ -1,1 +1,2 @@
 id,shortname,description,naive_change,outcomes,attractor_id
+P-01,structural-first-read,The change-set arrives grouped and ordered for reading without requiring a model,"Structural pipeline produces flow-groups with a read order plus module, file, and entity graph views",reviewer sees each flow-group read order before opening a hunk,A-01
