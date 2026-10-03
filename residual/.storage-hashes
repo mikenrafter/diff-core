@@ -1,0 +1,12 @@
+# storage integrity change-detection snapshot
+.walk-review.toml=missing
+attractors.csv=e143603a3eff2997
+components.csv=22c4639e460e0ae0
+config.toml=461e14293776f66b
+defense/meta-attractors.csv=e143603a3eff2997
+defense/meta-purposes.csv=683f15e6d7ab2192
+defense/meta-stressors.csv=5893e4f498879748
+lexicon.csv=381efb2d1195fcfe
+purposes.csv=683f15e6d7ab2192
+residues.csv=d17c555fa2f0f7d1
+stressors.csv=683f15e6d7ab2192
