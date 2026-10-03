@@ -1,4 +1,4 @@
 force,engine-analysis,engine-changes,engine-entities,eval-quality,provider-tools,review-anchors,review-boundaries,review-claims,review-evidence,review-flows,review-queue,review-visualizers,surface-cli,surface-host,surface-mcp,surface-web,view-source,view-topology,visualizer-runtime,workspace-reviews
 P-01,1,,,,,,,,,1,,,,,,,1,1,,
 P-02,,,,,,,,,1,,,,,,,,1,,,
-P-03,,,,,,,,,1,,,,,,,,,,,
+P-03,,,,,,,,,1,,,1,,,,,,,,
