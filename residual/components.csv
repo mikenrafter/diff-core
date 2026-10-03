@@ -16,3 +16,4 @@ surface-mcp,Exposes review operations as MCP tools over streamable HTTP and stdi
 surface-cli,"Command-line subcommands that call the daemon, or analyze in process, and print results.",proposed,rework-1
 surface-web,"React app shell: session switching, application state, live updates, and generated API types.",proposed,rework-1
 view-source,"Reading view: flow groups in order, source with inline claims, and adjacent tests, comments, imports, and callers.",proposed,rework-1
+view-topology,"D3 graph views: module, file, and entity graphs, matrix, and boundary overlays within a distance budget.",proposed,rework-1
