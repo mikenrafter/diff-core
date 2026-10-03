@@ -1,0 +1,43 @@
+{
+  "cli_version": "0.11.3",
+  "checkpoint_id": "fe092c99f11c",
+  "strategy": "manual-commit",
+  "branch": "residual/metadata",
+  "checkpoints_count": 12,
+  "files_touched": [
+    "residual/.storage-hashes",
+    "residual/attractors.csv",
+    "residual/components.csv",
+    "residual/config.toml",
+    "residual/defense/meta-attractors.csv",
+    "residual/defense/meta-purposes.csv",
+    "residual/defense/meta-stressors.csv",
+    "residual/lexicon.csv",
+    "residual/purposes.csv",
+    "residual/residues.csv",
+    "residual/stressors.csv"
+  ],
+  "sessions": [
+    {
+      "metadata": "/fe/092c99f11c/0/metadata.json",
+      "transcript": "/fe/092c99f11c/0/full.jsonl",
+      "compact_transcript": "/fe/092c99f11c/0/transcript.jsonl",
+      "content_hash": "/fe/092c99f11c/0/content_hash.txt",
+      "prompt": "/fe/092c99f11c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 112,
+    "cache_creation_tokens": 159804,
+    "cache_read_tokens": 5548972,
+    "output_tokens": 23772,
+    "api_call_count": 45,
+    "subagent_tokens": {
+      "input_tokens": 274,
+      "cache_creation_tokens": 452247,
+      "cache_read_tokens": 9134790,
+      "output_tokens": 95958,
+      "api_call_count": 137
+    }
+  }
+}
