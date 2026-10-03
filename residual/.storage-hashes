@@ -1,6 +1,6 @@
 # storage integrity change-detection snapshot
 .walk-review.toml=missing
-attractors.csv=dde036de3b63eedf
+attractors.csv=1d9178f9b14864e4
 components.csv=22c4639e460e0ae0
 config.toml=missing
 defense/meta-attractors.csv=e143603a3eff2997
