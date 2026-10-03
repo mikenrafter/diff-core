@@ -7,3 +7,4 @@ review-anchors,"Gives code locations stable IDs and re-finds them in later snaps
 review-evidence,"Collects model-free facts and artifacts, and finds the tests, comments, imports, and callers next to each entity.",proposed,rework-1
 review-claims,"Stores agent claims pinned to anchors, links them to evidence, records reviewer decisions, and handles pointing.",proposed,rework-1
 review-queue,"Delivers reviewer feedback to agents and keeps their replies, questions, and resolution state.",proposed,rework-1
+review-boundaries,"Checks change-sets against a project's declared boundaries and turns accepted claims into versioned, scoped rules.",proposed,rework-1
