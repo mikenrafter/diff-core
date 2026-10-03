@@ -7,3 +7,4 @@ entity,"a named code unit such as a function, type, or method, as extracted by s
 anchor,"a code location a note attaches to: entity, hunk, file, flow-group, or test",,"anchors, anchored"
 claim,a statement an agent makes about an anchor,,claims
 evidence,"facts diffcore derives without a model: graph edges, tests, impact, profiles",,
+flow-group,changed entities that belong together for review,,"flow-groups, group, groups"
