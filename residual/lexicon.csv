@@ -10,3 +10,4 @@ review-session,"a project plus base and head refs, with its review events",,"ses
 review-queue,reviewer feedback awaiting an agent response,,queue
 project,a repository root registered with diffcore,,projects
 visualizer,a pluggable view that renders evidence for an anchor,,visualizers
+change-set,the changes between a base ref and a head ref,,"diff, PR, changes, change-sets"
