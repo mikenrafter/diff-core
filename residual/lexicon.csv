@@ -11,3 +11,4 @@ review-queue,reviewer feedback awaiting an agent response,,queue
 project,a repository root registered with diffcore,,projects
 visualizer,a pluggable view that renders evidence for an anchor,,visualizers
 change-set,the changes between a base ref and a head ref,,"diff, PR, changes, change-sets"
+boundary,"a rule a project declares about its own code: dependency direction, size limit, ownership, or invariant",,boundaries
