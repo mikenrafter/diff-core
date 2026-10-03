@@ -1,1 +1,2 @@
 id,shortname,description,naive_change,outcomes,attractor_id
+S-01,agent-volume-surge,Agents ship change-sets of hundreds of files every day across many repositories while reviewer attention stays fixed,Rank flow-groups with an explicit read order and reserve deep dives for anchors where evidence flags risk,reviewer reaches a verdict on a large change-set without reading every hunk,A-01
