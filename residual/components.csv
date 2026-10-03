@@ -15,3 +15,4 @@ surface-host,"The daemon process: serves the web app, HTTP API, and MCP, runs bo
 surface-mcp,Exposes review operations as MCP tools over streamable HTTP and stdio for agents.,proposed,rework-1
 surface-cli,"Command-line subcommands that call the daemon, or analyze in process, and print results.",proposed,rework-1
 surface-web,"React app shell: session switching, application state, live updates, and generated API types.",proposed,rework-1
+view-source,"Reading view: flow groups in order, source with inline claims, and adjacent tests, comments, imports, and callers.",proposed,rework-1
