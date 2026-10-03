@@ -9,3 +9,4 @@ review-claims,"Stores agent claims pinned to anchors, links them to evidence, re
 review-queue,"Delivers reviewer feedback to agents and keeps their replies, questions, and resolution state.",proposed,rework-1
 review-boundaries,"Checks change-sets against a project's declared boundaries and turns accepted claims into versioned, scoped rules.",proposed,rework-1
 workspace-reviews,"User-level store of projects, agent threads, worktrees, and review sessions, with an append-only event log.",proposed,rework-1
+review-visualizers,"Built-in charts and visualizer specs, each tied to its data source and author.",proposed,rework-1
