@@ -1,3 +1,4 @@
 term,definition,domain,aliases
 change-set,the changes between a base ref and a head ref,,"diff, PR, changes, change-sets"
 change-set,the changes between a base ref and a head ref,,"diff, PR, changes, change-sets"
+reviewer,a human judging a change-set,,reviewers
