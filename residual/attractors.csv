@@ -1,2 +1,3 @@
 id,name,description,positive_state,negative_state
 A-01,Change Comprehension,Whether a reviewer can understand a change-set faster than by reading its raw diff,The reviewer understands a change-set faster than by reading the raw diff,"The reviewer falls back to reading hunks file by file, or rubber-stamps the change-set"
+A-02,Claim Verifiability,Whether agent claims about a change-set can be checked against evidence,Agent claims sit on anchors and can be checked against evidence,Claims hide in a sidebar and are trusted or ignored wholesale
