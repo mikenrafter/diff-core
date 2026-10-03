@@ -1,2 +1,3 @@
 id,shortname,description,naive_change,outcomes,attractor_id
 S-01,agent-volume-surge,Agents ship change-sets of hundreds of files every day across many repositories while reviewer attention stays fixed,Rank flow-groups with an explicit read order and reserve deep dives for anchors where evidence flags risk,reviewer reaches a verdict on a large change-set without reading every hunk,A-01
+S-02,frontier-model-loss,"Reviewers lose access to frontier models through pricing shifts, provider exits, or security policy such as air gaps",Core analysis derives evidence without any model call; agents participate only optionally over MCP,diffcore produces evidence for a change-set without any model,A-03
