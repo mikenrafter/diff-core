@@ -1,2 +1,3 @@
 name,description,status,architecture_set
 engine-analysis,"Runs the one analyze function that turns a change-set into an immutable result with groups, graph, and ordering.",proposed,rework-1
+engine-changes,"Captures exact Git comparisons and frozen snapshots of both sides, stored outside the reviewed repository.",proposed,rework-1
