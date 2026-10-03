@@ -1,2 +1,3 @@
 id,shortname,description,naive_change,outcomes,attractor_id
 P-01,structural-first-read,The change-set arrives grouped and ordered for reading without requiring a model,"Structural pipeline produces flow-groups with a read order plus module, file, and entity graph views",reviewer sees each flow-group read order before opening a hunk,A-01
+P-02,adjacent-context,"The tests, comments, imports, and callers needed to judge an entity sit beside it or one click away, whatever the project test layout",Link tests to entities by graph edges and naming conventions and render a context strip per entity,reviewer opens the tests for an entity within one click,A-01
