@@ -9,3 +9,4 @@ claim,a statement an agent makes about an anchor,,claims
 evidence,"facts diffcore derives without a model: graph edges, tests, impact, profiles",,
 flow-group,changed entities that belong together for review,,"flow-groups, group, groups"
 review-session,"a project plus base and head refs, with its review events",,"session, sessions, review-sessions"
+review-queue,reviewer feedback awaiting an agent response,,queue
