@@ -13,3 +13,4 @@ review-visualizers,"Built-in charts and visualizer specs, each tied to its data 
 provider-tools,"The single plugin contract for outside tools: what they can do, what they may touch, and whether they worked.",proposed,rework-1
 surface-host,"The daemon process: serves the web app, HTTP API, and MCP, runs bounded jobs, and publishes its address.",proposed,rework-1
 surface-mcp,Exposes review operations as MCP tools over streamable HTTP and stdio for agents.,proposed,rework-1
+surface-cli,"Command-line subcommands that call the daemon, or analyze in process, and print results.",proposed,rework-1
