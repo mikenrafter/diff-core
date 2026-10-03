@@ -18,3 +18,4 @@ surface-web,"React app shell: session switching, application state, live updates
 view-source,"Reading view: flow groups in order, source with inline claims, and adjacent tests, comments, imports, and callers.",proposed,rework-1
 view-topology,"D3 graph views: module, file, and entity graphs, matrix, and boundary overlays within a distance budget.",proposed,rework-1
 visualizer-runtime,Sandboxed iframe and worker that runs visualizer TypeScript with explicit inputs and validates its declarative output.,proposed,rework-1
+eval-quality,Separate crate that scores the public analyze pipeline and checks surface parity and engineering rules.,proposed,rework-1
