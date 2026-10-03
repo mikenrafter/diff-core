@@ -1,1 +1,2 @@
 id,name,description,positive_state,negative_state
+A-01,Change Comprehension,Whether a reviewer can understand a change-set faster than by reading its raw diff,The reviewer understands a change-set faster than by reading the raw diff,"The reviewer falls back to reading hunks file by file, or rubber-stamps the change-set"
