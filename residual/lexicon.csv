@@ -1,1 +1,2 @@
 term,definition,domain,aliases
+change-set,the changes between a base ref and a head ref,,"diff, PR, changes, change-sets"
