@@ -4,3 +4,4 @@ engine-changes,"Captures exact Git comparisons and frozen snapshots of both side
 engine-entities,"The only wrapper around sem-core; exposes entities, edges, changes, and coverage gaps.",proposed,rework-1
 review-flows,"Finds entrypoints, groups changes into flows, labels fallback grouping, and decides reading order.",proposed,rework-1
 review-anchors,"Gives code locations stable IDs and re-finds them in later snapshots as exact, moved, ambiguous, or missing.",proposed,rework-1
+review-evidence,"Collects model-free facts and artifacts, and finds the tests, comments, imports, and callers next to each entity.",proposed,rework-1
